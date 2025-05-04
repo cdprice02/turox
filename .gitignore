@@ -1,1 +1,29 @@
-/target
+# === Rust build artifacts ===
+/target/
+
+# === OS-specific ===
+**/*.DS_Store
+**/*.swp
+**/*~
+*.tmp
+*.bak
+
+# === Editor/IDE files ===
+.idea/
+.vscode/
+
+# === Binary artifacts ===
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+*.log
+
+# === Coverage ===
+/coverage/
+/kcov-*
+
+# === Secrets ===
+.env
+.env.*
