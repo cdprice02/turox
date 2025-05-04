@@ -1,0 +1,10 @@
+[package]
+name = "turox-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "turox_engine"
+path = "src/lib.rs"
+
+[dependencies]
