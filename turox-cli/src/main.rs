@@ -1,3 +1,14 @@
+use clap::Parser;
+use turox_engine::Engine;
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {}
+
 fn main() {
-    println!("Hello, world!");
+    let args = Args::parse();
+    println!("{:?}", args);
+
+    let engine = Engine::new();
+    engine.run();
 }

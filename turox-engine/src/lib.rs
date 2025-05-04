@@ -1,14 +1,10 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#[derive(Debug, Default)]
+pub struct Engine;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl Engine {
+    pub fn new() -> Self {
+        Self
     }
+
+    pub fn run(&self) {}
 }
