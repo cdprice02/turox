@@ -1,10 +1,17 @@
+pub mod board;
+use board::Board;
+
 #[derive(Debug, Default)]
-pub struct Engine;
+pub struct Engine {
+    board: Board,
+}
 
 impl Engine {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    pub fn run(&self) {}
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
 }
