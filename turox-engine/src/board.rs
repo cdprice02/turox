@@ -77,14 +77,14 @@ impl Default for Board {
 impl Board {
     pub fn new_empty() -> Self {
         Self {
-            by_color: [Bitboard::new_empty(), Bitboard::new_empty()],
+            by_color: [Bitboard::zeros(), Bitboard::zeros()],
             by_type: [
-                Bitboard::new_empty(),
-                Bitboard::new_empty(),
-                Bitboard::new_empty(),
-                Bitboard::new_empty(),
-                Bitboard::new_empty(),
-                Bitboard::new_empty(),
+                Bitboard::zeros(),
+                Bitboard::zeros(),
+                Bitboard::zeros(),
+                Bitboard::zeros(),
+                Bitboard::zeros(),
+                Bitboard::zeros(),
             ],
         }
     }
@@ -115,7 +115,7 @@ impl Board {
     // }
 
     fn set_square(&mut self, square: Square, color: Color, piece: Piece) {
-        let square = Bitboard::from_rank_file(square.rank(), square.file());
+        let square = Bitboard::single_from_rank_file(square.rank(), square.file());
         *self.pieces_by_color_mut(color) |= square;
         *self.pieces_by_type_mut(piece) |= square;
     }
@@ -126,9 +126,9 @@ impl Board {
         color: Color,
         piece: Piece,
     ) {
-        let mut board = Bitboard::new_empty();
+        let mut board = Bitboard::zeros();
         for sq in square {
-            board |= Bitboard::from_rank_file(sq.rank(), sq.file());
+            board |= Bitboard::single_from_rank_file(sq.rank(), sq.file());
         }
 
         *self.pieces_by_color_mut(color) |= board;
