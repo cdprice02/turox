@@ -108,6 +108,14 @@ impl Bitboard {
         SINGLE_BITBOARDS[pos]
     }
 
+    pub fn zero(self) -> bool {
+        self.value == 0
+    }
+
+    pub fn nonzero(self) -> bool {
+        self.value != 0
+    }
+
     pub fn shift(self, direction: Direction) -> Self {
         Self {
             value: match direction {

@@ -11,6 +11,22 @@ pub enum Rank {
     Eight,
 }
 
+impl From<u8> for Rank {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Rank::One,
+            1 => Rank::Two,
+            2 => Rank::Three,
+            3 => Rank::Four,
+            4 => Rank::Five,
+            5 => Rank::Six,
+            6 => Rank::Seven,
+            7 => Rank::Eight,
+            _ => unreachable!("invalid rank"),
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum File {
@@ -22,6 +38,22 @@ pub enum File {
     F,
     G,
     H,
+}
+
+impl From<u8> for File {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => File::A,
+            1 => File::B,
+            2 => File::C,
+            3 => File::D,
+            4 => File::E,
+            5 => File::F,
+            6 => File::G,
+            7 => File::H,
+            _ => unreachable!("invalid file"),
+        }
+    }
 }
 
 #[repr(u8)]
@@ -91,6 +123,12 @@ pub enum Square {
     F8,
     G8,
     H8,
+}
+
+impl From<(u8, u8)> for Square {
+    fn from((rank, file): (u8, u8)) -> Self {
+        Self::from((Rank::from(rank), File::from(file)))
+    }
 }
 
 impl From<(Rank, File)> for Square {

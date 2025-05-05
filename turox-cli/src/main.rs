@@ -10,5 +10,5 @@ fn main() {
     println!("{:?}", args);
 
     let engine = Engine::new();
-    println!("{:?}", engine.board());
+    println!("{}", engine.fen());
 }
