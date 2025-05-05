@@ -1,6 +1,6 @@
 /**
-Represents a bitboard as a u64. A 1 bit represents a piece on the board. This
-implementation will use the little endian, rank-file (LERF) mapping. Thus, the bottom
+Represents a bitboard as a u64. A 1 bit represents a piece on the board in that square.
+This implementation uses the little-endian rank-file (LERF) mapping. Thus, the bottom
 row is file 0 and the top row is file 7, and the left column is rank 0 and the right
 column is rank 7.
 */
@@ -66,10 +66,6 @@ impl std::ops::Not for Bitboard {
 }
 
 impl Bitboard {
-    pub fn new(value: u64) -> Self {
-        Bitboard { value }
-    }
-
     pub fn new_empty() -> Self {
         Bitboard { value: 0 }
     }
