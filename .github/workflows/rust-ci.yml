@@ -17,24 +17,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Cache Rust toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo
-            ~/.rustup
-          key: ${{ runner.os }}-rust-toolchain-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-toolchain-
-
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
           components: clippy, rustfmt
 
-      - name: Cache cargo registry
+      - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
         with:
           path: |
@@ -44,45 +32,55 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      
+
       - name: Build
-        run: cargo build --verbose
-        
-      - name: Run tests and export JUnit XML
-        run: |
-          cargo install cargo2junit || true
-          cargo test --all --verbose -- --format=json | cargo2junit > junit.xml
-        continue-on-error: true
+        run: cargo build --workspace --verbose
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # Test failures fail the job: this is the correctness gate for an engine
+      # whose main verification is property tests (and, once move generation
+      # lands, perft) rather than a manual QA pass. Deliberately no
+      # continue-on-error here.
+      - name: Run tests
+        run: cargo nextest run --workspace --profile ci
 
       - name: Upload JUnit test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-test-results
-          path: junit.xml
+          path: target/nextest/ci/junit.xml
+
+      # Not run (benchmarks don't need to pass on every commit), but kept
+      # compiling so a signature change in Bitboard/Board doesn't silently
+      # break benches/*.rs until someone happens to run `cargo bench` locally.
+      - name: Check that benchmarks still compile
+        run: cargo bench --workspace --no-run
 
   lint-and-format:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache Rust toolchain
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo
-            ~/.rustup
-          key: ${{ runner.os }}-rust-toolchain-${{ hashFiles('**/Cargo.toml') }}
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-toolchain-
-
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: clippy, rustfmt
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check

@@ -1,0 +1,12 @@
+# x86-64 baseline of ~2017+ hardware (Intel Haswell 2013+, AMD Zen1 2017+), not
+# `target-cpu=native` (would tie the binary to this exact machine). Scoped to
+# x86_64 so aarch64 contributors (Apple Silicon, ARM Linux) are unaffected; they
+# get equivalent instructions unconditionally as baseline ISA anyway.
+#
+# Caveat for whoever writes PEXT-based magic bitboards later: bmi2's PEXT/PDEP
+# run via slow microcode on AMD Zen1/Zen2, not real hardware execution — genuinely
+# fast on AMD only from Zen3 (2020) on. This flag makes the instructions
+# available and correct everywhere in the 2017+ baseline; it doesn't mean they're
+# fast everywhere in it. Benchmark before assuming a PEXT path is a win on AMD.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-feature=+popcnt,+bmi1,+bmi2,+lzcnt,+avx,+avx2"]
