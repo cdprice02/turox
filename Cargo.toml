@@ -1,2 +1,29 @@
 [workspace]
+resolver = "2"
 members = ["turox-cli", "turox-engine"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5.37", features = ["derive"] }
+proptest = "1.5"
+criterion = "0.5"
+
+# turox-engine takes zero runtime dependencies (see turox-engine/Cargo.toml). Keep
+# anyhow scoped to turox-cli: a library returning anyhow::Error denies callers the
+# ability to match on failure, so it belongs at the binary boundary, not in the engine.
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+# Newtypes like Bitboard don't inline at opt-level 0, so unoptimized debug builds are
+# painfully slow for perft/proptest runs. Bump the default dev profile...
+[profile.dev]
+opt-level = 1
+
+# ...and fully optimize dependencies regardless, since we're not debugging into them.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.bench]
+debug = true
