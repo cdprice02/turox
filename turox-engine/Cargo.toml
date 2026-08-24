@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "fen"
 harness = false
+
+[[bench]]
+name = "magic"
+harness = false

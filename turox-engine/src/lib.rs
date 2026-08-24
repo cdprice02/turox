@@ -21,6 +21,7 @@
 pub mod board;
 pub mod eval;
 pub mod move_gen;
+mod rng;
 pub mod search;
 pub mod types;
 pub mod uci;
