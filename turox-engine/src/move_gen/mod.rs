@@ -1,7 +1,12 @@
-//! Move generation: attack tables, sliding-piece magics, and pin/check-aware legal
-//! move generation. Not yet implemented — depends on `Bitboard`'s core arithmetic
-//! and scanning primitives (see `types::bitboard`), which are the current exercise.
+//! Move generation: attack tables, sliding-piece magics, square-attack queries,
+//! and pin/check-aware legal move generation.
+//!
+//! `tables` (leaper attacks), `magic` (slider attacks), `attacks` (square-attack
+//! queries built on both), and `move_list` (the stack-allocated move buffer) are
+//! done. `pseudo_legal` and `legal` (per-piece pseudolegal generation and the
+//! check-filtered wrapper around it) are not yet started.
 
+pub mod attacks;
 pub mod legal;
 pub mod magic;
 pub mod move_list;
