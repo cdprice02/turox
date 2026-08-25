@@ -61,6 +61,20 @@ declare_axis!(
     }
 );
 
+impl File {
+    /// Every square on this file, as a `Bitboard`.
+    pub const fn bitboard(self) -> Bitboard {
+        todo!()
+    }
+}
+
+impl Rank {
+    /// Every square on this rank, as a `Bitboard`.
+    pub const fn bitboard(self) -> Bitboard {
+        todo!()
+    }
+}
+
 impl Square {
     pub const fn new(file: File, rank: Rank) -> Self {
         // ALL is laid out rank-major (LERF), so this is the inverse of file()/rank().
