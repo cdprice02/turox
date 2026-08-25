@@ -19,9 +19,9 @@ impl Board {
         let placement = fields.next().ok_or(InvalidFenError::MissingField {
             field: "piece placement",
         })?;
-        let mut board = Self::parse_placement(placement)?;
+        let board = Self::parse_placement(placement)?;
 
-        board.side_to_move = match fields.next() {
+        let side_to_move = match fields.next() {
             None | Some("w") => Color::White,
             Some("b") => Color::Black,
             Some(other) => {
@@ -32,17 +32,17 @@ impl Board {
             }
         };
 
-        board.castling = match fields.next() {
+        let castling = match fields.next() {
             None | Some("-") => CastlingRights::NONE,
             Some(s) => Self::parse_castling(s)?,
         };
 
-        board.en_passant = match fields.next() {
+        let en_passant = match fields.next() {
             None | Some("-") => None,
             Some(s) => Some(Self::parse_square(s)?),
         };
 
-        board.halfmove_clock = match fields.next() {
+        let halfmove_clock = match fields.next() {
             None => 0,
             Some(s) => s.parse().map_err(|_| InvalidFenError::InvalidField {
                 field: "halfmove clock",
@@ -50,7 +50,7 @@ impl Board {
             })?,
         };
 
-        board.fullmove_number = match fields.next() {
+        let fullmove_number = match fields.next() {
             None => 1,
             Some(s) => s.parse().map_err(|_| InvalidFenError::InvalidField {
                 field: "fullmove number",
@@ -58,7 +58,14 @@ impl Board {
             })?,
         };
 
-        Ok(board)
+        Ok(Board::from_parts(
+            board,
+            side_to_move,
+            castling,
+            en_passant,
+            halfmove_clock,
+            fullmove_number,
+        ))
     }
 
     /// Parses just the piece-placement field (the part before the first space).

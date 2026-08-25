@@ -105,6 +105,30 @@ impl Board {
         self.by_piece[cp.piece() as usize] |= sq;
     }
 
+    /// Builds a full `Board` from a placement-only board (assembled via
+    /// `Board::default()` plus repeated `place` calls) and the remaining
+    /// position state. The single path every non-placement field goes through:
+    /// `try_from_fen` builds its result this way, and so can anything else that
+    /// wants a specific side-to-move/castling/en-passant/clock combination
+    /// without hand-assembling a FEN string first (test helpers, in particular).
+    pub fn from_parts(
+        placement: Board,
+        side_to_move: Color,
+        castling: CastlingRights,
+        en_passant: Option<Square>,
+        halfmove_clock: u8,
+        fullmove_number: u16,
+    ) -> Board {
+        Board {
+            side_to_move,
+            castling,
+            en_passant,
+            halfmove_clock,
+            fullmove_number,
+            ..placement
+        }
+    }
+
     /// Removes and returns whatever was on `sq`, or `None` if it was already empty.
     pub fn remove(&mut self, sq: Square) -> Option<ColoredPiece> {
         let cp = self.mailbox[sq.index() as usize].take()?;
