@@ -32,24 +32,17 @@
 //! occupancies happen to produce the *same* attack set, are fine and in fact
 //! required — rejecting those makes minimal-size magics nearly unfindable.
 //!
-//! The search runs offline in a `#[test]`
-//! (`regenerating_reproduces_the_committed_magic_data`), not `const fn`: a
-//! spike measured a single worst-case square's table build at 35.5s inside
-//! const-eval, which doesn't scale to 128 squares inside `cargo build`. That
-//! test commits the winning `Magic` data below plus the built tables' raw bytes
-//! as `rook_attacks.bin`/`bishop_attacks.bin`, and re-runs the search each time
-//! to keep the commits honest rather than copy-pasted. `decode` turns those
-//! bytes back into real `[Bitboard; N]` `static` data at compile time — cheap
+//! The search runs offline in a `#[test]` (`regen::regenerating_reproduces_
+//! the_committed_magic_data`), not `const fn`: a spike measured a single
+//! worst-case square's table build at 35.5s inside const-eval, which doesn't
+//! scale to 128 squares inside `cargo build`. That test commits the winning
+//! `Magic` data (`magics.rs`) plus the built tables' raw bytes as
+//! `rook_attacks.bin`/`bishop_attacks.bin`, and re-runs the search each time to
+//! keep the commits honest rather than copy-pasted. `decode` turns those bytes
+//! back into real `[Bitboard; N]` `static` data at compile time — cheap
 //! (`u64::from_le_bytes` per entry) compared to computing the tables
 //! themselves, which is why decoding stays `const fn` while the search and
 //! table build don't.
-//!
-//! # Public surface
-//!
-//! - `fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard`
-//! - `fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard`
-//! - `fn queen_attacks(sq: Square, occupied: Bitboard) -> Bitboard` — the union
-//!   of the two above.
 
 use crate::types::bitboard::Bitboard;
 use crate::types::square::Square;

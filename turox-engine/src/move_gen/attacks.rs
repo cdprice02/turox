@@ -1,61 +1,29 @@
 //! Square-attack queries: "is this square attacked, and by what?" Built on top
-//! of `tables` (leaper attacks) and `magic` (slider attacks), both of which are
-//! **forward**: given a piece standing on `sq` with some `occupied` set, what
-//! does it hit. Everything in this module composes in that same forward
-//! direction, with one deliberate exception (`attackers_of`) called out below.
+//! of `tables` (leaper attacks) and `magic` (slider attacks), both **forward**:
+//! given a piece standing on `sq` with some `occupied` set, what does it hit.
+//! Everything here composes in that same forward direction, with one
+//! deliberate exception (`attackers_of`) below.
 //!
-//! # Public surface
-//!
-//! - `fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard) -> Bitboard` —
-//!   the single place the `Piece` -> attack-function dispatch lives. `color`
-//!   only matters for `Piece::Pawn`; every other piece attacks the same way
-//!   regardless of color.
-//! - `fn attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard` —
-//!   union of every square attacked by any piece of `by`, evaluated against
-//!   `occupied` rather than `board.occupied()`. Taking `occupied` explicitly
-//!   (rather than always using the board's own) matters for king safety: to ask
-//!   "is this square safe for my king to step onto", the correct occupancy has
-//!   the king already lifted off its old square, or a square directly behind the
-//!   king through an enemy slider reads as falsely safe. Nothing in this PR
-//!   exercises that case (`legal.rs`'s copy-make filter sidesteps it entirely by
-//!   actually moving the king), but the parameter costs nothing and keeps the
-//!   door open for a later staged/check-evasion generator that wants to mask
-//!   king moves against a precomputed attack set instead of paying a full
-//!   `make_move` per candidate.
-//! - `fn is_attacked(board: &Board, sq: Square, by: Color) -> bool`
-//! - `fn king_square(board: &Board, color: Color) -> Option<Square>` — `None` on
-//!   a board with no king for that color (e.g. `Board::default()`, or many test
-//!   FENs), not a panic.
-//! - `fn in_check(board: &Board, color: Color) -> bool`
-//! - `fn attackers_of(board: &Board, sq: Square, by: Color) -> Bitboard` — which
-//!   pieces of `by` attack `sq`. **The one reverse-direction function**, and the
-//!   one place a color bug can hide.
+//! `attacked_by` takes `occupied` explicitly rather than always using
+//! `board.occupied()`: for king safety, the correct occupancy has the king
+//! already lifted off its old square, or a square directly behind it through
+//! an enemy slider reads as falsely safe.
 //!
 //! # `attackers_of`: the superpiece trick, and its one trap
 //!
-//! The standard technique: stand each piece type on `sq` in turn, radiate its
-//! attack pattern, and intersect with the real pieces of that type/color. Five
-//! lookups total (knight, king, pawn, rook-or-queen, bishop-or-queen) — this is
-//! also the shape a future SEE implementation wants, which is why it earns its
-//! own function rather than being inlined into `is_attacked`.
-//!
+//! Stand each piece type on `sq` in turn, radiate its attack pattern, and
+//! intersect with the real pieces of that type/color — the reverse of every
+//! other function in this module, and the one place a color bug can hide.
 //! Knight, king, and slider attack relations are *symmetric* — "a attacks b"
-//! iff "b attacks a" — so radiating from `sq` and intersecting with real pieces
-//! works unmodified for those four lookups. Pawns are **not** symmetric: a
-//! white pawn on d3 attacks c4/e4, but a pawn standing on c4 attacking as
-//! *white* would radiate onto b5/d5, not d3. To find white pawns attacking
-//! `sq`, radiate a *black* pawn from `sq` instead — `pawn_attacks(by.flip(), sq)`.
-//! This is exactly the {Color}x{direction} shape flagged in `CLAUDE.md`: it
-//! produces the right answer on any vertically symmetric test position even
-//! with the flip missing or backward, so verify against an asymmetric one (a
-//! single pawn a few ranks off the board's horizontal midline is enough).
-//!
-//! The proptest for this module checks `attackers_of` against the *forward*
-//! definition directly (`{ s in board[by] : piece_attacks(piece_at(s), by, s,
-//! occupied).contains(sq) }`), not against a second reverse implementation —
-//! the forward form can't get the pawn flip wrong because it never inverts
-//! anything, which is exactly what makes it a trustworthy check on the reverse
-//! one.
+//! iff "b attacks a" — so radiating from `sq` works unmodified for those four.
+//! Pawns are **not**: a white pawn on d3 attacks c4/e4, but a pawn standing on
+//! c4 attacking as *white* would radiate onto b5/d5, not d3. To find white
+//! pawns attacking `sq`, radiate a *black* pawn from `sq` instead —
+//! `pawn_attacks(by.flip(), sq)`. This is the {Color}x{direction} shape
+//! `CLAUDE.md` flags: it produces the right answer on any vertically symmetric
+//! test position even with the flip missing or backward, so verify against an
+//! asymmetric one (a pawn a few ranks off the board's horizontal midline is
+//! enough).
 
 use crate::board::Board;
 use crate::move_gen::magic::{bishop_attacks, queen_attacks, rook_attacks};

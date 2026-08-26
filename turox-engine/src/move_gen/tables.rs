@@ -17,50 +17,22 @@
 //! perf pass once something benchmarks-driven (perft, search) can actually show
 //! whether it matters, not a guess made in advance.
 //!
-//! # Public surface
+//! `between`/`line` first classify `a`/`b`'s relationship from their file/rank
+//! deltas into "same rank", "same file", "same diagonal", or "unrelated" (`a ==
+//! b` falls through to "unrelated" rather than satisfying the diagonal check's
+//! `abs` equality by accident), and in the aligned cases, which `Direction`
+//! points from `a` toward `b`. That sign-to-direction mapping is the same
+//! {axis}x{sign} shape that has produced scrambled bugs twice already in
+//! `Board::make_move`.
 //!
-//! - `fn knight_attacks(sq: Square) -> Bitboard`
-//! - `fn king_attacks(sq: Square) -> Bitboard` — the 8 neighbors, NOT including
-//!   `sq` itself (unlike `Bitboard::dilate`, which includes the seed).
-//! - `fn pawn_attacks(color: Color, sq: Square) -> Bitboard` — both capture
-//!   squares for a pawn of `color` standing on `sq`.
-//! - `fn between(a: Square, b: Square) -> Bitboard` — squares strictly between
-//!   `a` and `b` on a shared rank/file/diagonal, or `Bitboard::EMPTY` if they
-//!   don't share one (including when `a == b`).
-//! - `fn line(a: Square, b: Square) -> Bitboard` — the full rank/file/diagonal
-//!   through both `a` and `b`, or `Bitboard::EMPTY` under the same conditions as
-//!   `between`.
-//!
-//! # Implementation notes for `between`/`line`
-//!
-//! Both share the same first step: classify the relationship between `a` and
-//! `b` from their file/rank deltas (`Δfile`, `Δrank`) into one of "same rank",
-//! "same file", "same diagonal" (`|Δfile| == |Δrank|`, both nonzero), or
-//! "unrelated" — and in the aligned cases, which of the two opposite
-//! `Direction`s (e.g. `East` vs `West`) points from `a` toward `b`, from the
-//! sign of the delta. That's a positive/negative x four-axis mapping — the same
-//! shape that has produced scrambled bugs twice already in `Board::make_move`,
-//! so double-check each sign against a concrete example
-//! (e.g. `a` above-and-right of `b` should classify as `SouthWest` from `b`'s
-//! side / `NorthEast` from `a`'s) rather than trusting it by inspection. Take
-//! care that `a == b` (Δfile == Δrank == 0) falls through to "unrelated" rather
-//! than satisfying the diagonal check's `abs` equality by accident.
-//!
-//! Once the direction is known, `Bitboard::occluded_fill` does the actual
-//! walking:
-//! - `between(a, b)`: fill from `a` in that one direction, treating every
-//!   square as passable except `b` (`Bitboard::ALL.without(b)` as the `empty`
-//!   argument) so the fill stops exactly at `b`. `occluded_fill` includes both
-//!   the seed and the stopping square in its result, so strip `a` and `b`
-//!   afterward.
-//! - `line(a, b)`: fill from `a` with nothing blocking (`Bitboard::ALL`) in that
-//!   direction and its `opposite()`, and union the two — that walks to the
-//!   board edge both ways, which is exactly the full line. No need to touch `b`
-//!   directly; it's already on the ray by construction.
-//!
-//! `occluded_fill` loops a fixed 7 steps, which is sufficient: 7 is the maximum
-//! possible file/rank/diagonal distance on an 8x8 board, so if `a` and `b` are
-//! genuinely aligned the walk is guaranteed to reach `b` within that bound.
+//! Once the direction is known, `Bitboard::occluded_fill` does the walking:
+//! `between` fills from `a` treating every square but `b` as passable, so the
+//! fill stops exactly at `b` (both endpoints get stripped afterward, since
+//! `occluded_fill` includes its seed and stopping square); `line` fills from
+//! `a` with nothing blocking, in both the direction and its `opposite()`, which
+//! walks to the board edge both ways. `occluded_fill`'s fixed 7-step loop is
+//! sufficient: 7 is the longest possible file/rank/diagonal distance on an 8x8
+//! board.
 
 use crate::types::bitboard::{Bitboard, Direction};
 use crate::types::color::Color;
