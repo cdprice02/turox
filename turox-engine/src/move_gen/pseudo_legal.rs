@@ -143,7 +143,6 @@ use crate::{Bitboard, CastlingRights, Color, Direction, File, Move, MoveFlags, P
 /// Calls the five functions below; their outputs never overlap (each covers a
 /// disjoint set of piece types / move shapes), so order between them doesn't
 /// matter.
-#[allow(unused_variables)]
 pub fn pseudo_legal_moves(board: &Board, list: &mut MoveList) {
     pawn_moves(board, list);
     knight_moves(board, list);

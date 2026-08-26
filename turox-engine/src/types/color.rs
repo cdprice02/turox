@@ -1,6 +1,9 @@
+//! `Color`: which side a piece or move belongs to.
+
 use crate::Rank;
 
 /// Which side a piece or move belongs to.
+#[allow(missing_docs)] // variant names are the doc
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
@@ -9,6 +12,7 @@ pub enum Color {
 }
 
 impl Color {
+    /// Both colors, White first.
     pub const ALL: [Color; 2] = [Color::White, Color::Black];
 
     /// The other color.

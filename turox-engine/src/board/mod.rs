@@ -157,22 +157,27 @@ impl Board {
         !self.occupied()
     }
 
+    /// Which color is to move.
     pub fn side_to_move(&self) -> Color {
         self.side_to_move
     }
 
+    /// The castling rights still available to either side.
     pub fn castling_rights(&self) -> CastlingRights {
         self.castling
     }
 
+    /// The square a pawn could capture en passant onto, if any.
     pub fn en_passant(&self) -> Option<Square> {
         self.en_passant
     }
 
+    /// Plies since the last pawn move or capture (the fifty-move-rule counter).
     pub fn halfmove_clock(&self) -> u8 {
         self.halfmove_clock
     }
 
+    /// The full-move number, incrementing after each Black move.
     pub fn fullmove_number(&self) -> u16 {
         self.fullmove_number
     }

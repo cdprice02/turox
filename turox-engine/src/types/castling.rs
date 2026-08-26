@@ -1,3 +1,5 @@
+//! `CastlingRights`: which of the four castling moves are still available.
+
 use super::color::Color;
 
 /// Which castling moves are still available, packed as a 4-bit set.
@@ -10,14 +12,21 @@ use super::color::Color;
 pub struct CastlingRights(u8);
 
 impl CastlingRights {
+    /// White may still castle kingside.
     pub const WHITE_KINGSIDE: Self = Self(0b0001);
+    /// White may still castle queenside.
     pub const WHITE_QUEENSIDE: Self = Self(0b0010);
+    /// Black may still castle kingside.
     pub const BLACK_KINGSIDE: Self = Self(0b0100);
+    /// Black may still castle queenside.
     pub const BLACK_QUEENSIDE: Self = Self(0b1000);
 
+    /// No castling rights.
     pub const NONE: Self = Self(0);
+    /// All four castling rights.
     pub const ALL: Self = Self(0b1111);
 
+    /// `color`'s kingside right, in isolation.
     pub const fn kingside(color: Color) -> Self {
         match color {
             Color::White => Self::WHITE_KINGSIDE,
@@ -25,6 +34,7 @@ impl CastlingRights {
         }
     }
 
+    /// `color`'s queenside right, in isolation.
     pub const fn queenside(color: Color) -> Self {
         match color {
             Color::White => Self::WHITE_QUEENSIDE,
@@ -32,22 +42,22 @@ impl CastlingRights {
         }
     }
 
+    /// Whether every right set in `other` is also set in `self`.
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 
-    #[must_use]
+    /// `self` with every right in `other` also set.
     pub const fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
-    #[must_use]
+    /// `self` with every right in `other` cleared.
     pub const fn without(self, other: Self) -> Self {
         Self(self.0 & !other.0)
     }
 
     /// Clear both castling rights for a color, e.g. after its king moves.
-    #[must_use]
     pub const fn without_color(self, color: Color) -> Self {
         match color {
             Color::White => self.without(Self::WHITE_KINGSIDE.with(Self::WHITE_QUEENSIDE)),
@@ -55,6 +65,7 @@ impl CastlingRights {
         }
     }
 
+    /// Whether no rights remain.
     pub const fn is_none(self) -> bool {
         self.0 == 0
     }

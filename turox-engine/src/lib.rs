@@ -28,19 +28,25 @@ pub mod uci;
 
 pub use types::*;
 
+/// The engine's top-level handle: the position it's tracking, plus (once
+/// `search`/`uci` land) the loop that drives it from a UCI-speaking GUI.
 #[derive(Debug, Default)]
 pub struct Engine {
     board: board::Board,
 }
 
 impl Engine {
+    /// A new engine on the default (empty) `Board`.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The position the engine is currently tracking.
     pub fn board(&self) -> &board::Board {
         &self.board
     }
 
+    /// Drives the engine from stdin/stdout via UCI. Not yet implemented —
+    /// waits on `search`/`uci`.
     pub fn run(&self) {}
 }

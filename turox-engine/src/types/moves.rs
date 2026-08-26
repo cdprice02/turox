@@ -1,8 +1,11 @@
+//! `Move`, packed into a `u16`, and `MoveFlags`, its 4-bit kind tag.
+
 use super::piece::Piece;
 use super::square::Square;
 
 /// The kind of a move, packed into 4 bits. Doubles as the promotion piece selector
 /// for the four promotion variants.
+#[allow(missing_docs)] // variant names are the doc
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveFlags {
@@ -85,11 +88,13 @@ impl MoveFlags {
 pub struct Move(u16);
 
 impl Move {
+    /// Packs a move from `from` to `to` with the given `flags`.
     pub const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
         let bits = (from.index() as u16) | ((to.index() as u16) << 6) | ((flags as u16) << 12);
         Self(bits)
     }
 
+    /// The square this move starts from.
     pub const fn from(self) -> Square {
         match Square::from_index((self.0 & 0x3F) as u8) {
             Some(sq) => sq,
@@ -97,6 +102,7 @@ impl Move {
         }
     }
 
+    /// The square this move lands on.
     pub const fn to(self) -> Square {
         match Square::from_index(((self.0 >> 6) & 0x3F) as u8) {
             Some(sq) => sq,
@@ -104,6 +110,7 @@ impl Move {
         }
     }
 
+    /// This move's kind.
     pub const fn flags(self) -> MoveFlags {
         MoveFlags::from_bits((self.0 >> 12) as u8)
     }

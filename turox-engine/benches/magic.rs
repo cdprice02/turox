@@ -13,6 +13,11 @@
 //! `black_box`es both the inputs and the returned value, so a constant input
 //! can't get folded away by LLVM into a ~0ns no-op.
 
+// Not part of the crate's public API, so `missing_docs` doesn't apply here —
+// criterion's own `criterion_group!`/`criterion_main!` macros generate an
+// undocumented `fn main`.
+#![allow(missing_docs)]
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use turox_engine::{Bitboard, Square};
 

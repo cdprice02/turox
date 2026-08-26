@@ -1,9 +1,5 @@
 //! Micro-benchmarks for `Bitboard`'s operations.
 //!
-//! These will panic (via `todo!()`) until the corresponding method is implemented
-//! — that's expected; run `cargo bench --no-run` to confirm they compile in the
-//! meantime, and `cargo bench` for real numbers once the exercise is done.
-//!
 //! The trap this file is written to avoid: these operations inline to a handful of
 //! instructions, so `b.iter(|| bb.flip_vertical())` over a *constant* input gets
 //! const-folded away by LLVM and reports ~0ns — which would look like "the newtype
@@ -11,6 +7,11 @@
 //! here instead drives over a precomputed array of varied inputs and
 //! `black_box`es both the input and the returned value, so the compiler can't
 //! predict or eliminate the work.
+
+// Not part of the crate's public API, so `missing_docs` doesn't apply here —
+// criterion's own `criterion_group!`/`criterion_main!` macros generate an
+// undocumented `fn main`.
+#![allow(missing_docs)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use turox_engine::{Bitboard, Direction};

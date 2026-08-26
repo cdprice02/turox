@@ -6,10 +6,7 @@ use crate::Direction;
 
 impl Board {
     /// Applies `m` to a copy of this position and returns the result (copy-make;
-    /// see the struct docs). Stubbed pending move generation: this needs
-    /// `Bitboard`'s scanning/shift primitives to be implemented first, and its own
-    /// logic (captures, en passant, castling rook movement, promotion, clock
-    /// resets) is the subject of the move-generation change.
+    /// see the struct docs).
     pub fn make_move(&self, m: Move) -> Board {
         let mut board = *self;
         let color = board.side_to_move();

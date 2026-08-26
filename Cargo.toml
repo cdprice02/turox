@@ -12,6 +12,13 @@ criterion = "0.5"
 # anyhow scoped to turox-cli: a library returning anyhow::Error denies callers the
 # ability to match on failure, so it belongs at the binary boundary, not in the engine.
 
+[workspace.lints.rust]
+missing_docs = "deny"
+# The crate has none today. Magic bitboards are exactly where `get_unchecked`
+# creeps in during a perf pass; this makes that a deliberate, reviewed
+# exception (via #[allow(unsafe_code)]) rather than a quiet one.
+unsafe_code = "deny"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

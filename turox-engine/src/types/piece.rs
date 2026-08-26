@@ -1,6 +1,10 @@
+//! `Piece` (color-independent) and `ColoredPiece` (a specific piece of a
+//! specific color).
+
 use super::color::Color;
 
 /// A piece kind, independent of color.
+#[allow(missing_docs)] // variant names are the doc
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Piece {
@@ -13,6 +17,7 @@ pub enum Piece {
 }
 
 impl Piece {
+    /// Every piece kind.
     pub const ALL: [Piece; 6] = [
         Piece::Pawn,
         Piece::Knight,
@@ -29,6 +34,7 @@ impl Piece {
 /// The struct form is 2 bytes with no niche, so `[Option<ColoredPiece>; 64]` (the
 /// board's mailbox) would cost 128 bytes. This enum form gives `Option<ColoredPiece>`
 /// a 1-byte niche, halving the mailbox to 64 bytes.
+#[allow(missing_docs)] // variant names are the doc
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColoredPiece {
@@ -65,6 +71,7 @@ impl ColoredPiece {
         }
     }
 
+    /// This piece's color.
     pub const fn color(self) -> Color {
         if (self as u8) < 6 {
             Color::White
@@ -73,6 +80,7 @@ impl ColoredPiece {
         }
     }
 
+    /// This piece's kind, independent of color.
     pub const fn piece(self) -> Piece {
         const PIECES: [Piece; 6] = [
             Piece::Pawn,
