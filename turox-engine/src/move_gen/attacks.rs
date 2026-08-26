@@ -83,8 +83,8 @@ pub fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard)
 pub fn attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard {
     let mut attacked_by = Bitboard::EMPTY;
     for piece in Piece::ALL {
-        let mut pieces = board.pieces(by, piece);
-        while let Some(sq) = pieces.pop_lsb() {
+        let pieces = board.pieces(by, piece);
+        for sq in pieces {
             attacked_by = attacked_by.or(piece_attacks(piece, by, sq, occupied));
         }
     }
@@ -100,7 +100,7 @@ pub fn is_attacked(board: &Board, sq: Square, by: Color) -> bool {
 
 /// `color`'s king's square, or `None` if it has no king.
 pub fn king_square(board: &Board, color: Color) -> Option<Square> {
-    board.pieces(color, Piece::King).pop_lsb()
+    board.pieces(color, Piece::King).lsb()
 }
 
 /// Whether `color`'s king is currently attacked. `false` if `color` has no

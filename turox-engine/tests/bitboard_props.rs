@@ -1,11 +1,6 @@
 //! Property tests for `Bitboard`: the executable version of the contracts
 //! documented on each method in `src/types/bitboard.rs`.
 //!
-//! Every property here that exercises a still-`todo!()` method is `#[ignore]`d
-//! with a reason naming the method(s) it needs. Run `cargo test -- --ignored
-//! --list` for the remaining-work checklist, and drop the `#[ignore]` attribute as
-//! each method gets implemented — `cargo test <name> -- --ignored` checks it.
-//!
 //! These bitboard primitives are what the entire engine's correctness rests on —
 //! every square set, move generated, and position evaluated eventually bottoms
 //! out in one of these operations — so coverage here is deliberately heavier than
@@ -244,12 +239,12 @@ proptest! {
 
     #[test]
     fn shift_east_never_lands_on_file_a(a in any_bitboard()) {
-        prop_assert_eq!(a.shift(Direction::East) & Bitboard::FILE_A, Bitboard::EMPTY);
+        prop_assert_eq!(a.shift(Direction::East) & File::A.bitboard(), Bitboard::EMPTY);
     }
 
     #[test]
     fn shift_west_never_lands_on_file_h(a in any_bitboard()) {
-        prop_assert_eq!(a.shift(Direction::West) & Bitboard::FILE_H, Bitboard::EMPTY);
+        prop_assert_eq!(a.shift(Direction::West) & File::H.bitboard(), Bitboard::EMPTY);
     }
 
     #[test]
