@@ -29,43 +29,54 @@
 //!
 //! # Knights, king, sliders
 //!
-//! Mechanical, and all three should go through `attacks::piece_attacks` rather
-//! than reaching into `tables`/`magic` directly, so the `Piece` -> attack-fn
-//! dispatch stays in the one place that already owns it. `Bitboard` implements
-//! `IntoIterator<Item = Square>`, so `for from in board.pieces(us, piece)`
-//! works directly. Per source square:
+//! `knight_moves`/`king_moves`/`slider_moves` are all one shared helper,
+//! `nonpawn_moves(board, list, piece)`, parameterized on `Piece` rather than
+//! three near-duplicate functions. Per source square, through
+//! `attacks::piece_attacks` (the one place the `Piece` -> attack-fn dispatch
+//! lives, rather than reaching into `tables`/`magic` directly):
 //!
 //! ```text
-//! targets  = piece_attacks(piece, us, from, board.occupied()) & !board[us]
-//! captures = targets & board[them]   -> MoveFlags::Capture
-//! quiets   = targets & board.empty() -> MoveFlags::Quiet
+//! targets  = piece_attacks(piece, us, from, occupied).and_not(board[us])
+//! captures = targets.and(board[them])       -> MoveFlags::Capture
+//! quiet    = targets.and_not(captures)      -> MoveFlags::Quiet
 //! ```
+//!
+//! `occupied` is hoisted once per `nonpawn_moves` call rather than
+//! recomputed per source square — cheap either way (`board.occupied()` is one
+//! `OR` of two stored fields), but consistent with the same hoisting done in
+//! `castling_moves` below. `quiet` comes from subtracting `captures` out of
+//! `targets` rather than intersecting with `board.empty()` — equivalent given
+//! every square is empty/ours/theirs, and avoids a third lookup.
 //!
 //! # Castling
 //!
 //! The {Color}x{kingside,queenside} four-way mapping `CLAUDE.md` flags as a
-//! repeat offender. Worth encoding as *data* — one small table of 4 rows, read
-//! side by side — rather than four hand-written branches:
+//! repeat offender. `castling_moves` handles it with two small closures shared
+//! between the kingside and queenside branches, rather than four independent
+//! code paths: `valid_castle(rook_sq)` derives every square that matters
+//! (`tables::between(king_sq, rook_sq)`) directly from where the king and rook
+//! actually are, so it needs no per-color or per-side branching at all —
+//! Black castling isn't a separate case, it falls out of `king_sq`/`rook_sq`
+//! already being Black's squares. `castle_sq(dir)` computes the landing square
+//! by shifting the king two steps in `dir`; both branches call it
+//! (`castle_sq(Direction::East)` / `castle_sq(Direction::West)`) instead of
+//! hand-rolling the shift, since a hand-rolled copy in just one branch is
+//! exactly the shape that let the `KingCastle`/`QueenCastle` flag get crossed
+//! once already during development.
 //!
-//! | color | side | king from -> to | must be empty | must be unattacked | flag          |
-//! |-------|------|-----------------|----------------|---------------------|---------------|
-//! | White | K    | e1 -> g1        | f1 g1          | e1 f1 g1            | `KingCastle`  |
-//! | White | Q    | e1 -> c1        | b1 c1 d1       | e1 d1 c1            | `QueenCastle` |
-//! | Black | K    | e8 -> g8        | f8 g8          | e8 f8 g8            | `KingCastle`  |
-//! | Black | Q    | e8 -> c8        | b8 c8 d8       | e8 d8 c8            | `QueenCastle` |
-//!
-//! The queenside b-file square must be **empty but need not be unattacked** —
-//! the king never crosses it, only the rook does. That the empty-set and the
-//! must-be-safe set differ for exactly two of the four rows is exactly what a
-//! hand-written branch per case tends to get wrong.
-//!
-//! Compute `enemy = attacks::attacked_by(board, them, board.occupied())`
-//! **once** per call and test each row with `(safe_mask & enemy).is_empty()`,
-//! rather than three separate `attacks::is_attacked` calls per row. Using the
-//! board's actual occupancy (not a king-removed one) is correct here: the only
-//! way our own king on e1/e8 could shadow one of these transit squares from an
-//! enemy slider is via the a1-e1/a8-e8 ray, and a slider on that ray is already
-//! attacking e1/e8 itself, which fails the check regardless.
+//! `valid_castle` checks two things: `between(king_sq, rook_sq)` must be fully
+//! empty (the rook's path — for queenside this includes b1/b8), and
+//! `between(...).and_not(File::B.bitboard())` unioned with `king_sq` itself must be fully
+//! unattacked (the king's path, which never touches the b-file). b1/b8 must be
+//! **empty but need not be unattacked** — the king never crosses it, only the
+//! rook does — which is exactly why the occupancy check uses the full
+//! `between` set but the safety check excludes `File::B`. `occupied` and
+//! `attacked = attacks::attacked_by(board, them, occupied)` are both computed
+//! once before either branch runs, not once per closure call. Using the
+//! board's actual occupancy (not a king-removed one) for `attacked` is correct
+//! here: the only way our own king could shadow a transit square from an enemy
+//! slider is via the same rank the king sits on, and a slider on that rank is
+//! already attacking the king's own square, which fails the check regardless.
 //!
 //! This is why `pseudo_legal` depends on `attacks` (merged in the prior PR):
 //! `legal`'s copy-make filter only inspects the *resulting* position, so on its
@@ -75,40 +86,42 @@
 //!
 //! # Pawns
 //!
-//! The hairy one. Set-wise, using primitives already on `Bitboard`:
+//! Split across `pawn_moves` (captures, en passant, and promotion-by-capture)
+//! and `pawn_pushes` (quiet pushes, double pushes, and promotion-by-push),
+//! both looping per pawn rather than shifting the whole `pawns` bitboard at
+//! once — since `from` is already in hand at each iteration, there's no need
+//! to reverse-derive a source square from a target the way a fully batched
+//! approach would.
 //!
-//! - `pushes = pawns.pawn_pushes(us, board.empty())`.
-//! - `doubles = pushes.pawn_pushes(us, board.empty()) & double_rank`, where
-//!   `double_rank` is `Rank::R4.bitboard()` for White, `Rank::R5.bitboard()`
-//!   for Black. Pushing twice *through* `empty` is what makes a blocker on the
+//! - `pawn_pushes`: `sq.bitboard().shift(dir).and(empty)` for the single push;
+//!   shifting that result by `dir` *again* (through `empty` a second time,
+//!   then masked to `color.double_pawn_push_rank()`) for the double push.
+//!   Pushing twice *through* `empty` is what makes a blocker on the
 //!   intermediate square stop the double push; a single shift-by-16 would skip
-//!   right over it — a classic silent bug.
-//! - `caps_east = pawns.pawn_attacks_east(us) & board[them]`, same for `_west`.
-//! - Recovering `from` from a target square: pick one sign convention once
-//!   (`let forward: i8 = match us { White => 1, Black => -1 };`) and derive
-//!   every source with `to.offset(-df, -forward * n)` rather than writing out
-//!   four separate sign literals across push / double / capture-east /
-//!   capture-west — one sign in one place is much harder to get backward for
-//!   just one of the four than four sign literals scattered across the
-//!   function.
-//! - Promotion: split each target set by `Rank::R8.bitboard()` (White) /
-//!   `Rank::R1.bitboard()` (Black). The `& promo` half fans one target into
-//!   four moves (`PromoteKnight`/`Bishop`/`Rook`/`Queen`, or the
-//!   `PromoteCapture*` variants if it came from a capture set); the `& !promo`
-//!   half makes one `Quiet`/`Capture` move. Crossing the two halves — giving a
-//!   promotion move a non-promoting capture flag, or vice versa — is the
-//!   second classic bug here.
-//! - En passant: `board.en_passant()` gives the target square, if any. Sources
-//!   are `tables::pawn_attacks(them, ep_sq) & board.pieces(us, Pawn)` — the
-//!   same reverse-the-color reasoning `attacks::attackers_of` uses (stand the
-//!   *opposing* color's pawn on the target square to find which of *our* pawns
-//!   could have captured onto it), and the second and last place in the crate
-//!   that trick is needed. Flag is `MoveFlags::EnPassant`, **not** `Capture` —
-//!   `MoveFlags::is_capture()` already covers both, so nothing downstream
-//!   should need to tell them apart by checking `en_passant()` again.
+//!   right over it. The double-push branch is nested inside the
+//!   non-promotion `else`, since a double push can never land on the back
+//!   rank by construction.
+//! - Promotion: both the push and the capture branch check
+//!   `target.rank() == color.far_rank()` before deciding between one
+//!   `Quiet`/`Capture` move and the four `Promote{Knight,Bishop,Rook,Queen}`
+//!   (or `PromoteCapture*`) moves. These two checks are independent code
+//!   paths — one was implemented before the other during development, which
+//!   is exactly the failure mode to watch for if a pawn rule ever needs a
+//!   third variant: the push and capture branches never share logic, so a
+//!   fix to one doesn't propagate to the other.
+//! - En passant: sources for the ep target square are
+//!   `tables::pawn_attacks(them, ep_sq) & board.pieces(us, Pawn)` — the same
+//!   reverse-the-color reasoning `attacks::attackers_of` uses (stand the
+//!   *opposing* color's pawn on the target square to find which of *our*
+//!   pawns could have captured onto it), and the second and last place in the
+//!   crate that trick is needed. Flag is `MoveFlags::EnPassant`, **not**
+//!   `Capture` — `MoveFlags::is_capture()` already covers both.
 
 use crate::board::Board;
+use crate::move_gen::attacks::{attacked_by, king_square, piece_attacks};
 use crate::move_gen::move_list::MoveList;
+use crate::move_gen::tables::between;
+use crate::{Bitboard, CastlingRights, Color, Direction, File, Move, MoveFlags, Piece};
 
 /// Generates every pseudolegal move for `board.side_to_move()` into `list`.
 /// Calls the five functions below; their outputs never overlap (each covers a
@@ -116,36 +129,109 @@ use crate::move_gen::move_list::MoveList;
 /// matter.
 #[allow(unused_variables)]
 pub fn pseudo_legal_moves(board: &Board, list: &mut MoveList) {
-    todo!()
+    pawn_moves(board, list);
+    knight_moves(board, list);
+    king_moves(board, list);
+    slider_moves(board, list);
+    castling_moves(board, list);
 }
 
 /// Pushes, double pushes, captures (including en passant), and all four
 /// promotion variants (quiet and capturing) for every pawn of
 /// `board.side_to_move()`.
-#[allow(unused_variables)]
 pub fn pawn_moves(board: &Board, list: &mut MoveList) {
-    todo!()
+    let color = board.side_to_move();
+    pawn_pushes(board, list, color);
+
+    let en_passant = board
+        .en_passant()
+        .map_or(Bitboard::EMPTY, |sq| sq.bitboard());
+    let enemy = board[color.flip()];
+    let occupied = board.occupied();
+    for sq in board.pieces(color, Piece::Pawn) {
+        let pawn_attacks = piece_attacks(Piece::Pawn, color, sq, occupied);
+        for target in pawn_attacks {
+            if en_passant.contains(target) {
+                list.push(Move::new(sq, target, MoveFlags::EnPassant));
+            } else if enemy.contains(target) {
+                if target.rank() == color.far_rank() {
+                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureBishop));
+                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureKnight));
+                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureRook));
+                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureQueen));
+                } else {
+                    list.push(Move::new(sq, target, MoveFlags::Capture));
+                }
+            }
+        }
+    }
+}
+
+fn pawn_pushes(board: &Board, list: &mut MoveList, color: Color) {
+    let empty = board.empty();
+    let dir = match color {
+        Color::White => Direction::North,
+        Color::Black => Direction::South,
+    };
+    for sq in board.pieces(color, Piece::Pawn) {
+        let push = sq.bitboard().shift(dir).and(empty);
+        if !push.is_empty() {
+            let push_sq = push.lsb().expect("push is non-empty");
+            if push_sq.rank() == color.far_rank() {
+                list.push(Move::new(sq, push_sq, MoveFlags::PromoteBishop));
+                list.push(Move::new(sq, push_sq, MoveFlags::PromoteKnight));
+                list.push(Move::new(sq, push_sq, MoveFlags::PromoteRook));
+                list.push(Move::new(sq, push_sq, MoveFlags::PromoteQueen));
+            } else {
+                list.push(Move::new(sq, push_sq, MoveFlags::Quiet));
+                let double_push = push
+                    .shift(dir)
+                    .and(empty)
+                    .and(color.double_pawn_push_rank().bitboard());
+                if !double_push.is_empty() {
+                    let double_push_sq = double_push.lsb().expect("double_push is non-empty");
+                    list.push(Move::new(sq, double_push_sq, MoveFlags::DoublePawnPush));
+                }
+            }
+        }
+    }
 }
 
 /// Every quiet move and capture for every knight of `board.side_to_move()`.
-#[allow(unused_variables)]
 pub fn knight_moves(board: &Board, list: &mut MoveList) {
-    todo!()
+    nonpawn_moves(board, list, Piece::Knight);
 }
 
 /// Every quiet move and capture for `board.side_to_move()`'s king — deliberately
 /// including moves onto attacked squares; see the module doc for why that
 /// filter belongs in `legal`, not here.
-#[allow(unused_variables)]
 pub fn king_moves(board: &Board, list: &mut MoveList) {
-    todo!()
+    nonpawn_moves(board, list, Piece::King);
 }
 
 /// Every quiet move and capture for every bishop, rook, and queen of
 /// `board.side_to_move()`.
-#[allow(unused_variables)]
 pub fn slider_moves(board: &Board, list: &mut MoveList) {
-    todo!()
+    nonpawn_moves(board, list, Piece::Bishop);
+    nonpawn_moves(board, list, Piece::Rook);
+    nonpawn_moves(board, list, Piece::Queen);
+}
+
+fn nonpawn_moves(board: &Board, list: &mut MoveList, piece: Piece) {
+    let color = board.side_to_move();
+    let pieces = board.pieces(color, piece);
+    let occupied = board.occupied();
+    for sq in pieces {
+        let targets = piece_attacks(piece, color, sq, occupied).and_not(board[color]);
+        let captures = targets.and(board[color.flip()]);
+        for c in captures {
+            list.push(Move::new(sq, c, MoveFlags::Capture));
+        }
+        let quiet = targets.and_not(captures);
+        for q in quiet {
+            list.push(Move::new(sq, q, MoveFlags::Quiet));
+        }
+    }
 }
 
 /// Kingside and queenside castling for `board.side_to_move()`, where the
@@ -153,7 +239,54 @@ pub fn slider_moves(board: &Board, list: &mut MoveList) {
 /// empty, and the king's start/transit/landing squares are all unattacked. See
 /// the module doc for why this needs `attacks::attacked_by` rather than being
 /// deferred to `legal`'s filter.
-#[allow(unused_variables)]
 pub fn castling_moves(board: &Board, list: &mut MoveList) {
-    todo!()
+    let color = board.side_to_move();
+    let Some(king_sq) = king_square(board, color) else {
+        return;
+    };
+    let occupied = board.occupied();
+    let attacked = attacked_by(board, color.flip(), occupied);
+
+    let valid_castle = |rook_sq| {
+        let between = between(king_sq, rook_sq);
+        if !between.and(occupied).is_empty() {
+            return false;
+        }
+        let king_path = between.and_not(File::B.bitboard());
+        king_path.or(king_sq.bitboard()).and(attacked).is_empty()
+    };
+    let castle_sq = |dir: Direction| {
+        king_sq
+            .bitboard()
+            .shift(dir)
+            .shift(dir)
+            .lsb()
+            .expect("started with a king")
+    };
+
+    let rights = board.castling_rights().without_color(color.flip());
+    let kingside = rights.contains(CastlingRights::kingside(color));
+    if kingside {
+        let rook_sq = board
+            .pieces(color, Piece::Rook)
+            .and(File::H.bitboard())
+            .lsb()
+            .expect("CastlingRights says we have a rook there");
+        if valid_castle(rook_sq) {
+            let castle_sq = castle_sq(Direction::East);
+            list.push(Move::new(king_sq, castle_sq, MoveFlags::KingCastle));
+        }
+    }
+    let queenside = rights.contains(CastlingRights::queenside(color));
+    if queenside {
+        let rook_sq = board
+            .pieces(color, Piece::Rook)
+            .and(File::A.bitboard())
+            .lsb()
+            .expect("CastlingRights says we have a rook there");
+        if valid_castle(rook_sq) {
+            let castle_sq = castle_sq(Direction::West);
+            list.push(Move::new(king_sq, castle_sq, MoveFlags::QueenCastle));
+        }
+    }
 }

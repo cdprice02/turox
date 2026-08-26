@@ -1,3 +1,5 @@
+use crate::File;
+
 use super::color::Color;
 use super::square::Square;
 use std::fmt;
@@ -23,11 +25,6 @@ pub struct Bitboard(u64);
 impl Bitboard {
     pub const EMPTY: Self = Self(0);
     pub const ALL: Self = Self(!0);
-
-    pub const FILE_A: Self = Self(0x0101_0101_0101_0101);
-    pub const FILE_H: Self = Self(0x8080_8080_8080_8080);
-    pub const RANK_1: Self = Self(0x0000_0000_0000_00FF);
-    pub const RANK_8: Self = Self(0xFF00_0000_0000_0000);
 
     #[inline]
     pub const fn from_bits(bits: u64) -> Self {
@@ -160,12 +157,12 @@ impl Bitboard {
         match dir {
             Direction::North => self.shl(8),
             Direction::South => self.shr(8),
-            Direction::East => self.and_not(Self::FILE_H).shl(1),
-            Direction::West => self.and_not(Self::FILE_A).shr(1),
-            Direction::NorthEast => self.and_not(Self::FILE_H).shl(9),
-            Direction::NorthWest => self.and_not(Self::FILE_A).shl(7),
-            Direction::SouthEast => self.and_not(Self::FILE_H).shr(7),
-            Direction::SouthWest => self.and_not(Self::FILE_A).shr(9),
+            Direction::East => self.and_not(File::H.bitboard()).shl(1),
+            Direction::West => self.and_not(File::A.bitboard()).shr(1),
+            Direction::NorthEast => self.and_not(File::H.bitboard()).shl(9),
+            Direction::NorthWest => self.and_not(File::A.bitboard()).shl(7),
+            Direction::SouthEast => self.and_not(File::H.bitboard()).shr(7),
+            Direction::SouthWest => self.and_not(File::A.bitboard()).shr(9),
         }
     }
 

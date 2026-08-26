@@ -459,7 +459,9 @@ fn black_both_castles_available_on_an_empty_clear_board() {
 
 #[test]
 fn kingside_castle_blocked_by_occupied_transit_square() {
-    let board = Board::try_from_fen("r3k2r/8/8/8/8/8/5N2/R3K2R w KQkq - 0 1").expect("valid FEN");
+    // Knight on f1 itself (not f2 — a transit-square blocker has to sit on the
+    // rank the king/rook actually cross).
+    let board = Board::try_from_fen("r3k2r/8/8/8/8/8/8/R3KN1R w KQkq - 0 1").expect("valid FEN");
     let mut list = MoveList::new();
     castling_moves(&board, &mut list);
     assert!(!contains(
@@ -478,7 +480,7 @@ fn kingside_castle_blocked_by_occupied_transit_square() {
 
 #[test]
 fn queenside_castle_blocked_by_occupied_transit_square() {
-    let board = Board::try_from_fen("r3k2r/8/8/8/8/8/3N4/R3K2R w KQkq - 0 1").expect("valid FEN");
+    let board = Board::try_from_fen("r3k2r/8/8/8/8/8/8/R2NK2R w KQkq - 0 1").expect("valid FEN");
     let mut list = MoveList::new();
     castling_moves(&board, &mut list);
     assert!(contains(
@@ -596,7 +598,9 @@ fn queenside_castle_is_still_legal_when_b1_is_attacked() {
 
 #[test]
 fn queenside_castle_is_still_legal_when_b8_is_attacked() {
-    let board = Board::try_from_fen("r3k3/8/8/8/8/8/1R6/4K3 b kq - 0 1").expect("valid FEN");
+    // Rights are "q" only: this board has no black rook on h8, so a claimed
+    // "k" right here would itself be an invalid FEN for what's on the board.
+    let board = Board::try_from_fen("r3k3/8/8/8/8/8/1R6/4K3 b q - 0 1").expect("valid FEN");
     let mut list = MoveList::new();
     castling_moves(&board, &mut list);
     assert!(contains(

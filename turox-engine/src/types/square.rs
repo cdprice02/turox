@@ -63,15 +63,35 @@ declare_axis!(
 
 impl File {
     /// Every square on this file, as a `Bitboard`.
+    #[inline]
     pub const fn bitboard(self) -> Bitboard {
-        todo!()
+        match self {
+            File::A => Bitboard::from_bits(0x0101010101010101),
+            File::B => Bitboard::from_bits(0x0202020202020202),
+            File::C => Bitboard::from_bits(0x0404040404040404),
+            File::D => Bitboard::from_bits(0x0808080808080808),
+            File::E => Bitboard::from_bits(0x1010101010101010),
+            File::F => Bitboard::from_bits(0x2020202020202020),
+            File::G => Bitboard::from_bits(0x4040404040404040),
+            File::H => Bitboard::from_bits(0x8080808080808080),
+        }
     }
 }
 
 impl Rank {
     /// Every square on this rank, as a `Bitboard`.
+    #[inline]
     pub const fn bitboard(self) -> Bitboard {
-        todo!()
+        match self {
+            Rank::R1 => Bitboard::from_bits(0x00000000000000FF),
+            Rank::R2 => Bitboard::from_bits(0x000000000000FF00),
+            Rank::R3 => Bitboard::from_bits(0x0000000000FF0000),
+            Rank::R4 => Bitboard::from_bits(0x00000000FF000000),
+            Rank::R5 => Bitboard::from_bits(0x000000FF00000000),
+            Rank::R6 => Bitboard::from_bits(0x0000FF0000000000),
+            Rank::R7 => Bitboard::from_bits(0x00FF000000000000),
+            Rank::R8 => Bitboard::from_bits(0xFF00000000000000),
+        }
     }
 }
 
