@@ -4,8 +4,8 @@
 //! `tables` (leaper attacks), `magic` (slider attacks), `attacks`
 //! (square-attack queries built on both), `move_list` (the stack-allocated
 //! move buffer), and `pseudo_legal` (per-piece pseudolegal generation) are
-//! done. `legal` (the check-filtered wrapper around it, plus perft) is not yet
-//! started.
+//! done. `legal` (the check-filtered wrapper around it, plus `perft`) is in
+//! progress.
 
 pub mod attacks;
 pub mod legal;
