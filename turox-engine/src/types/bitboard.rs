@@ -3,18 +3,21 @@ use crate::File;
 use super::color::Color;
 use super::square::Square;
 use std::fmt;
-use std::ops::{
-    BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Shl, Shr, Sub, SubAssign,
-};
+use std::ops::Not;
 
 /// A set of squares, one bit per square, LERF-indexed (bit 0 = a1, bit 63 = h8).
 ///
 /// `#[repr(transparent)]` matches `u64`'s layout (sound for `transmute`/FFI) but
 /// isn't what makes this free at runtime — LLVM scalar-replaces a one-field newtype
-/// regardless of `repr`. Inherent methods are `const fn` (not just trait operators)
-/// so `move_gen` can build attack tables at compile time; the operator impls below
-/// just forward to them. No `From<u64>`/`PartialEq<u64>`: raw integers cross the
-/// boundary only through `from_bits`/`bits()`.
+/// regardless of `repr`. Every combinator (`and`/`or`/`xor`/`and_not`/`shl`/`shr`)
+/// is an inherent `const fn`, deliberately with no `BitAnd`/`BitOr`/`BitXor`/`Sub`/
+/// `Shl`/`Shr` operator overloads standing in for them: those traits aren't
+/// `const` on stable Rust, so an operator would silently be unusable (or, if
+/// reached for inside a `const fn`, wouldn't compile) exactly where this type is
+/// used most — `tables.rs`/`magic.rs` building attack data at compile time.
+/// `Not` is the one exception (unary, no such split, kept as `!board`).
+/// No `From<u64>`/`PartialEq<u64>`: raw integers cross the boundary only through
+/// `from_bits`/`bits()`.
 ///
 /// Every operation here is implemented and verified against a naive reference
 /// (see `tests/bitboard_props.rs`).
@@ -388,80 +391,11 @@ impl Bitboard {
     }
 }
 
-/// Forwards a bitwise-set `std::ops` trait (`&`, `|`, `^`, `-`) to one of the
-/// `const fn`s above. `$rhs` is `Bitboard` or `Square` — both convert via
-/// `Bitboard::from` (the `Square` case uses our `From<Square>` impl below; the
-/// `Bitboard` case uses core's reflexive `From<T> for T`), so one macro arm covers
-/// both without a separate hand-written impl per type.
-macro_rules! forward_binop {
-    ($trait:ident, $method:ident, $inner:ident, $rhs:ty) => {
-        impl $trait<$rhs> for Bitboard {
-            type Output = Bitboard;
-            #[inline]
-            fn $method(self, rhs: $rhs) -> Bitboard {
-                Bitboard::$inner(self, Bitboard::from(rhs))
-            }
-        }
-    };
-}
-
-/// Same as `forward_binop`, for the `*Assign` traits (`&=`, `|=`, `-=`).
-macro_rules! forward_assign_op {
-    ($trait:ident, $method:ident, $inner:ident, $rhs:ty) => {
-        impl $trait<$rhs> for Bitboard {
-            #[inline]
-            fn $method(&mut self, rhs: $rhs) {
-                *self = Bitboard::$inner(*self, Bitboard::from(rhs));
-            }
-        }
-    };
-}
-
-/// Shl/Shr take a shift count, not a bitboard-like value, so they pass `rhs`
-/// through as-is instead of going through `Bitboard::from` like the macros above.
-macro_rules! forward_shift_op {
-    ($trait:ident, $method:ident, $inner:ident) => {
-        impl $trait<u32> for Bitboard {
-            type Output = Bitboard;
-            #[inline]
-            fn $method(self, rhs: u32) -> Bitboard {
-                Bitboard::$inner(self, rhs)
-            }
-        }
-    };
-}
-
-forward_binop!(BitAnd, bitand, and, Bitboard);
-forward_binop!(BitAnd, bitand, and, Square);
-forward_binop!(BitOr, bitor, or, Bitboard);
-forward_binop!(BitOr, bitor, or, Square);
-forward_binop!(BitXor, bitxor, xor, Bitboard);
-forward_binop!(Sub, sub, and_not, Bitboard);
-forward_binop!(Sub, sub, and_not, Square);
-
-forward_assign_op!(BitAndAssign, bitand_assign, and, Bitboard);
-forward_assign_op!(BitAndAssign, bitand_assign, and, Square);
-forward_assign_op!(BitOrAssign, bitor_assign, or, Bitboard);
-forward_assign_op!(BitOrAssign, bitor_assign, or, Square);
-forward_assign_op!(BitXorAssign, bitxor_assign, xor, Bitboard);
-forward_assign_op!(SubAssign, sub_assign, and_not, Bitboard);
-forward_assign_op!(SubAssign, sub_assign, and_not, Square);
-
-forward_shift_op!(Shl, shl, shl);
-forward_shift_op!(Shr, shr, shr);
-
 impl Not for Bitboard {
     type Output = Bitboard;
     #[inline]
     fn not(self) -> Bitboard {
         Bitboard::not(self)
-    }
-}
-
-impl From<Square> for Bitboard {
-    #[inline]
-    fn from(sq: Square) -> Self {
-        sq.bitboard()
     }
 }
 

@@ -146,20 +146,20 @@ proptest! {
 
     #[test]
     fn and_not_matches_and_of_complement(a in any_bitboard(), b in any_bitboard()) {
-        prop_assert_eq!(a.and_not(b), a & !b);
+        prop_assert_eq!(a.and_not(b), a.and(!b));
     }
 
     #[test]
     fn complement_is_disjoint_and_covers_all(a in any_bitboard()) {
-        prop_assert_eq!(a & !a, Bitboard::EMPTY);
-        prop_assert_eq!(a | !a, Bitboard::ALL);
+        prop_assert_eq!(a.and(!a), Bitboard::EMPTY);
+        prop_assert_eq!(a.or(!a), Bitboard::ALL);
     }
 
     #[test]
     fn and_or_xor_agree_with_u64(a in any_bitboard(), b in any_bitboard()) {
-        prop_assert_eq!((a & b).bits(), a.bits() & b.bits());
-        prop_assert_eq!((a | b).bits(), a.bits() | b.bits());
-        prop_assert_eq!((a ^ b).bits(), a.bits() ^ b.bits());
+        prop_assert_eq!(a.and(b).bits(), a.bits() & b.bits());
+        prop_assert_eq!(a.or(b).bits(), a.bits() | b.bits());
+        prop_assert_eq!(a.xor(b).bits(), a.bits() ^ b.bits());
     }
 
     #[test]
@@ -167,7 +167,7 @@ proptest! {
         // The contract explicitly allows n >= 64 (must not panic; result is EMPTY),
         // which is why this ranges past 64 rather than stopping at 63.
         let expected = if n < 64 { a.bits() << n } else { 0 };
-        prop_assert_eq!((a << n).bits(), expected);
+        prop_assert_eq!(a.shl(n).bits(), expected);
     }
 
     // ---- Square membership and scanning ----
@@ -239,12 +239,12 @@ proptest! {
 
     #[test]
     fn shift_east_never_lands_on_file_a(a in any_bitboard()) {
-        prop_assert_eq!(a.shift(Direction::East) & File::A.bitboard(), Bitboard::EMPTY);
+        prop_assert_eq!(a.shift(Direction::East).and(File::A.bitboard()), Bitboard::EMPTY);
     }
 
     #[test]
     fn shift_west_never_lands_on_file_h(a in any_bitboard()) {
-        prop_assert_eq!(a.shift(Direction::West) & File::H.bitboard(), Bitboard::EMPTY);
+        prop_assert_eq!(a.shift(Direction::West).and(File::H.bitboard()), Bitboard::EMPTY);
     }
 
     #[test]
@@ -257,7 +257,7 @@ proptest! {
     fn shift_then_opposite_shift_is_a_subset(a in any_bitboard(), i in 0usize..8) {
         let dir = Direction::ALL[i];
         let there_and_back = a.shift(dir).shift(dir.opposite());
-        prop_assert_eq!(there_and_back & !a, Bitboard::EMPTY);
+        prop_assert_eq!(there_and_back.and(!a), Bitboard::EMPTY);
     }
 
     // ---- Flips: involution and reference-equivalence against a per-square walk ----
@@ -361,7 +361,7 @@ proptest! {
         let subsets: Vec<Bitboard> = a.subsets().collect();
         prop_assert_eq!(subsets.len() as u32, 1u32 << a.count());
         for &s in &subsets {
-            prop_assert_eq!(s & !a, Bitboard::EMPTY, "subset must be a subset of the mask");
+            prop_assert_eq!(s.and(!a), Bitboard::EMPTY, "subset must be a subset of the mask");
         }
         prop_assert!(subsets.contains(&Bitboard::EMPTY));
         prop_assert!(subsets.contains(&a));
@@ -402,7 +402,7 @@ proptest! {
 
     #[test]
     fn file_fill_equals_union_of_north_and_south_fill(a in any_bitboard()) {
-        prop_assert_eq!(a.file_fill(), a.north_fill() | a.south_fill());
+        prop_assert_eq!(a.file_fill(), a.north_fill().or(a.south_fill()));
     }
 
     #[test]
@@ -477,8 +477,8 @@ proptest! {
         color in any_color(),
     ) {
         let expected = match color {
-            Color::White => a.shift(Direction::North) & empty,
-            Color::Black => a.shift(Direction::South) & empty,
+            Color::White => a.shift(Direction::North).and(empty),
+            Color::Black => a.shift(Direction::South).and(empty),
         };
         prop_assert_eq!(a.pawn_pushes(color, empty), expected);
     }
@@ -498,7 +498,7 @@ proptest! {
     fn dilate_matches_union_of_all_eight_shifts(a in any_bitboard()) {
         let mut expected = a;
         for dir in Direction::ALL {
-            expected |= a.shift(dir);
+            expected = expected.or(a.shift(dir));
         }
         prop_assert_eq!(a.dilate(), expected);
     }

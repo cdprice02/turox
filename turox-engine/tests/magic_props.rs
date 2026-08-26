@@ -88,7 +88,7 @@ proptest! {
     fn queen_attacks_equals_union_of_rook_and_bishop(sq in any_square(), occupied in any_bitboard()) {
         prop_assert_eq!(
             queen_attacks(sq, occupied),
-            rook_attacks(sq, occupied) | bishop_attacks(sq, occupied)
+            rook_attacks(sq, occupied).or(bishop_attacks(sq, occupied))
         );
     }
 

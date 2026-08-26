@@ -101,8 +101,8 @@ impl Board {
     /// property test) can't be broken by construction.
     pub fn place(&mut self, sq: Square, cp: ColoredPiece) {
         self.mailbox[sq.index() as usize] = Some(cp);
-        self.by_color[cp.color() as usize] |= sq;
-        self.by_piece[cp.piece() as usize] |= sq;
+        self.by_color[cp.color() as usize] = self.by_color[cp.color() as usize].or(sq.bitboard());
+        self.by_piece[cp.piece() as usize] = self.by_piece[cp.piece() as usize].or(sq.bitboard());
     }
 
     /// Builds a full `Board` from a placement-only board (assembled via
@@ -132,8 +132,10 @@ impl Board {
     /// Removes and returns whatever was on `sq`, or `None` if it was already empty.
     pub fn remove(&mut self, sq: Square) -> Option<ColoredPiece> {
         let cp = self.mailbox[sq.index() as usize].take()?;
-        self.by_color[cp.color() as usize] -= sq;
-        self.by_piece[cp.piece() as usize] -= sq;
+        self.by_color[cp.color() as usize] =
+            self.by_color[cp.color() as usize].and_not(sq.bitboard());
+        self.by_piece[cp.piece() as usize] =
+            self.by_piece[cp.piece() as usize].and_not(sq.bitboard());
         Some(cp)
     }
 
@@ -144,12 +146,12 @@ impl Board {
 
     /// All pieces of a given color and kind.
     pub fn pieces(&self, color: Color, piece: Piece) -> Bitboard {
-        self[piece] & self[color]
+        self[piece].and(self[color])
     }
 
     /// Every occupied square, regardless of color or piece kind.
     pub fn occupied(&self) -> Bitboard {
-        self[Color::White] | self[Color::Black]
+        self[Color::White].or(self[Color::Black])
     }
 
     /// Every unoccupied square.
@@ -413,7 +415,7 @@ mod tests {
     fn start_pos_occupied_and_empty() {
         let board = Board::start_pos();
         assert_eq!(board.occupied().count(), 32);
-        assert_eq!(board.occupied() & board.empty(), Bitboard::EMPTY);
+        assert_eq!(board.occupied().and(board.empty()), Bitboard::EMPTY);
     }
 
     #[test]
@@ -442,11 +444,11 @@ mod tests {
             for piece in Piece::ALL {
                 let bb = board.pieces(color, piece);
                 assert_eq!(
-                    bb & union,
+                    bb.and(union),
                     Bitboard::EMPTY,
                     "overlap for {color:?}/{piece:?}"
                 );
-                union |= bb;
+                union = union.or(bb);
             }
         }
         assert_eq!(union, board.occupied(), "bitboards don't cover occupied()");
