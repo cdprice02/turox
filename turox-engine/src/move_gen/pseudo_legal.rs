@@ -84,6 +84,22 @@
 //! presence on the corner is implied by the castling right and is already
 //! assumed by `Board::make_move`.
 //!
+//! **The rook lookup needs a rank filter, not just a file filter.** Finding
+//! the castling rook as "the piece of `color`/`Rook` on file A/H" is wrong the
+//! moment a pawn has promoted to a rook that happens to land on the same file
+//! — e.g. a black pawn promoting on a1 while black's real queenside rook is
+//! still on a8; both are "a rook on the A-file", but only one is on
+//! `color.back_rank()`. Picking the wrong one silently breaks `valid_castle`
+//! rather than panicking: `between(king_sq, wrong_rook_sq)` for two squares
+//! that aren't even aligned returns `Bitboard::EMPTY`, which trivially passes
+//! the occupancy check and collapses the safety check down to "is `king_sq`
+//! itself attacked", skipping the real transit squares entirely. Perft caught
+//! this at depth 4 on the standard "Position 4" test position specifically
+//! because that position is built to reach exactly this promotion-creates-an-
+//! ambiguous-same-file-rook scenario within a few plies — the six-position
+//! perft suite exists precisely to catch cases like this one, that no
+//! hand-written FEN scenario thought to construct.
+//!
 //! # Pawns
 //!
 //! Split across `pawn_moves` (captures, en passant, and promotion-by-capture)
@@ -270,6 +286,7 @@ pub fn castling_moves(board: &Board, list: &mut MoveList) {
         let rook_sq = board
             .pieces(color, Piece::Rook)
             .and(File::H.bitboard())
+            .and(color.back_rank().bitboard())
             .lsb()
             .expect("CastlingRights says we have a rook there");
         if valid_castle(rook_sq) {
@@ -282,6 +299,7 @@ pub fn castling_moves(board: &Board, list: &mut MoveList) {
         let rook_sq = board
             .pieces(color, Piece::Rook)
             .and(File::A.bitboard())
+            .and(color.back_rank().bitboard())
             .lsb()
             .expect("CastlingRights says we have a rook there");
         if valid_castle(rook_sq) {

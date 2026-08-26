@@ -7,8 +7,8 @@
 //!   write `turox_engine::Bitboard` rather than reaching into the module.
 //! - [`board`] — `Board` (piece placement plus game state) and FEN parsing/
 //!   formatting, built on `types`.
-//! - [`move_gen`] — attack tables, magic bitboards, and legal move generation.
-//!   *(planned)*
+//! - [`move_gen`] — attack tables, magic bitboards, pseudolegal and legal move
+//!   generation, and `perft`.
 //! - `search` — iterative deepening search over a transposition table.
 //!   *(planned)*
 //! - `eval` — static position evaluation. *(planned)*

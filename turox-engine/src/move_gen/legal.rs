@@ -45,13 +45,16 @@
 //!
 //! # `perft`
 //!
-//! The standard definition: `perft(board, 0) = 1`; `perft(board, depth) =
-//! sum(perft(board.make_move(m), depth - 1) for m in legal_moves(board))`. The
-//! one standard optimization worth applying: at `depth == 1`, return
-//! `legal_moves(board).len()` directly rather than recursing one level deeper
-//! just to count `1`s — this is the usual "bulk counting" perft does, and it
-//! roughly halves the total `make_move`/`legal_moves` calls for a given depth
-//! without changing the result.
+//! The recursive definition, with the standard "bulk counting" shortcut:
+//! `perft(board, 0) = 1`; `perft(board, 1) = legal_moves(board).len()`
+//! (skipping a full `make_move` + recurse-to-count-`1`s just to re-derive a
+//! count `legal_moves` already produced); `perft(board, depth) =
+//! sum(perft(board.make_move(m), depth - 1) for m in legal_moves(board))`
+//! otherwise. `depth == 0` has to stay its own explicit case rather than
+//! falling out of the `depth == 1` one: `perft` is called directly with
+//! `depth == 0` (`tests/perft.rs`'s `perft_zero_is_one_leaf`, and indirectly
+//! any depth-1 call's own base case), and without that branch `depth - 1`
+//! underflows `u32` before ever reaching the `depth == 1` check.
 //!
 //! Six standard positions with known node counts (`tests/perft.rs`) exercise
 //! `legal_moves`, `pseudo_legal`, `attacks`, `MoveList`, `make_move`, `tables`,
@@ -61,21 +64,44 @@
 //! a promotion or an en passant availability that only arises a few plies in).
 
 use crate::board::Board;
+use crate::move_gen::attacks::in_check;
 use crate::move_gen::move_list::MoveList;
+use crate::move_gen::pseudo_legal::pseudo_legal_moves;
 
 /// Every legal move for `board.side_to_move()`: `pseudo_legal_moves` filtered
 /// to the moves that don't leave the mover's own king in check. See the
 /// module doc for why copy-make (rather than pin/discovered-check detection)
 /// is the right first version of this.
-#[allow(unused_variables)]
 pub fn legal_moves(board: &Board) -> MoveList {
-    todo!()
+    let mut pl_moves = MoveList::default();
+    pseudo_legal_moves(board, &mut pl_moves);
+
+    // `side_to_move` before `board.make_move` flips it
+    let color = board.side_to_move();
+
+    let mut l_moves = MoveList::default();
+    for &m in &pl_moves {
+        if !in_check(&board.make_move(m), color) {
+            l_moves.push(m);
+        }
+    }
+    l_moves
 }
 
 /// The number of leaf positions reachable from `board` after exactly `depth`
-/// plies of legal play. `perft(board, 0) == 1`. See the module doc for the
-/// standard depth-1 bulk-counting shortcut.
-#[allow(unused_variables)]
+/// plies of legal play. `perft(board, 0) == 1`. See the module doc for why
+/// that stays a separate branch from the `depth == 1` bulk-counting shortcut.
 pub fn perft(board: &Board, depth: u32) -> u64 {
-    todo!()
+    if depth == 0 {
+        return 1;
+    }
+    let moves = legal_moves(board);
+    if depth == 1 {
+        return moves.len() as u64;
+    }
+    moves
+        .as_slice()
+        .iter()
+        .map(|&m| perft(&board.make_move(m), depth - 1))
+        .sum()
 }

@@ -1,11 +1,14 @@
-//! Move generation: attack tables, sliding-piece magics, square-attack queries,
-//! and pin/check-aware legal move generation.
+//! Move generation: attack tables, sliding-piece magics, square-attack
+//! queries, pseudolegal generation, and pin/check-aware legal move generation
+//! plus `perft`.
 //!
-//! `tables` (leaper attacks), `magic` (slider attacks), `attacks`
-//! (square-attack queries built on both), `move_list` (the stack-allocated
-//! move buffer), and `pseudo_legal` (per-piece pseudolegal generation) are
-//! done. `legal` (the check-filtered wrapper around it, plus `perft`) is in
-//! progress.
+//! All six submodules are done: `tables` (leaper attacks), `magic` (slider
+//! attacks), `attacks` (square-attack queries built on both), `move_list`
+//! (the stack-allocated move buffer), `pseudo_legal` (per-piece pseudolegal
+//! generation), and `legal` (the check-filtered wrapper around it, plus
+//! `perft`) — verified end-to-end against all six standard perft test
+//! positions (`tests/perft.rs`), including their deep (`#[ignore]`d by
+//! default) depths.
 
 pub mod attacks;
 pub mod legal;
