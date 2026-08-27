@@ -6,7 +6,7 @@ members = ["turox-cli", "turox-engine"]
 anyhow = "1.0"
 clap = { version = "4.5.37", features = ["derive"] }
 proptest = "1.5"
-criterion = "0.5"
+criterion = "0.8"
 
 # turox-engine takes zero runtime dependencies (see turox-engine/Cargo.toml). Keep
 # anyhow scoped to turox-cli: a library returning anyhow::Error denies callers the
