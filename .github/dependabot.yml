@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # The actions rust-ci.yml pins by tag (actions/checkout@v4,
+  # Swatinem/rust-cache@v2, ...); this is what keeps those current instead of
+  # quietly drifting.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
+  # The main workspace (turox-engine, turox-cli).
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
+  # turox-fuzz isn't a workspace member (see its Cargo.toml), so it needs its
+  # own entry; Dependabot won't discover it via the root one.
+  - package-ecosystem: "cargo"
+    directory: "/turox-fuzz"
+    schedule:
+      interval: "weekly"
+      day: "monday"

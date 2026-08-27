@@ -1,0 +1,27 @@
+[package]
+name = "turox-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Not a workspace member: it needs a nightly toolchain (`cargo-fuzz`'s
+# sanitizer instrumentation isn't available on stable), and the rest of this
+# repo deliberately isn't. This empty table opts it out of the parent
+# workspace at ../Cargo.toml rather than being silently pulled in.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.turox-engine]
+path = ".."
+
+[[bin]]
+name = "fen"
+path = "fuzz_targets/fen.rs"
+test = false
+doc = false
+bench = false

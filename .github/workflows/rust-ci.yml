@@ -8,10 +8,15 @@ on:
   schedule:
     # Weekly, Monday 06:00 UTC. Covers the tests that are `#[ignore]`d out of
     # the default gate because they're too slow to run on every PR (deep
-    # perft depths, the full magic-bitboard re-search), not because they're
-    # unimportant.
+    # perft depths, the full magic-bitboard re-search), and the informational
+    # jobs below that are never a PR gate (mutation testing, coverage, a real
+    # `cargo bench` run) for the same reason: too slow, not too unimportant.
     - cron: "0 6 * * 1"
   workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,18 +35,12 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          key: build-and-test
 
       - name: Build
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace --verbose --locked
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -51,7 +50,14 @@ jobs:
       # lands, perft) rather than a manual QA pass. Deliberately no
       # continue-on-error here.
       - name: Run tests
-        run: cargo nextest run --workspace --profile ci
+        run: cargo nextest run --workspace --profile ci --locked
+
+      # nextest doesn't run doctests; this is the only thing that does. Zero
+      # exist today, so this currently just passes trivially, but it means a
+      # public-API example added later (search/eval/uci are the likely first
+      # ones) gets checked rather than silently going stale.
+      - name: Run doctests
+        run: cargo test --doc --workspace --locked
 
       - name: Upload JUnit test results
         if: always()
@@ -64,7 +70,7 @@ jobs:
       # compiling so a signature change in Bitboard/Board doesn't silently
       # break benches/*.rs until someone happens to run `cargo bench` locally.
       - name: Check that benchmarks still compile
-        run: cargo bench --workspace --no-run
+        run: cargo bench --workspace --no-run --locked
 
   lint-and-format:
     runs-on: ubuntu-latest
@@ -79,28 +85,22 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          key: lint-and-format
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       # `missing_docs` is denied workspace-wide (see the root Cargo.toml's
       # `[workspace.lints.rust]`), but that only checks that a doc comment
       # exists, not that it renders: a broken intra-doc link (`[`board`]`)
       # or malformed doc still passes `cargo build`.
       - name: Check documentation builds without warnings
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: "--deny warnings"
 
@@ -112,6 +112,7 @@ jobs:
   deep-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
@@ -121,18 +122,116 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-release-
+          key: deep-tests
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
       - name: Run ignored tests in release mode
-        run: cargo nextest run --workspace --release --run-ignored all
+        run: cargo nextest run --workspace --release --run-ignored all --locked
+
+  # Mutation testing: introduces small deliberate bugs (flip a comparison,
+  # drop a negation, ...) and checks the test suite actually catches each
+  # one. The project's whole correctness story rests on its property tests
+  # being comprehensive rather than just present; this is what tests that
+  # claim instead of asserting it, and the honest check on every test cut
+  # made during the audit pass (`cp/test-audit`). Informational only, not a
+  # PR gate: a surviving mutant is a prompt to add a test, not a build
+  # failure to fix under time pressure.
+  mutants:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: mutants
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@cargo-mutants
+
+      - name: Run mutation testing
+        run: cargo mutants -p turox-engine
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: mutants.out
+
+  # Which move-gen branches perft's six standard positions never actually
+  # reach is a real question a line count alone can't answer. Informational
+  # only, same reasoning as `mutants` above.
+  coverage:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/lcov.info
+
+  # A real `cargo bench` run (not just the compile check in build-and-test),
+  # informational only with no regression threshold: GitHub's shared runners
+  # aren't consistent enough run-to-run for a threshold to do anything but
+  # cry wolf on unrelated PRs. This is for eyeballing trends over time, not
+  # gating anything.
+  bench:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+
+      - name: Run benchmarks
+        run: cargo bench --workspace --locked
+
+      - name: Upload criterion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report
+          path: target/criterion
