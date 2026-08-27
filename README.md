@@ -1,5 +1,7 @@
 # turox
 
+[![Rust CI](https://github.com/cdprice02/turox/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/cdprice02/turox/actions/workflows/rust-ci.yml)
+
 Forged in Rust. Inspired by Turing.
 
 A chess engine written from scratch as a hands-on exercise in bit-manipulation
@@ -103,8 +105,26 @@ cargo bench -p turox-engine -- --baseline before
 ```
 
 CI only checks that benches still compile (`cargo bench --workspace --no-run`)
-on every push; it does not run them, since GitHub's shared runners aren't
-consistent enough run-to-run for the numbers to mean much there.
+on every push; it does not run them there, since GitHub's shared runners
+aren't consistent enough run-to-run for the numbers to mean much on a PR. A
+weekly scheduled job runs them for real, informationally (see below).
+
+## Fuzzing
+
+```sh
+cd turox-fuzz
+cargo +nightly fuzz run fen
+```
+
+Coverage-guided fuzzing of `Board::try_from_fen`, via
+[`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) (`cargo install
+cargo-fuzz`; requires a nightly toolchain, so this isn't part of the stable
+CI job, and runs on demand instead). `try_from_fen` is the one place the
+engine will take untrusted input directly off the wire, once UCI's `position
+fen <...>` is wired up: `Err` is a correct outcome for a malformed string, a
+panic is not. `tests/fen_props.rs` already checks the same property over
+proptest-generated inputs; this is the coverage-guided version of it, for
+inputs a random regex won't reliably hit.
 
 ## Development loop
 
@@ -114,6 +134,11 @@ test suite; `bacon nextest -- -- <name>` runs one test; `bacon nextest --
 --run-ignored ignored-only` runs the deep perft depths on demand; `bacon run`
 runs `turox-cli` in the background.
 
-CI (`.github/workflows/rust-ci.yml`) runs the same checks on every push:
-build, `cargo nextest run --workspace --profile ci`, `cargo fmt --check`,
-`cargo clippy -D warnings`, and a rustdoc build with warnings denied.
+CI (`.github/workflows/rust-ci.yml`) runs on every push: build, `cargo
+nextest run --workspace --profile ci`, doctests, `cargo fmt --check`, `cargo
+clippy -D warnings`, and a rustdoc build with warnings denied. A weekly
+schedule (also runnable on demand via `workflow_dispatch`) additionally runs
+what's too slow to gate every PR, informationally: the deep perft depths and
+the full magic-bitboard re-search (`--release --run-ignored all`), `cargo
+mutants -p turox-engine`, `cargo llvm-cov --workspace`, and a real `cargo
+bench` run.
