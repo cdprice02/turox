@@ -47,6 +47,10 @@ types  ->  board  ->  move_gen  ->  search / eval / uci
 
 ## Building and running
 
+Requires Rust 1.87 or later (`Bitboard::shl`/`shr` use `u64::unbounded_shl`/
+`unbounded_shr`, stabilized in 1.87; see `rust-version` in each crate's
+`Cargo.toml`).
+
 ```sh
 cargo build --workspace
 cargo run -p turox-cli

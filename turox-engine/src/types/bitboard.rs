@@ -155,11 +155,12 @@ impl Bitboard {
     }
 
     /// Clears and returns the lowest-indexed set square, or `None` if already
-    /// empty. Not `const` (mutates through `&mut self`); the primitive
-    /// `BitboardIter` below is built on.
+    /// empty. The primitive `BitboardIter` below is built on.
     #[inline]
-    pub fn pop_lsb(&mut self) -> Option<Square> {
-        let sq = self.lsb()?;
+    pub const fn pop_lsb(&mut self) -> Option<Square> {
+        let Some(sq) = self.lsb() else {
+            return None;
+        };
         *self = self.without(sq);
         Some(sq)
     }

@@ -14,7 +14,7 @@ use crate::types::{Bitboard, Color, Piece, Square};
 /// `tables`/`magic` function; every other function in this module and in
 /// `move_gen::pseudo_legal` should go through this rather than matching on
 /// `Piece` itself.
-pub fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
+pub const fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     match piece {
         Piece::Pawn => pawn_attacks(color, sq),
         Piece::Knight => knight_attacks(sq),
@@ -30,6 +30,12 @@ pub fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard)
 /// for king safety, the correct occupancy has the king already lifted off
 /// its old square, or a square directly behind it through an enemy slider
 /// reads as falsely safe.
+///
+/// Not `const`: `for piece in Piece::ALL` and `for sq in pieces` both go
+/// through `IntoIterator`, which isn't const-callable. Rewriting either loop
+/// as an index/`lsb` walk would buy a `const` no caller currently needs, at
+/// a real readability cost, so this stays a plain `fn`. Same reasoning
+/// applies to `attackers_of` below.
 pub fn attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard {
     let mut attacked_by = Bitboard::EMPTY;
     for piece in Piece::ALL {
@@ -49,7 +55,7 @@ pub fn is_attacked(board: &Board, sq: Square, by: Color) -> bool {
 }
 
 /// `color`'s king's square, or `None` if it has no king.
-pub fn king_square(board: &Board, color: Color) -> Option<Square> {
+pub const fn king_square(board: &Board, color: Color) -> Option<Square> {
     board.pieces(color, Piece::King).lsb()
 }
 

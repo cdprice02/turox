@@ -2,6 +2,8 @@
 name = "turox-engine"
 version = "0.1.0"
 edition = "2021"
+# 1.87 for u64::unbounded_shl/unbounded_shr (Bitboard::shl/shr).
+rust-version = "1.87"
 
 [lib]
 name = "turox_engine"

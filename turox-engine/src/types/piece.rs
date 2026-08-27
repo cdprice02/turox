@@ -94,8 +94,11 @@ impl ColoredPiece {
     }
 
     /// Parse a FEN piece character (e.g. `'P'`, `'n'`) into a `ColoredPiece`.
-    pub fn try_from_fen(c: char) -> Option<Self> {
-        let color = if c.is_uppercase() {
+    /// `is_ascii_uppercase`, not `is_uppercase`: FEN is ASCII-only, and
+    /// `is_uppercase` isn't `const` (it's Unicode-aware, which is both wrong
+    /// for FEN and unavailable in a `const fn`).
+    pub const fn try_from_fen(c: char) -> Option<Self> {
+        let color = if c.is_ascii_uppercase() {
             Color::White
         } else {
             Color::Black
