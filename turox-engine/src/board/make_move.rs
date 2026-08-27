@@ -6,10 +6,7 @@ use crate::Direction;
 
 impl Board {
     /// Applies `m` to a copy of this position and returns the result (copy-make;
-    /// see the struct docs). Stubbed pending move generation: this needs
-    /// `Bitboard`'s scanning/shift primitives to be implemented first, and its own
-    /// logic (captures, en passant, castling rook movement, promotion, clock
-    /// resets) is the subject of the move-generation change.
+    /// see the struct docs).
     pub fn make_move(&self, m: Move) -> Board {
         let mut board = *self;
         let color = board.side_to_move();
@@ -163,7 +160,7 @@ mod tests {
     fn make_move_outputs_stay_internally_consistent() {
         // One representative move per structurally distinct code path (plain
         // placement, capture, castling's extra rook move, en passant's
-        // off-destination capture, promotion), not all 14 flags — the invariant
+        // off-destination capture, promotion), not all 14 flags; the invariant
         // is checked once per *shape* of place/remove sequence, which is what
         // could plausibly desync it.
         let cases = [
@@ -195,10 +192,13 @@ mod tests {
 
     // ---- make_move ----
     //
-    // FEN-based scenario tests rather than proptest: without legal move
-    // generation yet, there's no way to generate an arbitrary (position, legal
-    // move) pair to check against an independent oracle, which is what proptest
-    // needs to be worth it. Concrete positions per rule are the right tool here.
+    // FEN-based scenario tests, one per rule, rather than a proptest here:
+    // `tests/legal_props.rs` already proptests make_move end to end (random
+    // position, random legal move via `legal_moves`, internal-consistency and
+    // FEN-round-trip check), but a failure there only says "some move on some
+    // position broke something." These name the specific rule (double-push
+    // clock reset, castling rook relocation, en passant capture, ...) so a
+    // regression fails with a test name that points straight at it.
 
     #[test]
     fn quiet_move_relocates_piece_and_flips_side_to_move() {
@@ -303,11 +303,11 @@ mod tests {
 
     #[test]
     fn castling_increments_halfmove_clock_like_any_other_non_capture_non_pawn_move() {
-        // Castling is neither a capture nor a pawn move, so — same rule as any
-        // other quiet non-pawn move — the clock increments, it doesn't reset.
+        // Castling is neither a capture nor a pawn move, so, same rule as any
+        // other quiet non-pawn move, the clock increments, it doesn't reset.
         // The reset/increment logic is shared, generic code, already checked
         // elsewhere, but the castling-rights corner mapping looked shared and
-        // obviously-correct too, right up until it wasn't — so this gets its own
+        // obviously-correct too, right up until it wasn't, so this gets its own
         // direct check instead of assuming the shared path transfers cleanly.
         let board =
             Board::try_from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 11 6").expect("valid FEN");
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn king_capture_clears_both_rights_not_just_king_quiet_move() {
         // Same rule as king_move_clears_both_rights_even_without_castling, but via
-        // MoveFlags::Capture instead of Quiet — the exact combination that was
+        // MoveFlags::Capture instead of Quiet: the exact combination that was
         // missing when the King check lived inside the Quiet arm only.
         let board =
             Board::try_from_fen("r3k2r/8/8/8/4n3/8/8/R3K2R w KQkq - 0 1").expect("valid FEN");
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn double_pawn_push_black_sets_the_en_passant_target_behind_it() {
         // Black moves "down" the board (decreasing rank), so the jumped-over
-        // square is one rank *below* `to`, not above — the opposite of White's
+        // square is one rank *below* `to`, not above: the opposite of White's
         // case in double_pawn_push_sets_en_passant_target_and_resets_halfmove_clock.
         // A color-blind "always the rank above from" implementation gets this
         // backward for Black specifically.

@@ -69,12 +69,6 @@ impl Board {
     }
 
     /// Parses just the piece-placement field (the part before the first space).
-    ///
-    /// Ranks are split on `/` up front rather than tracked with a decrementing
-    /// counter — the previous version of this parser did `rank -= 1` on each `/`
-    /// with no lower bound, so a placement string with more than seven slashes
-    /// underflowed `usize` and panicked. Splitting first makes "wrong number of
-    /// ranks" a plain length check instead of an arithmetic hazard.
     fn parse_placement(placement: &str) -> Result<Board, InvalidFenError> {
         let mut board = Board::default();
         let rows: Vec<&str> = placement.split('/').collect();
@@ -179,9 +173,9 @@ impl Board {
 
     /// Formats this position as a full 6-field FEN string.
     ///
-    /// Only reads the mailbox (`piece_at`), not the bitboards — so unlike
-    /// `try_from_fen` (which places pieces via `Board::place`, and so depends on
-    /// `Bitboard`'s still-unimplemented core arithmetic), this works today.
+    /// Only reads the mailbox (`piece_at`), not the bitboards: the mailbox
+    /// alone is already a complete, O(1)-per-square picture of what's on the
+    /// board, so there's nothing the bitboards would add here.
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
 

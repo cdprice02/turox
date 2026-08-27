@@ -40,7 +40,8 @@ need_stdout = false
 # The project's test runner (CI uses `cargo nextest run` too; see
 # .github/workflows/rust-ci.yml and .config/nextest.toml). `bacon test` for
 # everything, `bacon nextest -- -- <name>` for one test, `bacon nextest --
-# --run-ignored ignored-only` to check the Bitboard-exercise checklist.
+# --run-ignored ignored-only` to run the deep (multi-million-node) perft
+# depths that are `#[ignore]`d by default.
 [jobs.nextest]
 command = [
     "cargo", "nextest", "run",

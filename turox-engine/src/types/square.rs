@@ -1,13 +1,18 @@
+//! `File`, `Rank`, and `Square`: the board's coordinate axes.
+
 use super::bitboard::Bitboard;
 use std::fmt;
 
 /// Declares a small `repr(u8)` enum with an `ALL` lookup table and
 /// `from_index`/`index` conversions, from a single list of variant names. Used for
-/// `File`, `Rank`, and `Square` below — the axis size (8, 8, 64) and variant list
+/// `File`, `Rank`, and `Square` below: the axis size (8, 8, 64) and variant list
 /// are the only things that differ between them.
 macro_rules! declare_axis {
     ($(#[$meta:meta])* $name:ident, $size:literal, { $($variant:ident),* $(,)? }) => {
         $(#[$meta])*
+        // Each variant just names its own square/file/rank (`A1`, `A`, `R1`,
+        // ...); a per-variant doc would only restate that name.
+        #[allow(missing_docs)]
         #[repr(u8)]
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name {
@@ -15,8 +20,10 @@ macro_rules! declare_axis {
         }
 
         impl $name {
+            /// Every variant, in declaration order (index `0..$size`).
             pub const ALL: [$name; $size] = [$($name::$variant),*];
 
+            /// The variant at index `i`, or `None` if `i >= $size`.
             pub const fn from_index(i: u8) -> Option<Self> {
                 if (i as usize) < $size {
                     Some(Self::ALL[i as usize])
@@ -25,6 +32,7 @@ macro_rules! declare_axis {
                 }
             }
 
+            /// This variant's index (its `#[repr(u8)]` discriminant).
             pub const fn index(self) -> u8 {
                 self as u8
             }
@@ -96,11 +104,13 @@ impl Rank {
 }
 
 impl Square {
+    /// The square at the intersection of `file` and `rank`.
     pub const fn new(file: File, rank: Rank) -> Self {
         // ALL is laid out rank-major (LERF), so this is the inverse of file()/rank().
         Self::ALL[(rank.index() as usize) * 8 + file.index() as usize]
     }
 
+    /// This square's file.
     pub const fn file(self) -> File {
         match File::from_index(self.index() % 8) {
             Some(f) => f,
@@ -108,6 +118,7 @@ impl Square {
         }
     }
 
+    /// This square's rank.
     pub const fn rank(self) -> Rank {
         match Rank::from_index(self.index() / 8) {
             Some(r) => r,

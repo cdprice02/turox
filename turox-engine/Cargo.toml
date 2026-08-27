@@ -7,6 +7,9 @@ edition = "2021"
 name = "turox_engine"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 # Zero runtime dependencies, deliberately. See the "Dependency policy" section of
 # docs/plans (or ask why): every candidate considered (anyhow, thiserror, smallvec,
 # derive_more, bitflags) is either wrong-shaped for a hot-path engine or cheap enough

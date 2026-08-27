@@ -41,7 +41,7 @@ fn naive_knight_attacks(sq: Square) -> Bitboard {
 }
 
 /// Reference definition of `king_attacks`: every one of the 8 unit deltas that
-/// stays on the board. Deliberately excludes (0, 0) — unlike `Bitboard::dilate`,
+/// stays on the board. Deliberately excludes (0, 0), unlike `Bitboard::dilate`,
 /// a king does not attack its own square.
 fn naive_king_attacks(sq: Square) -> Bitboard {
     let mut result = Bitboard::EMPTY;

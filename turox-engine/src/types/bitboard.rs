@@ -1,3 +1,6 @@
+//! `Bitboard`: a 64-bit set of squares, and `Direction`, the compass points it's
+//! shifted along.
+
 use crate::File;
 
 use super::color::Color;
@@ -8,13 +11,13 @@ use std::ops::Not;
 /// A set of squares, one bit per square, LERF-indexed (bit 0 = a1, bit 63 = h8).
 ///
 /// `#[repr(transparent)]` matches `u64`'s layout (sound for `transmute`/FFI) but
-/// isn't what makes this free at runtime — LLVM scalar-replaces a one-field newtype
+/// isn't what makes this free at runtime: LLVM scalar-replaces a one-field newtype
 /// regardless of `repr`. Every combinator (`and`/`or`/`xor`/`and_not`/`shl`/`shr`)
 /// is an inherent `const fn`, deliberately with no `BitAnd`/`BitOr`/`BitXor`/`Sub`/
 /// `Shl`/`Shr` operator overloads standing in for them: those traits aren't
 /// `const` on stable Rust, so an operator would silently be unusable (or, if
 /// reached for inside a `const fn`, wouldn't compile) exactly where this type is
-/// used most — `tables.rs`/`magic.rs` building attack data at compile time.
+/// used most, in `tables.rs`/`magic.rs` building attack data at compile time.
 /// `Not` is the one exception (unary, no such split, kept as `!board`).
 /// No `From<u64>`/`PartialEq<u64>`: raw integers cross the boundary only through
 /// `from_bits`/`bits()`.
@@ -26,14 +29,18 @@ use std::ops::Not;
 pub struct Bitboard(u64);
 
 impl Bitboard {
+    /// The empty set: no squares.
     pub const EMPTY: Self = Self(0);
+    /// The full set: every square.
     pub const ALL: Self = Self(!0);
 
+    /// Wraps a raw `u64` bitmask directly, LERF-indexed (bit 0 = a1).
     #[inline]
     pub const fn from_bits(bits: u64) -> Self {
         Self(bits)
     }
 
+    /// The raw `u64` bitmask, LERF-indexed (bit 0 = a1).
     #[inline]
     pub const fn bits(self) -> u64 {
         self.0
@@ -41,21 +48,25 @@ impl Bitboard {
 
     // ---- Core arithmetic ----
 
+    /// Set intersection.
     #[inline]
     pub const fn and(self, other: Self) -> Self {
         Self(self.bits() & other.bits())
     }
 
+    /// Set union.
     #[inline]
     pub const fn or(self, other: Self) -> Self {
         Self(self.bits() | other.bits())
     }
 
+    /// Set symmetric difference.
     #[inline]
     pub const fn xor(self, other: Self) -> Self {
         Self(self.bits() ^ other.bits())
     }
 
+    /// Set complement.
     #[inline]
     pub const fn not(self) -> Self {
         Self(!self.bits())
@@ -82,34 +93,37 @@ impl Bitboard {
 
     // ---- Square membership and scanning ----
 
+    /// Whether `sq` is set.
     #[inline]
     pub const fn contains(self, sq: Square) -> bool {
         !self.and(sq.bitboard()).is_empty()
     }
 
+    /// `self` with `sq` set.
     #[inline]
-    #[must_use]
     pub const fn with(self, sq: Square) -> Self {
         self.or(sq.bitboard())
     }
 
+    /// `self` with `sq` cleared.
     #[inline]
-    #[must_use]
     pub const fn without(self, sq: Square) -> Self {
         self.and_not(sq.bitboard())
     }
 
+    /// `self` with `sq`'s membership flipped.
     #[inline]
-    #[must_use]
     pub const fn toggled(self, sq: Square) -> Self {
         self.xor(sq.bitboard())
     }
 
+    /// The number of set squares.
     #[inline]
     pub const fn count(self) -> u32 {
         self.bits().count_ones()
     }
 
+    /// Whether no squares are set.
     #[inline]
     pub const fn is_empty(self) -> bool {
         self.bits() == 0
@@ -175,7 +189,6 @@ impl Bitboard {
     /// Mirror across the vertical midline (file a <-> h). Each rank's byte is
     /// bit-reversed.
     #[inline]
-    #[must_use]
     pub const fn flip_horizontal(self) -> Self {
         const K1: u64 = 0x5555555555555555;
         const K2: u64 = 0x3333333333333333;
@@ -189,14 +202,12 @@ impl Bitboard {
 
     /// Mirror across the horizontal midline (rank 1 <-> rank 8).
     #[inline]
-    #[must_use]
     pub const fn flip_vertical(self) -> Self {
         Self(self.bits().swap_bytes())
     }
 
     /// Mirror across the a1-h8 diagonal: (file, rank) -> (rank, file).
     #[inline]
-    #[must_use]
     pub const fn flip_diagonal_a1h8(self) -> Self {
         let mut x = self.bits();
         let mut t: u64;
@@ -214,7 +225,6 @@ impl Bitboard {
 
     /// Mirror across the a8-h1 anti-diagonal.
     #[inline]
-    #[must_use]
     pub const fn flip_diagonal_a8h1(self) -> Self {
         let mut x = self.bits();
         let mut t: u64;
@@ -231,17 +241,15 @@ impl Bitboard {
     }
 
     /// Rotate 90 degrees clockwise (a1 -> a8; verified against a concrete corner
-    /// mapping in `mod tests` below — the group-law property tests alone can't
+    /// mapping in `mod tests` below; the group-law property tests alone can't
     /// distinguish this from counter-clockwise).
     #[inline]
-    #[must_use]
     pub const fn rotate_90_cw(self) -> Self {
         self.flip_diagonal_a1h8().flip_vertical()
     }
 
     /// Rotate 90 degrees counter-clockwise (a1 -> h1).
     #[inline]
-    #[must_use]
     pub const fn rotate_90_ccw(self) -> Self {
         self.flip_vertical().flip_diagonal_a1h8()
     }
@@ -249,15 +257,13 @@ impl Bitboard {
     /// Rotate 180 degrees. Equal to `flip_vertical` + `flip_horizontal` (either
     /// order), and to `self.bits().reverse_bits()`.
     #[inline]
-    #[must_use]
     pub const fn rotate_180(self) -> Self {
-        self.flip_vertical().flip_horizontal()
+        Bitboard::from_bits(self.bits().reverse_bits())
     }
 
-    /// Flip vertically for `Black`, identity for `White` — views the board from
+    /// Flip vertically for `Black`, identity for `White`. Views the board from
     /// the side-to-move's perspective (e.g. perspective-relative PSTs in eval).
     #[inline]
-    #[must_use]
     pub const fn mirror_for(self, color: Color) -> Self {
         match color {
             Color::White => self,
@@ -265,12 +271,12 @@ impl Bitboard {
         }
     }
 
-    // ---- Planned for the move-generation change ----
+    // ---- Move-generation helpers ----
     // Signatures fixed now so downstream code has a stable shape to write against.
 
-    /// Every subset of `self`, via Carry-Rippler (`sub = (sub - self) & self`),
-    /// including `EMPTY` and `self`. Walks a magic-bitboard mask's occupancies
-    /// during table generation; not meant for boards with many bits set.
+    /// Every subset of `self`, via Carry-Rippler, including `EMPTY` and `self`.
+    /// Walks a magic-bitboard mask's occupancies during table generation;
+    /// not meant for boards with many bits set.
     pub fn subsets(self) -> impl Iterator<Item = Bitboard> {
         let mut next: Option<Bitboard> = Some(Bitboard::EMPTY);
         std::iter::from_fn(move || {
@@ -298,6 +304,8 @@ impl Bitboard {
         Self::from_bits(x)
     }
 
+    /// Every square reachable by repeatedly shifting `self` south, unioned with
+    /// `self`. See `north_fill`.
     #[inline]
     pub const fn south_fill(self) -> Self {
         let mut x = self.bits();
@@ -318,7 +326,8 @@ impl Bitboard {
     /// same wrap-safety contract as `shift`, which this is built from. One
     /// direction per call: a rook's full attack set is the union of calling this
     /// for North/South/East/West; a bishop's, the four diagonals; a queen's, all
-    /// eight.
+    /// eight. The fixed 7-step loop is sufficient: 7 is the longest possible
+    /// file/rank/diagonal distance on an 8x8 board.
     #[inline]
     pub const fn occluded_fill(self, empty: Self, dir: Direction) -> Self {
         let mut gen = self;
@@ -333,34 +342,6 @@ impl Bitboard {
         gen
     }
 
-    /// Pawns of `color` on `self`, attacking east (white: NE; black: SE).
-    #[inline]
-    pub const fn pawn_attacks_east(self, color: Color) -> Self {
-        match color {
-            Color::White => self.shift(Direction::NorthEast),
-            Color::Black => self.shift(Direction::SouthEast),
-        }
-    }
-
-    /// Pawns of `color` on `self`, attacking west (white: NW; black: SW).
-    #[inline]
-    pub const fn pawn_attacks_west(self, color: Color) -> Self {
-        match color {
-            Color::White => self.shift(Direction::NorthWest),
-            Color::Black => self.shift(Direction::SouthWest),
-        }
-    }
-
-    /// Single-step forward pushes for pawns of `color` on `self`, onto `empty`
-    /// squares only.
-    #[inline]
-    pub const fn pawn_pushes(self, color: Color, empty: Self) -> Self {
-        match color {
-            Color::White => self.shift(Direction::North).and(empty),
-            Color::Black => self.shift(Direction::South).and(empty),
-        }
-    }
-
     /// 8-neighbour expansion: `self` unioned with every adjacent square (king-move
     /// dilation, for king safety / king-ring evaluation).
     #[inline]
@@ -369,25 +350,6 @@ impl Bitboard {
         dilated.or(dilated
             .shift(Direction::North)
             .or(dilated.shift(Direction::South)))
-    }
-
-    /// Every square a knight on `self` attacks, for every knight in the set at
-    /// once. Not a `shift`/fill composition — knight moves are a discontinuous
-    /// jump, not a smear or single step — but they do have their own compound
-    /// shift-with-masking formula (CPW's "Knight Pattern"), same technique family
-    /// as `shift`'s diagonals, just wider file-edge masks since a knight can
-    /// cross two files in one move. Also what generates the eventual per-square
-    /// `KNIGHT_ATTACKS` lookup table in `move_gen/tables.rs`.
-    #[inline]
-    pub const fn knight_attacks(self) -> Self {
-        let x = self.bits();
-        let l1 = (x >> 1) & 0x7F7F7F7F7F7F7F7F;
-        let l2 = (x >> 2) & 0x3F3F3F3F3F3F3F3F;
-        let r1 = (x << 1) & 0xFEFEFEFEFEFEFEFE;
-        let r2 = (x << 2) & 0xFCFCFCFCFCFCFCFC;
-        let h1 = l1 | r1;
-        let h2 = l2 | r2;
-        Self::from_bits((h1 << 16) | (h1 >> 16) | (h2 << 8) | (h2 >> 8))
     }
 }
 
@@ -399,7 +361,9 @@ impl Not for Bitboard {
     }
 }
 
-/// A compass direction on the board, used with `Bitboard::shift`.
+/// A compass direction on the board, used with `Bitboard::shift`. Each variant
+/// just names its own direction; the compass points are self-explanatory.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     North,
@@ -413,6 +377,7 @@ pub enum Direction {
 }
 
 impl Direction {
+    /// Every direction.
     pub const ALL: [Direction; 8] = [
         Direction::North,
         Direction::South,
@@ -424,6 +389,7 @@ impl Direction {
         Direction::SouthWest,
     ];
 
+    /// The direction pointing the opposite way (`North` <-> `South`, etc).
     pub const fn opposite(self) -> Self {
         match self {
             Direction::North => Direction::South,
@@ -488,7 +454,7 @@ mod tests {
 
     /// Anchors `rotate_90_cw` to an absolute direction. The group-law property
     /// tests in `tests/bitboard_props.rs` (four cw rotations = identity, cw/ccw
-    /// are mutual inverses) only prove the two are *consistent with each other* —
+    /// are mutual inverses) only prove the two are *consistent with each other*;
     /// that would hold even if both were secretly counter-clockwise. This pins it
     /// down: a physical clockwise spin (White's side, a1 bottom-left, h8
     /// top-right) sends each corner to the next one going bottom-left -> top-left
@@ -518,7 +484,7 @@ mod tests {
         assert_eq!(Square::E4.bitboard().dilate(), expected);
     }
 
-    /// A1 has only 3 on-board neighbors (north, east, northeast) — the board-edge
+    /// A1 has only 3 on-board neighbors (north, east, northeast), the board-edge
     /// counterpart to the center-square case above.
     #[test]
     fn dilate_corner_square_drops_off_board_neighbors() {
@@ -528,28 +494,5 @@ mod tests {
             .with(Square::B1)
             .with(Square::B2);
         assert_eq!(Square::A1.bitboard().dilate(), expected);
-    }
-
-    /// A knight on a central square has all 8 legal moves.
-    #[test]
-    fn knight_attacks_center_square_has_all_eight_moves() {
-        let expected = Bitboard::EMPTY
-            .with(Square::F6)
-            .with(Square::G5)
-            .with(Square::G3)
-            .with(Square::F2)
-            .with(Square::D2)
-            .with(Square::C3)
-            .with(Square::C5)
-            .with(Square::D6);
-        assert_eq!(Square::E4.bitboard().knight_attacks(), expected);
-    }
-
-    /// A knight in the corner has only 2 legal moves — the classic "knight on
-    /// the rim is dim" case.
-    #[test]
-    fn knight_attacks_corner_square_has_only_two_moves() {
-        let expected = Bitboard::EMPTY.with(Square::B3).with(Square::C2);
-        assert_eq!(Square::A1.bitboard().knight_attacks(), expected);
     }
 }

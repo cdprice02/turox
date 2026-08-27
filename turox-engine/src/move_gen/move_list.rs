@@ -1,27 +1,29 @@
 //! A stack-allocated move buffer for legal move generation to fill.
 //!
 //! `Move` is a `Copy` 2-byte value with no `Drop` (see `types::moves`), so a fixed
-//! `[Move; 256]` + length is the whole implementation — no `arrayvec` dependency,
+//! `[Move; 256]` + length is the whole implementation: no `arrayvec` dependency,
 //! no `MaybeUninit`, no unsafe. 256 is comfortably above the maximum legal moves in
 //! any reachable chess position (218, in a constructed extreme position); 512
 //! bytes total versus `Vec<Move>`'s heap allocation per position is the entire
 //! point of `Move` being packed into a `u16` rather than kept as a wider struct.
 //!
-//! Nothing fills one of these yet — that's `pseudo_legal`/`legal`'s job — but
-//! the buffer itself is complete and independently tested.
+//! Filled by `pseudo_legal`/`legal`.
 
 use crate::{types::Move, MoveFlags, Square};
 use std::fmt;
 
+/// A fixed-capacity buffer of moves, filled by `pseudo_legal`/`legal`.
 pub struct MoveList {
     moves: [Move; Self::CAPACITY],
     len: usize,
 }
 
 impl MoveList {
+    /// The maximum number of moves a single `MoveList` can hold.
     pub const CAPACITY: usize = 256;
     const SENTINEL: Move = Move::new(Square::A1, Square::A1, MoveFlags::Quiet);
 
+    /// An empty list.
     pub fn new() -> Self {
         Self {
             moves: [Self::SENTINEL; 256],
@@ -40,14 +42,17 @@ impl MoveList {
         self.len += 1;
     }
 
+    /// The number of moves pushed so far.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Whether no moves have been pushed.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// The pushed moves, in push order.
     pub fn as_slice(&self) -> &[Move] {
         &self.moves[..self.len]
     }
@@ -79,7 +84,7 @@ impl<'a> IntoIterator for &'a MoveList {
     }
 }
 
-/// The live slice only — not all 256 backing-array entries, most of which are
+/// The live slice only, not all 256 backing-array entries, most of which are
 /// unused filler past `len`.
 impl fmt::Debug for MoveList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

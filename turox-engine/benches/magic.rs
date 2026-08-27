@@ -4,7 +4,7 @@
 //! before the rewrite, `rook_attacks`/`bishop_attacks`/`queen_attacks` were
 //! direct `occluded_fill` ray walks, measured (1024 varied samples) at 15.45µs
 //! / 19.80µs / 29.38µs. After switching to real magic-hashed table lookups,
-//! the same benchmark measures 3.59µs / 2.98µs / 5.24µs — a 4-7x speedup
+//! the same benchmark measures 3.59µs / 2.98µs / 5.24µs, a 4-7x speedup
 //! across all three, confirmed by Criterion's own before/after comparison, not
 //! just the raw numbers.
 //!
@@ -13,15 +13,20 @@
 //! `black_box`es both the inputs and the returned value, so a constant input
 //! can't get folded away by LLVM into a ~0ns no-op.
 
+// Not part of the crate's public API, so `missing_docs` doesn't apply here:
+// criterion's own `criterion_group!`/`criterion_main!` macros generate an
+// undocumented `fn main`.
+#![allow(missing_docs)]
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use turox_engine::{Bitboard, Square};
 
 const SAMPLE_COUNT: usize = 1024;
 
 /// A small, deterministic, seedable PRNG (xorshift64), matching
-/// `benches/bitboard.rs`'s own copy — benchmarks compile as their own binary,
+/// `benches/bitboard.rs`'s own copy: benchmarks compile as their own binary,
 /// like `tests/*.rs`, so they only see `pub` API, and `rng::xorshift64star`
-/// staying crate-private (deliberately — see `src/rng.rs`'s module doc) means
+/// staying crate-private (deliberately, see `src/rng.rs`'s module doc) means
 /// it isn't reachable here even though the shape is identical.
 struct XorShift64(u64);
 
@@ -36,7 +41,7 @@ impl XorShift64 {
     }
 }
 
-/// `SAMPLE_COUNT` varied `(Square, Bitboard)` pairs to benchmark over — the
+/// `SAMPLE_COUNT` varied `(Square, Bitboard)` pairs to benchmark over. The
 /// square cycles through all 64 (a slider's mask/table differ per square, so
 /// fixing the square would only measure one square's lookup) and the occupancy
 /// is a varied, non-trivial bitboard (not `EMPTY`/`ALL`-heavy) each time.

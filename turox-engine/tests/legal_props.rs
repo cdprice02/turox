@@ -1,6 +1,6 @@
 //! Property and concrete tests for `move_gen::legal::legal_moves`.
 //!
-//! No independent reference generator here — `legal_moves`'s entire contract
+//! No independent reference generator here: `legal_moves`'s entire contract
 //! *is* "pseudolegal moves filtered by post-move king safety" (see
 //! `move_gen::legal`'s module doc), and `pseudo_legal::pseudo_legal_moves` and
 //! `attacks::in_check` are both already independently tested. Checking
@@ -81,7 +81,7 @@ fn king_in_check_can_capture_the_checking_piece() {
 #[test]
 fn pinned_bishop_cannot_move_off_the_pin_line() {
     // White king e1, white bishop e2, black rook e8: the bishop is pinned
-    // along the e-file. It can't step to a diagonal square off that file —
+    // along the e-file. It can't step to a diagonal square off that file;
     // doing so would expose the king to the rook.
     let board = Board::try_from_fen("4r3/8/8/8/8/8/4B3/4K3 w - - 0 1").expect("valid FEN");
     let moves = legal_moves(&board);
@@ -103,8 +103,8 @@ fn pinned_rook_can_still_move_along_the_pin_line() {
 fn en_passant_capture_that_discovers_a_rank_check_is_illegal() {
     // The textbook case: White king a5, White pawn e5, Black pawn d5 (just
     // double-pushed, ep target d6), Black rook h5. Capturing en passant
-    // (e5xd6) removes the d5 pawn from the board — the one piece blocking the
-    // rook's rank check on the king — so it must NOT appear as legal, even
+    // (e5xd6) removes the d5 pawn from the board, the one piece blocking the
+    // rook's rank check on the king, so it must NOT appear as legal, even
     // though it's a perfectly ordinary pseudolegal en passant capture.
     let board = Board::try_from_fen("8/8/8/K1Pp3r/8/8/8/8 w - d6 0 1").expect("valid FEN");
     let moves = legal_moves(&board);
@@ -113,7 +113,7 @@ fn en_passant_capture_that_discovers_a_rank_check_is_illegal() {
 
 #[test]
 fn king_moving_off_a_sliders_ray_is_still_in_check() {
-    // King on e1 stepping to e2 does not escape a rook's e-file check — e2 is
+    // King on e1 stepping to e2 does not escape a rook's e-file check: e2 is
     // still on the file. This is the case copy-make gets right "for free":
     // the king's *old* square (e1) is genuinely vacated in the copy, so if the
     // king had instead tried to step *behind itself* along a rank/file/
@@ -147,7 +147,7 @@ fn double_check_only_the_king_may_move() {
     // White king e1, attacked simultaneously by a rook on the e-file and a
     // bishop on the a5-e1 diagonal, plus a white knight on b3 that *could*
     // capture the bishop (b3-a5 is a legal knight move) if this were only a
-    // single check. Since it isn't — the rook's check remains regardless —
+    // single check. Since it isn't, the rook's check remains regardless,
     // that capture must still be excluded: no block or capture resolves both
     // checks at once, so every legal move must be a king move.
     let board = Board::try_from_fen("4r3/8/8/b7/8/1N6/8/4K3 w - - 0 1").expect("valid FEN");

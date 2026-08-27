@@ -1,74 +1,34 @@
 //! Attack lookups for the non-sliding pieces (knight, king, pawn) and the
-//! ray-tracing helpers (`between`, `line`) legal move generation needs for pin and
-//! check detection.
+//! ray-tracing helpers (`between`, `line`) legal move generation needs for pin
+//! and check detection.
 //!
-//! # Design
-//!
-//! Every function here is a `const fn` that computes its answer directly from
-//! `Bitboard` primitives on each call, rather than indexing into a precomputed
-//! static table. For the leaper attacks this is close to free either way:
-//! `Bitboard::knight_attacks`, `Bitboard::dilate`, and
-//! `Bitboard::pawn_attacks_east`/`pawn_attacks_west` are already O(1) bit tricks
-//! (a handful of shifts/masks, no branches, no memory access), so a `[Bitboard;
-//! 64]` lookup would trade that for a cache-line load — likely a wash or a
-//! pessimization, not a win. `between`/`line` do real work (a bounded ray walk),
-//! so a precomputed 64x64 table is a more plausible future win there, but the
-//! goal right now is a functional engine, not a fast one — that's a candidate
-//! perf pass once something benchmarks-driven (perft, search) can actually show
-//! whether it matters, not a guess made in advance.
-//!
-//! # Public surface
-//!
-//! - `fn knight_attacks(sq: Square) -> Bitboard`
-//! - `fn king_attacks(sq: Square) -> Bitboard` — the 8 neighbors, NOT including
-//!   `sq` itself (unlike `Bitboard::dilate`, which includes the seed).
-//! - `fn pawn_attacks(color: Color, sq: Square) -> Bitboard` — both capture
-//!   squares for a pawn of `color` standing on `sq`.
-//! - `fn between(a: Square, b: Square) -> Bitboard` — squares strictly between
-//!   `a` and `b` on a shared rank/file/diagonal, or `Bitboard::EMPTY` if they
-//!   don't share one (including when `a == b`).
-//! - `fn line(a: Square, b: Square) -> Bitboard` — the full rank/file/diagonal
-//!   through both `a` and `b`, or `Bitboard::EMPTY` under the same conditions as
-//!   `between`.
-//!
-//! # Implementation notes for `between`/`line`
-//!
-//! Both share the same first step: classify the relationship between `a` and
-//! `b` from their file/rank deltas (`Δfile`, `Δrank`) into one of "same rank",
-//! "same file", "same diagonal" (`|Δfile| == |Δrank|`, both nonzero), or
-//! "unrelated" — and in the aligned cases, which of the two opposite
-//! `Direction`s (e.g. `East` vs `West`) points from `a` toward `b`, from the
-//! sign of the delta. That's a positive/negative x four-axis mapping — the same
-//! shape that has produced scrambled bugs twice already in `Board::make_move`,
-//! so double-check each sign against a concrete example
-//! (e.g. `a` above-and-right of `b` should classify as `SouthWest` from `b`'s
-//! side / `NorthEast` from `a`'s) rather than trusting it by inspection. Take
-//! care that `a == b` (Δfile == Δrank == 0) falls through to "unrelated" rather
-//! than satisfying the diagonal check's `abs` equality by accident.
-//!
-//! Once the direction is known, `Bitboard::occluded_fill` does the actual
-//! walking:
-//! - `between(a, b)`: fill from `a` in that one direction, treating every
-//!   square as passable except `b` (`Bitboard::ALL.without(b)` as the `empty`
-//!   argument) so the fill stops exactly at `b`. `occluded_fill` includes both
-//!   the seed and the stopping square in its result, so strip `a` and `b`
-//!   afterward.
-//! - `line(a, b)`: fill from `a` with nothing blocking (`Bitboard::ALL`) in that
-//!   direction and its `opposite()`, and union the two — that walks to the
-//!   board edge both ways, which is exactly the full line. No need to touch `b`
-//!   directly; it's already on the ray by construction.
-//!
-//! `occluded_fill` loops a fixed 7 steps, which is sufficient: 7 is the maximum
-//! possible file/rank/diagonal distance on an 8x8 board, so if `a` and `b` are
-//! genuinely aligned the walk is guaranteed to reach `b` within that bound.
+//! Every function here is a `const fn` that computes its answer directly on
+//! each call rather than indexing into a precomputed static table: the leaper
+//! attacks are already O(1) bit tricks, so a `[Bitboard; 64]` lookup would
+//! trade that for a cache-line load, likely a wash, not a win. `between`/
+//! `line` do more real work (a bounded ray walk), so a precomputed 64x64
+//! table is a more plausible future win there, but that's a candidate perf
+//! pass for once something benchmarks-driven can show it matters, not a guess
+//! made in advance.
 
 use crate::types::bitboard::{Bitboard, Direction};
 use crate::types::color::Color;
 use crate::types::square::Square;
 
-/// Every square a knight standing on `sq` attacks.
+/// Every square a knight standing on `sq` attacks. Not a `shift`/fill
+/// composition: knight moves are a discontinuous jump, not a smear or single
+/// step, but they have their own compound shift-with-masking formula (CPW's
+/// "Knight Pattern"), same technique family as `Bitboard::shift`'s diagonals,
+/// just wider file-edge masks since a knight can cross two files in one move.
 pub const fn knight_attacks(sq: Square) -> Bitboard {
-    sq.bitboard().knight_attacks()
+    let x = sq.bitboard().bits();
+    let l1 = (x >> 1) & 0x7F7F7F7F7F7F7F7F;
+    let l2 = (x >> 2) & 0x3F3F3F3F3F3F3F3F;
+    let r1 = (x << 1) & 0xFEFEFEFEFEFEFEFE;
+    let r2 = (x << 2) & 0xFCFCFCFCFCFCFCFC;
+    let h1 = l1 | r1;
+    let h2 = l2 | r2;
+    Bitboard::from_bits((h1 << 16) | (h1 >> 16) | (h2 << 8) | (h2 >> 8))
 }
 
 /// Every square a king standing on `sq` attacks (the 8 neighbors; unlike
@@ -77,15 +37,36 @@ pub const fn king_attacks(sq: Square) -> Bitboard {
     sq.bitboard().dilate().without(sq)
 }
 
+/// Pawns of `color` on `bb`, attacking east (white: NE; black: SE).
+const fn pawn_attacks_east(bb: Bitboard, color: Color) -> Bitboard {
+    match color {
+        Color::White => bb.shift(Direction::NorthEast),
+        Color::Black => bb.shift(Direction::SouthEast),
+    }
+}
+
+/// Pawns of `color` on `bb`, attacking west (white: NW; black: SW).
+const fn pawn_attacks_west(bb: Bitboard, color: Color) -> Bitboard {
+    match color {
+        Color::White => bb.shift(Direction::NorthWest),
+        Color::Black => bb.shift(Direction::SouthWest),
+    }
+}
+
 /// Both capture squares for a pawn of `color` standing on `sq`.
 pub const fn pawn_attacks(color: Color, sq: Square) -> Bitboard {
     let bb = sq.bitboard();
-    bb.pawn_attacks_east(color).or(bb.pawn_attacks_west(color))
+    pawn_attacks_east(bb, color).or(pawn_attacks_west(bb, color))
 }
 
 /// The single `Direction` pointing from `a` toward `b` along their shared rank,
-/// file, or diagonal, classified from the file/rank deltas. `None` if `a == b`
-/// or they share no such line.
+/// file, or diagonal, classified from the file/rank deltas into "same rank",
+/// "same file", "same diagonal" (`|Δfile| == |Δrank|`, both nonzero), or
+/// "unrelated". `None` if `a == b` (which falls through to "unrelated" rather
+/// than satisfying the diagonal check's `abs` equality by accident) or they
+/// share no such line. This sign-to-direction mapping is the same
+/// {axis}×{sign} shape that has produced scrambled bugs twice already in
+/// `Board::make_move`.
 const fn ray_direction(a: Square, b: Square) -> Option<Direction> {
     let df = b.file().index() as i8 - a.file().index() as i8;
     let dr = b.rank().index() as i8 - a.rank().index() as i8;
@@ -121,7 +102,10 @@ const fn ray_direction(a: Square, b: Square) -> Option<Direction> {
 }
 
 /// Squares strictly between `a` and `b` on a shared rank, file, or diagonal.
-/// `Bitboard::EMPTY` if they don't share one, including when `a == b`.
+/// `Bitboard::EMPTY` if they don't share one, including when `a == b`. Fills
+/// from `a` toward `b` via `occluded_fill`, treating every square but `b` as
+/// passable so the fill stops exactly at `b`; both endpoints get stripped
+/// afterward, since `occluded_fill` includes its seed and stopping square.
 pub const fn between(a: Square, b: Square) -> Bitboard {
     match ray_direction(a, b) {
         Some(dir) => {
@@ -133,7 +117,10 @@ pub const fn between(a: Square, b: Square) -> Bitboard {
 }
 
 /// The full rank, file, or diagonal through both `a` and `b`. `Bitboard::EMPTY`
-/// under the same conditions as `between`.
+/// under the same conditions as `between`. Fills from `a` with nothing
+/// blocking, in both the direction toward `b` and its `opposite()`, walking to
+/// the board edge both ways; no need to touch `b` directly, since it's
+/// already on the ray by construction.
 pub const fn line(a: Square, b: Square) -> Bitboard {
     match ray_direction(a, b) {
         Some(dir) => {

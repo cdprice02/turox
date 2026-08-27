@@ -1,6 +1,6 @@
 //! Incremental Zobrist hashing of a `Board`, for transposition-table lookups.
 //!
-//! Not yet implemented — this is a placeholder for the search change. The intended
+//! Not yet implemented. This is a placeholder for the search change. The intended
 //! shape: a set of random `u64` keys (one per `(Square, ColoredPiece)`, plus
 //! side-to-move, castling rights, and en-passant file) generated once at
 //! `const`/static init, XORed together for a position's initial hash, and then

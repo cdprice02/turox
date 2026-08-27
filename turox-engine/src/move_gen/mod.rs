@@ -6,7 +6,7 @@
 //! attacks), `attacks` (square-attack queries built on both), `move_list`
 //! (the stack-allocated move buffer), `pseudo_legal` (per-piece pseudolegal
 //! generation), and `legal` (the check-filtered wrapper around it, plus
-//! `perft`) — verified end-to-end against all six standard perft test
+//! `perft`), verified end-to-end against all six standard perft test
 //! positions (`tests/perft.rs`), including their deep (`#[ignore]`d by
 //! default) depths.
 

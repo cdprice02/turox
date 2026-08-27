@@ -1,9 +1,9 @@
 //! Micro-benchmarks for FEN parsing and formatting.
-//!
-//! `parse_*` benchmarks will panic (via `todo!()` in `Bitboard`'s core arithmetic,
-//! which `Board::place` depends on) until that part of the exercise is done; see
-//! `benches/bitboard.rs` for why. `format_start_pos` has the same dependency
-//! indirectly, since it first needs a populated `Board` to format.
+
+// Not part of the crate's public API, so `missing_docs` doesn't apply here:
+// criterion's own `criterion_group!`/`criterion_main!` macros generate an
+// undocumented `fn main`.
+#![allow(missing_docs)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use turox_engine::board::Board;

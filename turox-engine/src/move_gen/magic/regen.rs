@@ -2,12 +2,20 @@
 //! committed data honest. Entirely `#[cfg(test)]`: every item here either
 //! feeds the search (`ROOK_DIRS`, `BISHOP_DIRS`, `SEED`, `relevant_mask`,
 //! `attacks_for_occupancy`) or is only called from a test
-//! (`find_magic`, `find_all_magics`, `build_table`) — the real lookup path in
+//! (`find_magic`, `find_all_magics`, `build_table`); the real lookup path in
 //! `super` needs none of it, only the already-committed `ROOK_MAGICS`/
 //! `BISHOP_MAGICS`. Lives in `src/` rather than `tests/magic_props.rs` because
 //! everything it exercises (`Magic`, `magic_index`, and the functions above)
 //! is private: `tests/*.rs` compiles as a separate crate that only sees `pub`
 //! items, so this code genuinely cannot live anywhere else.
+//!
+//! The search itself doesn't run as a `const fn`, or at build time: a spike
+//! measured a single worst-case square's table build at 35.5s inside
+//! const-eval, which doesn't scale to 128 squares inside `cargo build`. It
+//! runs here instead, as a normal `#[test]`
+//! (`regenerating_reproduces_the_committed_magic_data`), which re-derives
+//! `ROOK_MAGICS`/`BISHOP_MAGICS` from `SEED` on every run and asserts they
+//! still match what's committed in `magics.rs`.
 
 use super::*;
 use crate::rng::xorshift64star;
@@ -15,10 +23,10 @@ use crate::Direction;
 use proptest::prelude::*;
 
 /// The four rook ray directions, as a plain data array rather than a piece
-/// distinction the code has to branch on — every generic helper below takes a
+/// distinction the code has to branch on: every generic helper below takes a
 /// `[Direction; 4]` (rook's or bishop's) and does the same work either way.
 /// Only the regeneration test (`regenerating_reproduces_the_committed_magic_data`
-/// and friends) still calls into the search/build machinery this feeds — the
+/// and friends) still calls into the search/build machinery this feeds; the
 /// real lookup path below only needs the already-committed `ROOK_MAGICS`.
 const ROOK_DIRS: [Direction; 4] = [
     Direction::North,
@@ -37,9 +45,9 @@ const BISHOP_DIRS: [Direction; 4] = [
 
 /// `1 << 12`: the worst-case rook mask popcount across all 64 squares (e.g. a
 /// rook on `a1`: 6 file squares + 6 rank squares, each excluding its far edge).
-/// Not every square's slice is this long — `Magic::offset` plus this square's
+/// Not every square's slice is this long: `Magic::offset` plus this square's
 /// actual `1 << mask.count_ones()` is what `ROOK_ATTACKS` actually reserves for
-/// it — this is only the sum's upper bound, used to size that flat array.
+/// it; this is only the sum's upper bound, used to size that flat array.
 const ROOK_TABLE_SIZE: usize = 102_400;
 
 /// `1 << 9`: the worst-case bishop mask popcount (a bishop on one of the four
@@ -47,22 +55,28 @@ const ROOK_TABLE_SIZE: usize = 102_400;
 /// relationship to `BISHOP_ATTACKS` as `ROOK_TABLE_SIZE` has to `ROOK_ATTACKS`.
 const BISHOP_TABLE_SIZE: usize = 5_248;
 
-/// Fixed PRNG seed for the magic search — arbitrary but fixed, so the search is
+/// Fixed PRNG seed for the magic search, arbitrary but fixed, so the search is
 /// byte-for-byte reproducible across runs and platforms (same reasoning
 /// `board::zobrist`'s TODO commits to for its own key table). Must be nonzero:
 /// `xorshift64star` treats 0 as a fixed point (see `rng`'s module doc). Reuses
 /// the same 64-bit golden-ratio constant `benches/bitboard.rs` already seeds its
-/// sampling PRNG with — a recognizable, well-mixing nonzero value, not a shared
+/// sampling PRNG with (a recognizable, well-mixing nonzero value), not a shared
 /// RNG state between the two (each owns its own PRNG stream from here).
 /// Regen-test-only, same as `ROOK_DIRS`.
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The relevant occupancy mask for a slider on `sq` moving along `dirs`:
-/// squares whose occupancy can actually change the attack set. See the module
-/// doc's "Masks and attacks-for-occupancy are generic over direction, not
-/// piece" section for the shift-then-shift-back-then-subtract-`sq` derivation —
-/// same formula for `relevant_mask(sq, ROOK_DIRS)` and
-/// `relevant_mask(sq, BISHOP_DIRS)`, no piece-specific branch.
+/// squares whose occupancy can actually change the attack set. Generic over
+/// `dirs` rather than branching on piece: `relevant_mask(sq, ROOK_DIRS)` and
+/// `relevant_mask(sq, BISHOP_DIRS)` are the same code path.
+///
+/// Drops each ray's terminal square by shifting the full unblocked ray one
+/// step further (off the board) and back, rather than reasoning per square
+/// about which edge a ray dies on: `occluded_fill(sq.bitboard(), ALL,
+/// dir).shift(dir).shift(dir.opposite())`. A rook standing on `FILE_A` has its
+/// entire north/south mask living on `FILE_A`, so subtracting that edge
+/// outright would wipe out real blocker squares, not just the terminus: the
+/// same {axis}×{sign} shape that's bitten `Board::make_move` twice.
 const fn relevant_mask(sq: Square, dirs: [Direction; 4]) -> Bitboard {
     let mut mask = Bitboard::EMPTY;
     let mut i = 0;
@@ -94,16 +108,6 @@ const fn attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
     mask.without(sq)
 }
 
-/// The magic-bitboard hash, *local to `m`'s own slice* — the caller adds
-/// `m.offset` to get an actual `ROOK_ATTACKS`/`BISHOP_ATTACKS` index. Restrict
-/// `occupied` to `m.mask`'s bits, multiply by `m.magic`, keep the top
-/// `64 - m.shift` bits: `((occupied & m.mask).bits().wrapping_mul(m.magic)) >>
-/// m.shift`, as a `usize`. This is the one piece of this file that runs on
-/// every real move-generation lookup, not just at table-build time.
-const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
-    (((occupied.and(m.mask)).bits().wrapping_mul(m.magic)) >> m.shift) as usize
-}
-
 /// Searches for a magic multiplier for a slider on `sq` along `dirs`, starting
 /// the PRNG from `state`: generate a sparse candidate (AND a few successive
 /// `xorshift64star` outputs together, biasing toward sparse, better-hashing
@@ -111,8 +115,11 @@ const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
 /// has fewer than 6 set bits (cheap prefilter before the expensive check), then
 /// verify by hand-walking every subset of `mask` (Carry-Rippler, since
 /// `Bitboard::subsets()` isn't `const fn`) and confirming `magic_index` never
-/// collides two subsets whose `attacks_for_occupancy` results genuinely differ.
-/// Retry with the next candidate on any real collision.
+/// collides two subsets whose `attacks_for_occupancy` results genuinely
+/// differ. *Constructive* collisions (two occupancies that hash to the same
+/// slot but happen to produce the *same* attack set) are fine, and in fact
+/// required: rejecting those too would make minimal-size magics nearly
+/// unfindable. Retry with the next candidate only on a real collision.
 ///
 /// Returns the winning `Magic` alongside the PRNG's state after finding it, so
 /// `find_all_magics` can thread one continuously-advancing stream across all 64
@@ -146,7 +153,7 @@ fn find_magic(sq: Square, dirs: [Direction; 4], state: u64) -> (Magic, u64) {
             shift: 64 - mask.count(),
             offset: 0,
         };
-        // Indexable directly by `magic_index`'s result — `1 << mask.count()` is
+        // Indexable directly by `magic_index`'s result: `1 << mask.count()` is
         // exactly the number of distinct slots that hash can ever produce for
         // this mask/shift, so no hashing is needed to track occupied slots.
         let mut slots: Vec<Option<Bitboard>> = vec![None; 1usize << mask.count()];
@@ -175,11 +182,11 @@ fn find_magic(sq: Square, dirs: [Direction; 4], state: u64) -> (Magic, u64) {
 /// Runs `find_magic` for all 64 squares along `dirs`, threading one
 /// continuously-advancing PRNG stream (seeded from `seed`) across all of them
 /// rather than restarting each square from the same state, and assembles the
-/// result into a `[Magic; 64]` — including each square's `offset`, a running
+/// result into a `[Magic; 64]`, including each square's `offset`, a running
 /// total of `1 << mask.count_ones()` over the squares before it (so
 /// `offset[0] == 0`, and the last square's `offset + (1 << popcount)` is the
 /// flat table's real total size, `<=` `ROOK_TABLE_SIZE`/`BISHOP_TABLE_SIZE`).
-/// Regen-test-only now that `ROOK_MAGICS`/`BISHOP_MAGICS` are committed — see
+/// Regen-test-only now that `ROOK_MAGICS`/`BISHOP_MAGICS` are committed; see
 /// `regenerating_reproduces_the_committed_magic_data`.
 fn find_all_magics(dirs: [Direction; 4], seed: u64) -> [Magic; 64] {
     let mut m: [Magic; 64] = [Magic::default(); 64];
@@ -201,13 +208,15 @@ fn find_all_magics(dirs: [Direction; 4], seed: u64) -> [Magic; 64] {
 /// (same Carry-Rippler as `find_magic`'s verification step) and write
 /// `attacks_for_occupancy(sq, subset, dirs)` into
 /// `table[magics[sq].offset + magic_index(subset, &magics[sq])]`. Slots no
-/// square's magic ever produces are unused padding — `Bitboard::EMPTY` is a
+/// square's magic ever produces are unused padding: `Bitboard::EMPTY` is a
 /// safe sentinel for them, since a slider on a real board always attacks at
 /// least one square (even fully boxed in, it attacks whatever boxed it in), so
 /// `EMPTY` is never a real answer to collide with. `N` is `ROOK_TABLE_SIZE`/
 /// `BISHOP_TABLE_SIZE`; the returned array's unused tail beyond the real total
 /// (see `find_all_magics`'s doc) stays `EMPTY` too. Not `const fn`, for the
-/// same reason `find_magic` isn't. Regen-test-only, same as `find_all_magics`.
+/// same reason `find_magic` isn't: table build is search-adjacent work, not
+/// the cheap byte-reinterpretation `decode` does. Regen-test-only, same as
+/// `find_all_magics`.
 fn build_table<const N: usize>(dirs: [Direction; 4], magics: &[Magic; 64]) -> [Bitboard; N] {
     let mut table = [Bitboard::EMPTY; N];
     for sq in Square::ALL {
@@ -236,7 +245,7 @@ fn any_bitboard() -> impl Strategy<Value = Bitboard> {
     any::<u64>().prop_map(Bitboard::from_bits)
 }
 
-/// Either piece's direction set — every property below holds for both, so
+/// Either piece's direction set: every property below holds for both, so
 /// this is what makes each one a single check instead of two.
 fn any_dirs() -> impl Strategy<Value = [Direction; 4]> {
     prop_oneof![Just(ROOK_DIRS), Just(BISHOP_DIRS)]
@@ -282,7 +291,7 @@ fn naive_mask(sq: Square, dirs: [Direction; 4]) -> Bitboard {
 /// time along each of `dirs`, including every square visited, stopping
 /// (inclusively) at the first occupied square or the board edge. Same
 /// shape as `tests/magic_props.rs`'s `naive_slider_attacks`, duplicated
-/// rather than shared — an independent reference that imported the
+/// rather than shared; an independent reference that imported the
 /// production code's own helper wouldn't be independent.
 fn naive_attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction; 4]) -> Bitboard {
     let mut result = Bitboard::EMPTY;
@@ -335,7 +344,7 @@ proptest! {
 
 /// Popcount bounds are exhaustive over all 64 squares (not proptest-random)
 /// because they're a known, fixed set of facts about the whole board, not a
-/// property that benefits from random sampling — the standard published
+/// property that benefits from random sampling: the standard published
 /// numbers for magic-bitboard masks, and the same ones this project's own
 /// design research measured directly: rook masks are 10 bits interior, 12
 /// at worst (e.g. a corner); bishop masks are 5 at a corner, 9 at the four
@@ -357,12 +366,12 @@ fn relevant_mask_popcount_matches_known_bounds() {
 }
 
 /// `find_all_magics` must assign every square an `offset` that's the
-/// running total of `1 << mask.count()` over the squares before it — that's
+/// running total of `1 << mask.count()` over the squares before it; that's
 /// what makes each square's slice land at a distinct, correctly-sized
 /// region of the flat table. Checked against `relevant_mask` directly
 /// (independent of whatever `find_all_magics` internally does to compute
 /// the same masks), and the grand total confirmed to fit the reserved
-/// `ROOK_TABLE_SIZE`/`BISHOP_TABLE_SIZE` — the exact totals this project's
+/// `ROOK_TABLE_SIZE`/`BISHOP_TABLE_SIZE`; the exact totals this project's
 /// design research measured (102,400 / 5,248), which is what those two
 /// constants were sized from in the first place.
 #[test]
@@ -389,10 +398,10 @@ fn find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts() {
 /// The property that actually matters for correctness: `find_magic`'s
 /// result must hash every occupancy subset of the mask to a slot, such that
 /// two subsets sharing a slot always have the *same* real attack set
-/// (constructive collisions — see the module doc — are fine; anything else
-/// is a broken magic). Checked on a few squares chosen to cover both the
+/// (constructive collisions, per `find_magic`'s doc, are fine; anything
+/// else is a broken magic). Checked on a few squares chosen to cover both the
 /// worst-case (12-bit rook, 9-bit bishop) and a typical interior mask, not
-/// exhaustively over all 64 — `find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts`
+/// exhaustively over all 64: `find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts`
 /// plus `build_table_matches_attacks_for_occupancy_at_every_real_occupancy`
 /// below cover the full 64-square, every-occupancy case together.
 #[test]
@@ -434,9 +443,9 @@ fn find_magic_produces_a_collision_free_hash_for_a_few_representative_squares() 
 /// actual built table via `magic_index` + `offset`, matches
 /// `attacks_for_occupancy`'s ground truth directly. This is the full
 /// 102,400-lookup rook check `find_magic_produces_a_collision_free_hash_for_a_few_representative_squares`
-/// only sampled — running it here, at native `#[test]` speed rather than in
-/// const-eval, is the entire reason the search moved offline (see the
-/// module doc's "Magic search runs offline" section).
+/// only sampled; running it here, at native `#[test]` speed rather than in
+/// const-eval, is the entire reason the search runs offline instead of at
+/// build time (see the module doc's 35.5s measurement).
 #[test]
 fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
     for (dirs, table_size) in [
@@ -473,7 +482,7 @@ fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
 /// confirms it reproduces `ROOK_MAGICS`/`BISHOP_MAGICS` exactly, then
 /// rebuilds each table from scratch and confirms it matches
 /// `ROOK_ATTACKS`/`BISHOP_ATTACKS` (decoded from the committed `.bin`
-/// files) byte for byte — the real, full-scale round-trip through `decode`,
+/// files) byte for byte: the real, full-scale round-trip through `decode`,
 /// not just the toy buffer in
 /// `decode_reinterprets_little_endian_bytes_as_bitboards`. If this ever
 /// fails, the committed data and the search/build code have drifted apart.

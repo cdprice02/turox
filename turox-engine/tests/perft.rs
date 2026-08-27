@@ -6,7 +6,7 @@
 //! (including the deep, `#[ignore]`d depths) is the point at which move
 //! generation is actually done.
 //!
-//! Depths that push total node counts past ~1M are `#[ignore]`d — CI runs the
+//! Depths that push total node counts past ~1M are `#[ignore]`d; CI runs the
 //! `dev` profile (`opt-level = 1`; see the workspace `Cargo.toml`), so a
 //! multi-million-node perft there is minutes, not seconds. Run them
 //! deliberately with `cargo nextest run --workspace --run-ignored all --release`.
@@ -180,7 +180,7 @@ fn perft_zero_is_one_leaf() {
 
 // ---- perft_divide ----
 //
-// Per-root-move node counts. Not called by any test above — it earns its
+// Per-root-move node counts. Not called by any test above; it earns its
 // place the moment one of the counts above is ever wrong and needs
 // localizing to a specific root move, which is exactly what a raw total
 // can't tell you. `#[allow(dead_code)]` keeps it compiling and ready for

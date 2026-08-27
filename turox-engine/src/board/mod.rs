@@ -21,7 +21,7 @@ pub use error::InvalidFenError;
 ///
 /// The mailbox (`piece_at` in O(1)) exists alongside the bitboards specifically
 /// because captures, SEE, and eval all want "what's on this square" far more often
-/// than "where are all the knights" — paying 64 bytes to make that O(1) instead of a
+/// than "where are all the knights", paying 64 bytes to make that O(1) instead of a
 /// 6-bitboard scan is worth it. `ColoredPiece` being a single `repr(u8)` enum rather
 /// than a `{ color, piece }` struct is what keeps `Option<ColoredPiece>` to 1 byte
 /// (a niche in the 12..=255 range) instead of 2, halving this array from 128 bytes.
@@ -39,7 +39,7 @@ pub struct Board {
 
 impl Default for Board {
     /// An empty board, White to move, no castling rights, move 1. Not a legal
-    /// position on its own — use `start_pos` or `try_from_fen` for one.
+    /// position on its own; use `start_pos` or `try_from_fen` for one.
     fn default() -> Self {
         Self {
             by_color: [Bitboard::EMPTY; 2],
@@ -91,7 +91,7 @@ impl Board {
     }
 
     /// Places `cp` on `sq`, keeping the mailbox and the bitboards in sync. Does not
-    /// check whether `sq` was already occupied — callers that care (e.g. FEN
+    /// check whether `sq` was already occupied; callers that care (e.g. FEN
     /// parsing rejecting overlapping pieces) should check `piece_at` first.
     ///
     /// This is the single path every piece placement should go through, so the
@@ -157,22 +157,27 @@ impl Board {
         !self.occupied()
     }
 
+    /// Which color is to move.
     pub fn side_to_move(&self) -> Color {
         self.side_to_move
     }
 
+    /// The castling rights still available to either side.
     pub fn castling_rights(&self) -> CastlingRights {
         self.castling
     }
 
+    /// The square a pawn could capture en passant onto, if any.
     pub fn en_passant(&self) -> Option<Square> {
         self.en_passant
     }
 
+    /// Plies since the last pawn move or capture (the fifty-move-rule counter).
     pub fn halfmove_clock(&self) -> u8 {
         self.halfmove_clock
     }
 
+    /// The full-move number, incrementing after each Black move.
     pub fn fullmove_number(&self) -> u16 {
         self.fullmove_number
     }
@@ -194,10 +199,8 @@ impl Index<Piece> for Board {
 
 impl fmt::Debug for Board {
     /// A single 8x8 grid built from the mailbox. Deliberately not `#[derive(Debug)]`
-    /// dumping all 8 bitboard fields separately — this is the representation
-    /// actually useful for debugging a position, and (unlike `Bitboard`'s own
-    /// `Debug`) doesn't depend on any of the still-unimplemented `Bitboard` methods,
-    /// so it works today.
+    /// dumping all 8 bitboard fields separately: this is the representation
+    /// actually useful for debugging a position.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for rank in (0..8).rev() {
             write!(f, "{} ", rank + 1)?;
@@ -215,7 +218,7 @@ impl fmt::Debug for Board {
 /// Every (color, piece) bitboard pair is disjoint and their union is exactly
 /// `occupied()`, and the mailbox agrees with the bitboards at every square.
 /// Shared by `board::mod`'s own placement tests and, more importantly, by
-/// `make_move`'s tests — `place`/`remove` are unit-tested to keep this
+/// `make_move`'s tests; `place`/`remove` are unit-tested to keep this
 /// invariant individually, but that's a claim about them in isolation, not a
 /// guarantee that `make_move`'s specific sequence of place/remove calls across
 /// all 14 move types preserves it too.
