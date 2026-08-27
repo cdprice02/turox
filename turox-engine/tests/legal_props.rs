@@ -1,14 +1,17 @@
 //! Property and concrete tests for `move_gen::legal::legal_moves`.
 //!
 //! No independent reference generator here: `legal_moves`'s entire contract
-//! *is* "pseudolegal moves filtered by post-move king safety" (see
-//! `move_gen::legal`'s module doc), and `pseudo_legal::pseudo_legal_moves` and
-//! `attacks::in_check` are both already independently tested. Checking
-//! `legal_moves` against that filtered definition, composed directly from
-//! those two trusted primitives, is a real correctness check: it can't pass
-//! by `legal_moves` and the oracle sharing a bug, because the oracle isn't a
-//! second copy of `legal_moves`'s own logic, it's the definition stated
-//! directly.
+//! *is* "pseudolegal moves filtered by post-move king safety," so there's no
+//! second technique to check it against, only the definition itself. The
+//! proptest below states that definition as two one-directional properties of
+//! the actual returned `MoveList` (every legal move is safe; every dropped
+//! pseudolegal move wasn't) rather than rebuilding a parallel "expected" list
+//! by filtering `pseudo_legal_moves` with the same predicate `legal_moves`
+//! itself applies; that filter-and-compare shape is close enough to a second
+//! copy of `legal_moves`'s own loop that a shared mistake (e.g. filtering on
+//! the wrong side's king) could pass both, since it's built from the exact
+//! same primitives in the exact same order rather than checked as a property
+//! of the output.
 //!
 //! Concrete tests cover the classic cases a naive or subtly-wrong copy-make
 //! filter gets wrong: king moves into/out of check, pins, discovered checks,
@@ -19,6 +22,7 @@ mod common;
 
 use common::any_board;
 use proptest::prelude::*;
+use std::collections::HashSet;
 use turox_engine::board::Board;
 use turox_engine::move_gen::attacks::in_check;
 use turox_engine::move_gen::legal::legal_moves;
@@ -30,31 +34,37 @@ fn move_key(m: Move) -> (u8, u8, u8) {
     (m.from().index(), m.to().index(), m.flags() as u8)
 }
 
-fn sorted_keys(list: &MoveList) -> Vec<(u8, u8, u8)> {
-    let mut keys: Vec<_> = list.iter().map(|&m| move_key(m)).collect();
-    keys.sort_unstable();
-    keys
-}
-
 fn contains(list: &MoveList, from: Square, to: Square) -> bool {
     list.iter().any(|&m| m.from() == from && m.to() == to)
 }
 
 proptest! {
     #[test]
-    fn legal_moves_is_exactly_pseudo_legal_filtered_by_king_safety(board in any_board()) {
+    fn every_legal_move_stays_safe_and_every_dropped_pseudolegal_move_does_not(board in any_board()) {
         let us = board.side_to_move();
 
         let mut pseudo = MoveList::new();
         pseudo_legal_moves(&board, &mut pseudo);
-        let mut expected: Vec<_> = pseudo
-            .iter()
-            .filter(|&&m| !in_check(&board.make_move(m), us))
-            .map(|&m| move_key(m))
-            .collect();
-        expected.sort_unstable();
+        let legal = legal_moves(&board);
+        let legal_keys: HashSet<_> = legal.iter().map(|&m| move_key(m)).collect();
 
-        prop_assert_eq!(sorted_keys(&legal_moves(&board)), expected);
+        // Soundness: nothing legal_moves returns leaves the mover in check.
+        for &m in &legal {
+            prop_assert!(
+                !in_check(&board.make_move(m), us),
+                "legal move {m:?} leaves the mover in check"
+            );
+        }
+
+        // Completeness: nothing legal_moves dropped was actually safe.
+        for &m in &pseudo {
+            if !legal_keys.contains(&move_key(m)) {
+                prop_assert!(
+                    in_check(&board.make_move(m), us),
+                    "pseudolegal move {m:?} was dropped but doesn't leave the mover in check"
+                );
+            }
+        }
     }
 }
 

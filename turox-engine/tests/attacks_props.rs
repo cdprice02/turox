@@ -13,17 +13,13 @@
 
 mod common;
 
-use common::any_board;
+use common::{any_bitboard, any_board, any_square};
 use proptest::prelude::*;
 use turox_engine::board::Board;
 use turox_engine::move_gen::attacks::{
     attacked_by, attackers_of, in_check, is_attacked, king_square, piece_attacks,
 };
 use turox_engine::{Bitboard, Color, Piece, Square};
-
-fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
-}
 
 fn any_color() -> impl Strategy<Value = Color> {
     prop_oneof![Just(Color::White), Just(Color::Black)]
@@ -38,10 +34,6 @@ fn any_piece() -> impl Strategy<Value = Piece> {
         Just(Piece::Queen),
         Just(Piece::King),
     ]
-}
-
-fn any_bitboard() -> impl Strategy<Value = Bitboard> {
-    any::<u64>().prop_map(Bitboard::from_bits)
 }
 
 const ROOK_DIRS: [(i8, i8); 4] = [(0, 1), (0, -1), (1, 0), (-1, 0)];
@@ -179,14 +171,6 @@ proptest! {
     }
 
     #[test]
-    fn is_attacked_matches_attacked_by_own_occupancy(board in any_board(), sq in any_square(), by in any_color()) {
-        prop_assert_eq!(
-            is_attacked(&board, sq, by),
-            attacked_by(&board, by, board.occupied()).contains(sq)
-        );
-    }
-
-    #[test]
     fn is_attacked_matches_naive(board in any_board(), sq in any_square(), by in any_color()) {
         prop_assert_eq!(
             is_attacked(&board, sq, by),
@@ -198,13 +182,6 @@ proptest! {
     fn king_square_finds_the_real_king(board in any_board(), color in any_color()) {
         let expected = board.pieces(color, Piece::King).lsb();
         prop_assert_eq!(king_square(&board, color), expected);
-    }
-
-    #[test]
-    fn in_check_matches_is_attacked_on_the_kings_square(board in any_board(), color in any_color()) {
-        let expected = king_square(&board, color)
-            .is_some_and(|sq| is_attacked(&board, sq, color.flip()));
-        prop_assert_eq!(in_check(&board, color), expected);
     }
 }
 

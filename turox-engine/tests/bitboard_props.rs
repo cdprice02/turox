@@ -8,16 +8,11 @@
 //! independent (if naive/slow) implementation built from already-verified
 //! primitives, not just algebraic sanity properties.
 
+mod common;
+
+use common::{any_bitboard, any_square};
 use proptest::prelude::*;
 use turox_engine::{Bitboard, Color, Direction, File, Rank, Square};
-
-fn any_bitboard() -> impl Strategy<Value = Bitboard> {
-    any::<u64>().prop_map(Bitboard::from_bits)
-}
-
-fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
-}
 
 /// A bitboard with at most 12 bits set, for the subset-enumeration property (2^12
 /// subsets is already 4096; anything wider would make the test slow).
@@ -115,21 +110,22 @@ proptest! {
     // ---- Core arithmetic invariants ----
 
     #[test]
-    fn and_not_matches_and_of_complement(a in any_bitboard(), b in any_bitboard()) {
-        prop_assert_eq!(a.and_not(b), a.and(!b));
-    }
-
-    #[test]
     fn complement_is_disjoint_and_covers_all(a in any_bitboard()) {
         prop_assert_eq!(a.and(!a), Bitboard::EMPTY);
         prop_assert_eq!(a.or(!a), Bitboard::ALL);
     }
 
+    // `not`/`and_not` have no raw-u64 ground truth otherwise: unlike
+    // and/or/xor below, and_not's only other check was `a.and_not(b) ==
+    // a.and(!b)`, which is and_not's own definition restated, not a check
+    // against anything independent.
     #[test]
-    fn and_or_xor_agree_with_u64(a in any_bitboard(), b in any_bitboard()) {
+    fn core_arithmetic_agrees_with_u64(a in any_bitboard(), b in any_bitboard()) {
         prop_assert_eq!(a.and(b).bits(), a.bits() & b.bits());
         prop_assert_eq!(a.or(b).bits(), a.bits() | b.bits());
         prop_assert_eq!(a.xor(b).bits(), a.bits() ^ b.bits());
+        prop_assert_eq!((!a).bits(), !a.bits());
+        prop_assert_eq!(a.and_not(b).bits(), a.bits() & !b.bits());
     }
 
     #[test]
