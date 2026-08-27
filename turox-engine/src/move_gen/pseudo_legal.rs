@@ -10,7 +10,7 @@ use crate::board::Board;
 use crate::move_gen::attacks::{attacked_by, king_square, piece_attacks};
 use crate::move_gen::move_list::MoveList;
 use crate::move_gen::tables::between;
-use crate::{Bitboard, CastlingRights, Color, Direction, File, Move, MoveFlags, Piece};
+use crate::{Bitboard, CastlingRights, Color, Direction, File, Move, MoveFlags, Piece, Square};
 
 /// Generates every pseudolegal move for `board.side_to_move()` into `list`.
 /// Calls the five functions below; their outputs never overlap (each covers a
@@ -22,6 +22,32 @@ pub fn pseudo_legal_moves(board: &Board, list: &mut MoveList) {
     king_moves(board, list);
     slider_moves(board, list);
     castling_moves(board, list);
+}
+
+/// Pushes all four promotion variants (`from` -> `to`), or all four
+/// capturing-promotion variants if `capturing`, in a fixed Bishop/Knight/
+/// Rook/Queen order. The one place that order is spelled out: `pawn_moves`'s
+/// capture loop and `pawn_pushes`'s quiet-promotion branch both call this
+/// rather than each listing the same four `push` calls.
+fn push_promotions(list: &mut MoveList, from: Square, to: Square, capturing: bool) {
+    let flags: [MoveFlags; 4] = if capturing {
+        [
+            MoveFlags::PromoteCaptureBishop,
+            MoveFlags::PromoteCaptureKnight,
+            MoveFlags::PromoteCaptureRook,
+            MoveFlags::PromoteCaptureQueen,
+        ]
+    } else {
+        [
+            MoveFlags::PromoteBishop,
+            MoveFlags::PromoteKnight,
+            MoveFlags::PromoteRook,
+            MoveFlags::PromoteQueen,
+        ]
+    };
+    for flag in flags {
+        list.push(Move::new(from, to, flag));
+    }
 }
 
 /// Pushes (via `pawn_pushes`), captures, en passant, and all four
@@ -46,10 +72,7 @@ pub fn pawn_moves(board: &Board, list: &mut MoveList) {
                 list.push(Move::new(sq, target, MoveFlags::EnPassant));
             } else if enemy.contains(target) {
                 if target.rank() == color.far_rank() {
-                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureBishop));
-                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureKnight));
-                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureRook));
-                    list.push(Move::new(sq, target, MoveFlags::PromoteCaptureQueen));
+                    push_promotions(list, sq, target, true);
                 } else {
                     list.push(Move::new(sq, target, MoveFlags::Capture));
                 }
@@ -60,10 +83,7 @@ pub fn pawn_moves(board: &Board, list: &mut MoveList) {
 
 /// Single and double pushes, and quiet-promotion variants, for every pawn of
 /// `color`. Pushing twice *through* `empty` (not a single shift-by-16) is
-/// what makes a blocker on the intermediate square stop the double push. The
-/// promotion check here and the one in `pawn_moves`'s capture loop are
-/// independent code paths that don't share logic. That's the failure mode to watch
-/// for if a pawn rule ever needs a third variant.
+/// what makes a blocker on the intermediate square stop the double push.
 fn pawn_pushes(board: &Board, list: &mut MoveList, color: Color) {
     let empty = board.empty();
     let dir = color.forward();
@@ -72,10 +92,7 @@ fn pawn_pushes(board: &Board, list: &mut MoveList, color: Color) {
         if !push.is_empty() {
             let push_sq = push.lsb().expect("push is non-empty");
             if push_sq.rank() == color.far_rank() {
-                list.push(Move::new(sq, push_sq, MoveFlags::PromoteBishop));
-                list.push(Move::new(sq, push_sq, MoveFlags::PromoteKnight));
-                list.push(Move::new(sq, push_sq, MoveFlags::PromoteRook));
-                list.push(Move::new(sq, push_sq, MoveFlags::PromoteQueen));
+                push_promotions(list, sq, push_sq, false);
             } else {
                 list.push(Move::new(sq, push_sq, MoveFlags::Quiet));
                 let double_push = push
