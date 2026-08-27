@@ -1,6 +1,6 @@
 //! `Color`: which side a piece or move belongs to.
 
-use crate::Rank;
+use crate::{Direction, Rank};
 
 /// Which side a piece or move belongs to.
 #[allow(missing_docs)] // variant names are the doc
@@ -47,6 +47,17 @@ impl Color {
         match self {
             Color::White => Rank::R4,
             Color::Black => Rank::R5,
+        }
+    }
+
+    /// The direction this color's pawns move: north for White, south for
+    /// Black. The one place the White/Black asymmetry needs encoding for
+    /// pawn pushes and their en passant bookkeeping; every call site should
+    /// go through this rather than its own `match color { ... }`.
+    pub const fn forward(self) -> Direction {
+        match self {
+            Color::White => Direction::North,
+            Color::Black => Direction::South,
         }
     }
 }

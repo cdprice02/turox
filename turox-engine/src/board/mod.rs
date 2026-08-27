@@ -41,6 +41,16 @@ impl Default for Board {
     /// An empty board, White to move, no castling rights, move 1. Not a legal
     /// position on its own; use `start_pos` or `try_from_fen` for one.
     fn default() -> Self {
+        Self::blank()
+    }
+}
+
+impl Board {
+    /// An empty board, White to move, no castling rights, move 1. `Default`'s
+    /// body, pulled out as its own `const fn` so `Self::START_POS` can build
+    /// on it too: trait methods (`Default::default`) aren't const-callable on
+    /// stable, even trivial ones.
+    const fn blank() -> Self {
         Self {
             by_color: [Bitboard::EMPTY; 2],
             by_piece: [Bitboard::EMPTY; 6],
@@ -52,12 +62,22 @@ impl Default for Board {
             fullmove_number: 1,
         }
     }
-}
 
-impl Board {
-    /// The standard chess starting position.
-    pub fn start_pos() -> Self {
-        let mut board = Self::default();
+    /// The standard chess starting position, computed once at compile time
+    /// (see `Self::START_POS`) rather than by 32 `place` calls run fresh on
+    /// every call.
+    pub const fn start_pos() -> Self {
+        Self::START_POS
+    }
+
+    const START_POS: Board = Self::build_start_pos();
+
+    /// The actual placement loop backing `Self::START_POS`. A `while` loop
+    /// over an index rather than `File::ALL.iter().zip(..)`: `for`/`.zip()`
+    /// go through `IntoIterator`, which isn't const-callable, so this is the
+    /// index-walk equivalent forced by needing the whole thing to fold to a
+    /// compile-time constant.
+    const fn build_start_pos() -> Self {
         const BACK_RANK: [Piece; 8] = [
             Piece::Rook,
             Piece::Knight,
@@ -68,23 +88,28 @@ impl Board {
             Piece::Knight,
             Piece::Rook,
         ];
-        for (file, &piece) in File::ALL.iter().zip(BACK_RANK.iter()) {
+        let mut board = Self::blank();
+        let mut i = 0;
+        while i < 8 {
+            let file = File::ALL[i];
+            let piece = BACK_RANK[i];
             board.place(
-                Square::new(*file, Rank::R1),
+                Square::new(file, Rank::R1),
                 ColoredPiece::new(Color::White, piece),
             );
             board.place(
-                Square::new(*file, Rank::R2),
+                Square::new(file, Rank::R2),
                 ColoredPiece::new(Color::White, Piece::Pawn),
             );
             board.place(
-                Square::new(*file, Rank::R7),
+                Square::new(file, Rank::R7),
                 ColoredPiece::new(Color::Black, Piece::Pawn),
             );
             board.place(
-                Square::new(*file, Rank::R8),
+                Square::new(file, Rank::R8),
                 ColoredPiece::new(Color::Black, piece),
             );
+            i += 1;
         }
         board.castling = CastlingRights::ALL;
         board
@@ -97,7 +122,7 @@ impl Board {
     /// This is the single path every piece placement should go through, so the
     /// mailbox/bitboard consistency invariant (checked by the `board_consistency`
     /// property test) can't be broken by construction.
-    pub fn place(&mut self, sq: Square, cp: ColoredPiece) {
+    pub const fn place(&mut self, sq: Square, cp: ColoredPiece) {
         self.mailbox[sq.index() as usize] = Some(cp);
         self.by_color[cp.color() as usize] = self.by_color[cp.color() as usize].or(sq.bitboard());
         self.by_piece[cp.piece() as usize] = self.by_piece[cp.piece() as usize].or(sq.bitboard());

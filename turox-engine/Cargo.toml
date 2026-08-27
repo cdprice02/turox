@@ -34,3 +34,11 @@ harness = false
 [[bench]]
 name = "magic"
 harness = false
+
+[[bench]]
+name = "move_gen"
+harness = false
+
+[[bench]]
+name = "perft"
+harness = false

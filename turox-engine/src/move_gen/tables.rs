@@ -10,6 +10,13 @@
 //! table is a more plausible future win there, but that's a candidate perf
 //! pass for once something benchmarks-driven can show it matters, not a guess
 //! made in advance.
+//!
+//! The module is named for that possible future, not the present: every
+//! function here takes a fixed, small input (`Square`, or a `Square` pair),
+//! the same shape `move_gen::magic`'s own committed `[Magic; 64]` tables key
+//! off, so swapping any of these to a real lookup table later is a
+//! same-signature change, not a redesign. Named ahead of the swap rather than
+//! after it, on purpose.
 
 use crate::types::bitboard::{Bitboard, Direction};
 use crate::types::color::Color;

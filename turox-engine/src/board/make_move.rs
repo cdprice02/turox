@@ -2,7 +2,6 @@
 
 use super::Board;
 use crate::types::{CastlingRights, Color, ColoredPiece, Move, MoveFlags, Piece, Square};
-use crate::Direction;
 
 impl Board {
     /// Applies `m` to a copy of this position and returns the result (copy-make;
@@ -47,14 +46,10 @@ impl Board {
         }
 
         if m.flags() == MoveFlags::DoublePawnPush {
-            let forward_dir = match color {
-                Color::Black => Direction::South,
-                Color::White => Direction::North,
-            };
             let en_passant = m
                 .from()
                 .bitboard()
-                .shift(forward_dir)
+                .shift(color.forward())
                 .pop_lsb()
                 .expect("one bit is set after the shift");
             board.en_passant = Some(en_passant);
@@ -129,14 +124,10 @@ impl Board {
                 }
             }
             MoveFlags::EnPassant => {
-                let opp_forward_dir = match color.flip() {
-                    Color::Black => Direction::South,
-                    Color::White => Direction::North,
-                };
                 let en_passant_target = m
                     .to()
                     .bitboard()
-                    .shift(opp_forward_dir)
+                    .shift(color.flip().forward())
                     .pop_lsb()
                     .expect("one bit is set after the shift");
                 board.place(m.to(), moved_piece);
