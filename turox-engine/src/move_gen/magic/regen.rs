@@ -8,6 +8,14 @@
 //! everything it exercises (`Magic`, `magic_index`, and the functions above)
 //! is private: `tests/*.rs` compiles as a separate crate that only sees `pub`
 //! items, so this code genuinely cannot live anywhere else.
+//!
+//! The search itself doesn't run as a `const fn`, or at build time: a spike
+//! measured a single worst-case square's table build at 35.5s inside
+//! const-eval, which doesn't scale to 128 squares inside `cargo build`. It
+//! runs here instead, as a normal `#[test]`
+//! (`regenerating_reproduces_the_committed_magic_data`), which re-derives
+//! `ROOK_MAGICS`/`BISHOP_MAGICS` from `SEED` on every run and asserts they
+//! still match what's committed in `magics.rs`.
 
 use super::*;
 use crate::rng::xorshift64star;
@@ -58,11 +66,17 @@ const BISHOP_TABLE_SIZE: usize = 5_248;
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The relevant occupancy mask for a slider on `sq` moving along `dirs`:
-/// squares whose occupancy can actually change the attack set. See the module
-/// doc's "Masks and attacks-for-occupancy are generic over direction, not
-/// piece" section for the shift-then-shift-back-then-subtract-`sq` derivation —
-/// same formula for `relevant_mask(sq, ROOK_DIRS)` and
-/// `relevant_mask(sq, BISHOP_DIRS)`, no piece-specific branch.
+/// squares whose occupancy can actually change the attack set. Generic over
+/// `dirs` rather than branching on piece — `relevant_mask(sq, ROOK_DIRS)` and
+/// `relevant_mask(sq, BISHOP_DIRS)` are the same code path.
+///
+/// Drops each ray's terminal square by shifting the full unblocked ray one
+/// step further (off the board) and back, rather than reasoning per square
+/// about which edge a ray dies on: `occluded_fill(sq.bitboard(), ALL,
+/// dir).shift(dir).shift(dir.opposite())`. A rook standing on `FILE_A` has its
+/// entire north/south mask living on `FILE_A`, so subtracting that edge
+/// outright would wipe out real blocker squares, not just the terminus — the
+/// same {axis}×{sign} shape that's bitten `Board::make_move` twice.
 const fn relevant_mask(sq: Square, dirs: [Direction; 4]) -> Bitboard {
     let mut mask = Bitboard::EMPTY;
     let mut i = 0;
@@ -94,16 +108,6 @@ const fn attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
     mask.without(sq)
 }
 
-/// The magic-bitboard hash, *local to `m`'s own slice* — the caller adds
-/// `m.offset` to get an actual `ROOK_ATTACKS`/`BISHOP_ATTACKS` index. Restrict
-/// `occupied` to `m.mask`'s bits, multiply by `m.magic`, keep the top
-/// `64 - m.shift` bits: `((occupied & m.mask).bits().wrapping_mul(m.magic)) >>
-/// m.shift`, as a `usize`. This is the one piece of this file that runs on
-/// every real move-generation lookup, not just at table-build time.
-const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
-    (((occupied.and(m.mask)).bits().wrapping_mul(m.magic)) >> m.shift) as usize
-}
-
 /// Searches for a magic multiplier for a slider on `sq` along `dirs`, starting
 /// the PRNG from `state`: generate a sparse candidate (AND a few successive
 /// `xorshift64star` outputs together, biasing toward sparse, better-hashing
@@ -111,8 +115,11 @@ const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
 /// has fewer than 6 set bits (cheap prefilter before the expensive check), then
 /// verify by hand-walking every subset of `mask` (Carry-Rippler, since
 /// `Bitboard::subsets()` isn't `const fn`) and confirming `magic_index` never
-/// collides two subsets whose `attacks_for_occupancy` results genuinely differ.
-/// Retry with the next candidate on any real collision.
+/// collides two subsets whose `attacks_for_occupancy` results genuinely
+/// differ. *Constructive* collisions — two occupancies that hash to the same
+/// slot but happen to produce the *same* attack set — are fine, and in fact
+/// required: rejecting those too would make minimal-size magics nearly
+/// unfindable. Retry with the next candidate only on a real collision.
 ///
 /// Returns the winning `Magic` alongside the PRNG's state after finding it, so
 /// `find_all_magics` can thread one continuously-advancing stream across all 64
@@ -207,7 +214,9 @@ fn find_all_magics(dirs: [Direction; 4], seed: u64) -> [Magic; 64] {
 /// `EMPTY` is never a real answer to collide with. `N` is `ROOK_TABLE_SIZE`/
 /// `BISHOP_TABLE_SIZE`; the returned array's unused tail beyond the real total
 /// (see `find_all_magics`'s doc) stays `EMPTY` too. Not `const fn`, for the
-/// same reason `find_magic` isn't. Regen-test-only, same as `find_all_magics`.
+/// same reason `find_magic` isn't: table build is search-adjacent work, not
+/// the cheap byte-reinterpretation `decode` does. Regen-test-only, same as
+/// `find_all_magics`.
 fn build_table<const N: usize>(dirs: [Direction; 4], magics: &[Magic; 64]) -> [Bitboard; N] {
     let mut table = [Bitboard::EMPTY; N];
     for sq in Square::ALL {
@@ -389,8 +398,8 @@ fn find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts() {
 /// The property that actually matters for correctness: `find_magic`'s
 /// result must hash every occupancy subset of the mask to a slot, such that
 /// two subsets sharing a slot always have the *same* real attack set
-/// (constructive collisions — see the module doc — are fine; anything else
-/// is a broken magic). Checked on a few squares chosen to cover both the
+/// (constructive collisions — see `find_magic`'s doc — are fine; anything
+/// else is a broken magic). Checked on a few squares chosen to cover both the
 /// worst-case (12-bit rook, 9-bit bishop) and a typical interior mask, not
 /// exhaustively over all 64 — `find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts`
 /// plus `build_table_matches_attacks_for_occupancy_at_every_real_occupancy`
@@ -435,8 +444,8 @@ fn find_magic_produces_a_collision_free_hash_for_a_few_representative_squares() 
 /// `attacks_for_occupancy`'s ground truth directly. This is the full
 /// 102,400-lookup rook check `find_magic_produces_a_collision_free_hash_for_a_few_representative_squares`
 /// only sampled — running it here, at native `#[test]` speed rather than in
-/// const-eval, is the entire reason the search moved offline (see the
-/// module doc's "Magic search runs offline" section).
+/// const-eval, is the entire reason the search runs offline instead of at
+/// build time (see the module doc's 35.5s measurement).
 #[test]
 fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
     for (dirs, table_size) in [

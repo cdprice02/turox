@@ -3,27 +3,6 @@
 //! given a piece standing on `sq` with some `occupied` set, what does it hit.
 //! Everything here composes in that same forward direction, with one
 //! deliberate exception (`attackers_of`) below.
-//!
-//! `attacked_by` takes `occupied` explicitly rather than always using
-//! `board.occupied()`: for king safety, the correct occupancy has the king
-//! already lifted off its old square, or a square directly behind it through
-//! an enemy slider reads as falsely safe.
-//!
-//! # `attackers_of`: the superpiece trick, and its one trap
-//!
-//! Stand each piece type on `sq` in turn, radiate its attack pattern, and
-//! intersect with the real pieces of that type/color — the reverse of every
-//! other function in this module, and the one place a color bug can hide.
-//! Knight, king, and slider attack relations are *symmetric* — "a attacks b"
-//! iff "b attacks a" — so radiating from `sq` works unmodified for those four.
-//! Pawns are **not**: a white pawn on d3 attacks c4/e4, but a pawn standing on
-//! c4 attacking as *white* would radiate onto b5/d5, not d3. To find white
-//! pawns attacking `sq`, radiate a *black* pawn from `sq` instead —
-//! `pawn_attacks(by.flip(), sq)`. This is the {Color}x{direction} shape
-//! `CLAUDE.md` flags: it produces the right answer on any vertically symmetric
-//! test position even with the flip missing or backward, so verify against an
-//! asymmetric one (a pawn a few ranks off the board's horizontal midline is
-//! enough).
 
 use crate::board::Board;
 use crate::move_gen::magic::{bishop_attacks, queen_attacks, rook_attacks};
@@ -46,8 +25,11 @@ pub fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard)
     }
 }
 
-/// Union of every square attacked by any piece of `by`, against `occupied`
-/// (not necessarily `board.occupied()` — see the module doc).
+/// Union of every square attacked by any piece of `by`, against `occupied`.
+/// Takes `occupied` explicitly rather than always using `board.occupied()`:
+/// for king safety, the correct occupancy has the king already lifted off
+/// its old square, or a square directly behind it through an enemy slider
+/// reads as falsely safe.
 pub fn attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard {
     let mut attacked_by = Bitboard::EMPTY;
     for piece in Piece::ALL {
@@ -81,10 +63,22 @@ pub fn in_check(board: &Board, color: Color) -> bool {
     }
 }
 
-/// Which pieces of `by` attack `sq` — the superpiece trick. See the module doc
-/// for the pawn-direction trap this function is the one place in the crate
-/// where it matters twice (the other is en passant source lookup in
-/// `pseudo_legal`).
+/// Which pieces of `by` attack `sq` — the superpiece trick: stand each piece
+/// type on `sq` in turn, radiate its attack pattern, and intersect with the
+/// real pieces of that type/color. The reverse of every other function in
+/// this module, and the one place a color bug can hide.
+///
+/// Knight, king, and slider attack relations are *symmetric* — "a attacks b"
+/// iff "b attacks a" — so radiating from `sq` works unmodified for those
+/// four. Pawns are **not**: a white pawn on d3 attacks c4/e4, but a pawn
+/// standing on c4 attacking as *white* would radiate onto b5/d5, not d3. To
+/// find white pawns attacking `sq`, radiate a *black* pawn from `sq` instead
+/// — `pawn_attacks(by.flip(), sq)`. This is the {Color}x{direction} shape
+/// `CLAUDE.md` flags, and the one other place it matters is en passant
+/// source lookup in `pseudo_legal`: it produces the right answer on any
+/// vertically symmetric test position even with the flip missing or
+/// backward, so verify against an asymmetric one (a pawn a few ranks off the
+/// board's horizontal midline is enough).
 pub fn attackers_of(board: &Board, sq: Square, by: Color) -> Bitboard {
     let mut attackers_of = Bitboard::EMPTY;
     for piece in Piece::ALL {

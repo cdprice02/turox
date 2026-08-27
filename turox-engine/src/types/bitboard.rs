@@ -326,7 +326,8 @@ impl Bitboard {
     /// same wrap-safety contract as `shift`, which this is built from. One
     /// direction per call: a rook's full attack set is the union of calling this
     /// for North/South/East/West; a bishop's, the four diagonals; a queen's, all
-    /// eight.
+    /// eight. The fixed 7-step loop is sufficient: 7 is the longest possible
+    /// file/rank/diagonal distance on an 8x8 board.
     #[inline]
     pub const fn occluded_fill(self, empty: Self, dir: Direction) -> Self {
         let mut gen = self;
