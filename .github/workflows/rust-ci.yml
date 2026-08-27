@@ -24,6 +24,7 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repo
@@ -74,6 +75,7 @@ jobs:
 
   lint-and-format:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -143,7 +145,10 @@ jobs:
   mutants:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # 567 mutants at time of writing; sequential (cargo-mutants' default) risked
+    # exceeding even a generous timeout, found by actually triggering this job
+    # and watching it run rather than guessing at a budget in advance.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout repo
@@ -160,8 +165,11 @@ jobs:
       - name: Install cargo-mutants
         uses: taiki-e/install-action@cargo-mutants
 
+      # -j 2, not 4: ubuntu-latest has 4 vCPUs, but each mutant's own build
+      # already uses cargo's own parallelism, so running 4 mutants at once
+      # would oversubscribe rather than actually parallelize.
       - name: Run mutation testing
-        run: cargo mutants -p turox-engine
+        run: cargo mutants -p turox-engine -j 2
 
       - name: Upload mutants report
         if: always()
