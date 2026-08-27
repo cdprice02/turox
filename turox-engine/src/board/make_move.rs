@@ -95,33 +95,17 @@ impl Board {
             }
             MoveFlags::KingCastle => {
                 board.place(m.to(), moved_piece);
-                match color {
-                    Color::Black => {
-                        let br = board.remove(Square::H8).expect("KingCastle must have rook");
-                        board.place(Square::F8, br);
-                    }
-                    Color::White => {
-                        let wr = board.remove(Square::H1).expect("KingCastle must have rook");
-                        board.place(Square::F1, wr);
-                    }
-                }
+                let (rook_from, rook_to) = CastlingRights::rook_squares(color, true);
+                let rook = board.remove(rook_from).expect("KingCastle must have rook");
+                board.place(rook_to, rook);
             }
             MoveFlags::QueenCastle => {
                 board.place(m.to(), moved_piece);
-                match color {
-                    Color::Black => {
-                        let br = board
-                            .remove(Square::A8)
-                            .expect("QueenCastle must have a rook");
-                        board.place(Square::D8, br);
-                    }
-                    Color::White => {
-                        let wr = board
-                            .remove(Square::A1)
-                            .expect("QueenCastle must have a rook");
-                        board.place(Square::D1, wr);
-                    }
-                }
+                let (rook_from, rook_to) = CastlingRights::rook_squares(color, false);
+                let rook = board
+                    .remove(rook_from)
+                    .expect("QueenCastle must have a rook");
+                board.place(rook_to, rook);
             }
             MoveFlags::EnPassant => {
                 let en_passant_target = m

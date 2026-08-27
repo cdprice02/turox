@@ -1,6 +1,7 @@
 //! `CastlingRights`: which of the four castling moves are still available.
 
 use super::color::Color;
+use super::square::Square;
 
 /// Which castling moves are still available, packed as a 4-bit set.
 ///
@@ -69,6 +70,21 @@ impl CastlingRights {
     pub const fn is_none(self) -> bool {
         self.0 == 0
     }
+
+    /// The castling rook's home square and where it lands, for `color`'s
+    /// kingside (`kingside`) or queenside corner. The single place these four
+    /// squares are spelled out: `Board::make_move` looks them up here rather
+    /// than hardcoding its own copy of the same `{Color}x{kingside,queenside}`
+    /// table, the shape that's produced scrambled bugs elsewhere in this
+    /// crate before.
+    pub const fn rook_squares(color: Color, kingside: bool) -> (Square, Square) {
+        match (color, kingside) {
+            (Color::White, true) => (Square::H1, Square::F1),
+            (Color::White, false) => (Square::A1, Square::D1),
+            (Color::Black, true) => (Square::H8, Square::F8),
+            (Color::Black, false) => (Square::A8, Square::D8),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -100,5 +116,29 @@ mod tests {
     fn with_then_without_round_trips_to_none() {
         let r = CastlingRights::NONE.with(CastlingRights::WHITE_KINGSIDE);
         assert!(r.without(CastlingRights::WHITE_KINGSIDE).is_none());
+    }
+
+    // `rook_squares` is checked against all four `(Color, kingside)` combinations
+    // explicitly, not just White's: a {Color}x{kingside,queenside} mapping that
+    // only gets checked on one color/side passes just as easily scrambled as
+    // correct.
+    #[test]
+    fn rook_squares_covers_all_four_corners() {
+        assert_eq!(
+            CastlingRights::rook_squares(Color::White, true),
+            (Square::H1, Square::F1)
+        );
+        assert_eq!(
+            CastlingRights::rook_squares(Color::White, false),
+            (Square::A1, Square::D1)
+        );
+        assert_eq!(
+            CastlingRights::rook_squares(Color::Black, true),
+            (Square::H8, Square::F8)
+        );
+        assert_eq!(
+            CastlingRights::rook_squares(Color::Black, false),
+            (Square::A8, Square::D8)
+        );
     }
 }
