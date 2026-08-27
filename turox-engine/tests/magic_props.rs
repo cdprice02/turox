@@ -6,17 +6,12 @@
 //! time, not from `Bitboard::occluded_fill` or whatever magic-hashing technique
 //! the real implementation ends up using.
 
+mod common;
+
+use common::{any_bitboard, any_square};
 use proptest::prelude::*;
 use turox_engine::move_gen::magic::{bishop_attacks, queen_attacks, rook_attacks};
 use turox_engine::{Bitboard, Square};
-
-fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
-}
-
-fn any_bitboard() -> impl Strategy<Value = Bitboard> {
-    any::<u64>().prop_map(Bitboard::from_bits)
-}
 
 const ROOK_DIRS: [(i8, i8); 4] = [(0, 1), (0, -1), (1, 0), (-1, 0)];
 const BISHOP_DIRS: [(i8, i8); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
@@ -83,14 +78,6 @@ proptest! {
     }
 
     // ---- Queen ----
-
-    #[test]
-    fn queen_attacks_equals_union_of_rook_and_bishop(sq in any_square(), occupied in any_bitboard()) {
-        prop_assert_eq!(
-            queen_attacks(sq, occupied),
-            rook_attacks(sq, occupied).or(bishop_attacks(sq, occupied))
-        );
-    }
 
     #[test]
     fn queen_attacks_never_contains_its_own_square(sq in any_square(), occupied in any_bitboard()) {

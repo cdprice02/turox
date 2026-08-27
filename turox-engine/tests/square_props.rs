@@ -1,12 +1,10 @@
-//! Property tests for `Square`, `File`, and `Rank`. Unlike the `Bitboard` exercise,
-//! these types are fully implemented already, so none of these are `#[ignore]`d.
+//! Property tests for `Square`, `File`, and `Rank`.
 
+mod common;
+
+use common::any_square;
 use proptest::prelude::*;
 use turox_engine::Square;
-
-fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
-}
 
 proptest! {
     #[test]

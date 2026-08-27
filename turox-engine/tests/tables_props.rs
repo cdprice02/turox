@@ -6,13 +6,12 @@
 //! from whatever `Bitboard` primitive (`knight_attacks`, `dilate`,
 //! `occluded_fill`, ...) the real implementation ends up using.
 
+mod common;
+
+use common::any_square;
 use proptest::prelude::*;
 use turox_engine::move_gen::tables::{between, king_attacks, knight_attacks, line, pawn_attacks};
 use turox_engine::{Bitboard, Color, File, Rank, Square};
-
-fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
-}
 
 fn any_color() -> impl Strategy<Value = Color> {
     prop_oneof![Just(Color::White), Just(Color::Black)]

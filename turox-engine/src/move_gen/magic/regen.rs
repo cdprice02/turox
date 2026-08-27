@@ -12,10 +12,14 @@
 //! The search itself doesn't run as a `const fn`, or at build time: a spike
 //! measured a single worst-case square's table build at 35.5s inside
 //! const-eval, which doesn't scale to 128 squares inside `cargo build`. It
-//! runs here instead, as a normal `#[test]`
-//! (`regenerating_reproduces_the_committed_magic_data`), which re-derives
-//! `ROOK_MAGICS`/`BISHOP_MAGICS` from `SEED` on every run and asserts they
-//! still match what's committed in `magics.rs`.
+//! runs here instead, as three `#[test]`s
+//! (`find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts`,
+//! `build_table_matches_attacks_for_occupancy_at_every_real_occupancy`, and
+//! `regenerating_reproduces_the_committed_magic_data`). Each re-runs the
+//! full randomized-candidate search, verifying every candidate against
+//! every occupancy subset of the mask, for both piece types across all 64
+//! squares, so all three are `#[ignore]`d; run them deliberately with
+//! `cargo nextest run --workspace --run-ignored all --release`.
 
 use super::*;
 use crate::rng::xorshift64star;
@@ -375,6 +379,10 @@ fn relevant_mask_popcount_matches_known_bounds() {
 /// design research measured (102,400 / 5,248), which is what those two
 /// constants were sized from in the first place.
 #[test]
+#[ignore = "full magic search: many randomized candidate multipliers per \
+            square, each verified against every occupancy subset of the \
+            mask, for all 64 squares of both piece types; run with \
+            --release via --run-ignored all"]
 fn find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts() {
     for (dirs, table_size) in [
         (ROOK_DIRS, ROOK_TABLE_SIZE),
@@ -447,6 +455,9 @@ fn find_magic_produces_a_collision_free_hash_for_a_few_representative_squares() 
 /// const-eval, is the entire reason the search runs offline instead of at
 /// build time (see the module doc's 35.5s measurement).
 #[test]
+#[ignore = "full magic search plus a full table build on top of it, both \
+            walking every occupancy subset of the mask for all 64 squares \
+            of both piece types; run with --release via --run-ignored all"]
 fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
     for (dirs, table_size) in [
         (ROOK_DIRS, ROOK_TABLE_SIZE),
@@ -487,6 +498,9 @@ fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
 /// `decode_reinterprets_little_endian_bytes_as_bitboards`. If this ever
 /// fails, the committed data and the search/build code have drifted apart.
 #[test]
+#[ignore = "same full magic search and table build as the other ignored \
+            tests here, for both piece types; run with --release via \
+            --run-ignored all"]
 fn regenerating_reproduces_the_committed_magic_data() {
     assert_eq!(
         find_all_magics(ROOK_DIRS, SEED),
