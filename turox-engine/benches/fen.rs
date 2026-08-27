@@ -1,6 +1,6 @@
 //! Micro-benchmarks for FEN parsing and formatting.
 
-// Not part of the crate's public API, so `missing_docs` doesn't apply here —
+// Not part of the crate's public API, so `missing_docs` doesn't apply here:
 // criterion's own `criterion_group!`/`criterion_main!` macros generate an
 // undocumented `fn main`.
 #![allow(missing_docs)]

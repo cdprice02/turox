@@ -2,7 +2,7 @@
 //! a slider's attack set only depends on the occupancy of squares it could
 //! actually be blocked by (its *relevant occupancy mask*), so `magic_index`
 //! hashes a real occupancy, restricted to that mask, down to a small table
-//! index — a lookup instead of a ray walk on every call.
+//! index: a lookup instead of a ray walk on every call.
 //!
 //! The `Magic` parameters and `ROOK_ATTACKS`/`BISHOP_ATTACKS` tables below are
 //! precomputed and committed (`magics.rs`, `rook_attacks.bin`/
@@ -20,9 +20,9 @@ use magics::{BISHOP_MAGICS, ROOK_MAGICS};
 
 /// `1 << 12`: the worst-case rook mask popcount across all 64 squares (e.g. a
 /// rook on `a1`: 6 file squares + 6 rank squares, each excluding its far edge).
-/// Not every square's slice is this long — `Magic::offset` plus this square's
+/// Not every square's slice is this long: `Magic::offset` plus this square's
 /// actual `1 << mask.count_ones()` is what `ROOK_ATTACKS` actually reserves for
-/// it — this is only the sum's upper bound, used to size that flat array.
+/// it; this is only the sum's upper bound, used to size that flat array.
 const ROOK_TABLE_SIZE: usize = 102_400;
 
 /// `1 << 9`: the worst-case bishop mask popcount (a bishop on one of the four
@@ -43,7 +43,7 @@ struct Magic {
     offset: usize,
 }
 
-/// The magic-bitboard hash, *local to `m`'s own slice* — the caller adds
+/// The magic-bitboard hash, *local to `m`'s own slice*. The caller adds
 /// `m.offset` to get an actual `ROOK_ATTACKS`/`BISHOP_ATTACKS` index. Restrict
 /// `occupied` to `m.mask`'s bits, multiply by `m.magic`, keep the top
 /// `64 - m.shift` bits. This is the one piece of this file that runs on
@@ -53,7 +53,7 @@ const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
 }
 
 /// Reinterprets `bytes` (tightly packed little-endian `u64`s, `N * 8` bytes
-/// long — what `rook_attacks.bin`/`bishop_attacks.bin` hold) as `[Bitboard;
+/// long, what `rook_attacks.bin`/`bishop_attacks.bin` hold) as `[Bitboard;
 /// N]`. Panics (via the `bytes[...]` index) if `bytes.len() < N * 8`; the two
 /// committed `.bin` files are always exactly `N * 8` for their respective `N`,
 /// so this only fires if they and the `N` this is called with ever drift
@@ -76,7 +76,7 @@ const fn decode<const N: usize>(bytes: &[u8]) -> [Bitboard; N] {
     table
 }
 
-/// The flat rook attack table, decoded from the committed `rook_attacks.bin` —
+/// The flat rook attack table, decoded from the committed `rook_attacks.bin`;
 /// see `ROOK_MAGICS`'s doc and `decode`'s doc for how it got there. `static`,
 /// not `const`: at 800 KB, a `const` risks the compiler duplicating the whole
 /// array at every reference site instead of storing it once.
@@ -87,7 +87,7 @@ static ROOK_ATTACKS: [Bitboard; ROOK_TABLE_SIZE] = decode(include_bytes!("rook_a
 static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] = decode(include_bytes!("bishop_attacks.bin"));
 
 /// Every square a rook standing on `sq` attacks, given `occupied` (both empty
-/// and enemy/friendly squares — this module doesn't know about color). Stops
+/// and enemy/friendly squares; this module doesn't know about color). Stops
 /// at, and includes, the first occupied square in each of the four directions.
 pub const fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
     let m = &ROOK_MAGICS[sq.index() as usize];
@@ -152,12 +152,12 @@ mod tests {
     }
 
     /// Rook standing on the a-file itself, blocked by a piece further up the
-    /// same file. This is the concrete case the mask gotcha documented above
-    /// would get wrong: if `rook_mask` incorrectly subtracted all of `FILE_A`
+    /// same file. This is the concrete case `regen::relevant_mask`'s mask
+    /// gotcha would get wrong: if `rook_mask` incorrectly subtracted all of `FILE_A`
     /// (rather than just the far edge per direction), the north/south blocker
     /// on `A6` would fall outside the mask, and the magic hash would collapse
     /// this occupancy together with a different one that doesn't have that
-    /// blocker — returning attacks as if `A6` weren't there.
+    /// blocker: returning attacks as if `A6` weren't there.
     #[test]
     fn rook_on_a_file_is_blocked_by_a_piece_further_up_the_same_file() {
         let occupied = Bitboard::EMPTY.with(Square::A6);

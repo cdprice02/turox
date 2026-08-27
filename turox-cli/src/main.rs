@@ -1,5 +1,5 @@
 //! `turox-cli`: the binary that drives `turox_engine::Engine`, eventually over
-//! UCI (see `Engine::run`). Not yet a UCI frontend — the engine's own
+//! UCI (see `Engine::run`). Not yet a UCI frontend: the engine's own
 //! `search`/`uci` modules are what it will call once those land.
 
 use clap::Parser;

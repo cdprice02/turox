@@ -8,7 +8,7 @@
 use super::Magic;
 use crate::types::bitboard::Bitboard;
 
-/// Found by `find_all_magics(ROOK_DIRS, SEED)` — see
+/// Found by `find_all_magics(ROOK_DIRS, SEED)`, see
 /// `regen::regenerating_reproduces_the_committed_magic_data` for the check that
 /// keeps this honest.
 pub(super) const ROOK_MAGICS: [Magic; 64] = [
@@ -398,7 +398,7 @@ pub(super) const ROOK_MAGICS: [Magic; 64] = [
     },
 ];
 
-/// Found by `find_all_magics(BISHOP_DIRS, SEED)` — same reproducibility check
+/// Found by `find_all_magics(BISHOP_DIRS, SEED)`, same reproducibility check
 /// as `ROOK_MAGICS`.
 pub(super) const BISHOP_MAGICS: [Magic; 64] = [
     Magic {

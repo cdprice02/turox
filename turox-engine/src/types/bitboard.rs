@@ -11,13 +11,13 @@ use std::ops::Not;
 /// A set of squares, one bit per square, LERF-indexed (bit 0 = a1, bit 63 = h8).
 ///
 /// `#[repr(transparent)]` matches `u64`'s layout (sound for `transmute`/FFI) but
-/// isn't what makes this free at runtime — LLVM scalar-replaces a one-field newtype
+/// isn't what makes this free at runtime: LLVM scalar-replaces a one-field newtype
 /// regardless of `repr`. Every combinator (`and`/`or`/`xor`/`and_not`/`shl`/`shr`)
 /// is an inherent `const fn`, deliberately with no `BitAnd`/`BitOr`/`BitXor`/`Sub`/
 /// `Shl`/`Shr` operator overloads standing in for them: those traits aren't
 /// `const` on stable Rust, so an operator would silently be unusable (or, if
 /// reached for inside a `const fn`, wouldn't compile) exactly where this type is
-/// used most — `tables.rs`/`magic.rs` building attack data at compile time.
+/// used most, in `tables.rs`/`magic.rs` building attack data at compile time.
 /// `Not` is the one exception (unary, no such split, kept as `!board`).
 /// No `From<u64>`/`PartialEq<u64>`: raw integers cross the boundary only through
 /// `from_bits`/`bits()`.
@@ -241,7 +241,7 @@ impl Bitboard {
     }
 
     /// Rotate 90 degrees clockwise (a1 -> a8; verified against a concrete corner
-    /// mapping in `mod tests` below — the group-law property tests alone can't
+    /// mapping in `mod tests` below; the group-law property tests alone can't
     /// distinguish this from counter-clockwise).
     #[inline]
     pub const fn rotate_90_cw(self) -> Self {
@@ -261,7 +261,7 @@ impl Bitboard {
         Bitboard::from_bits(self.bits().reverse_bits())
     }
 
-    /// Flip vertically for `Black`, identity for `White` — views the board from
+    /// Flip vertically for `Black`, identity for `White`. Views the board from
     /// the side-to-move's perspective (e.g. perspective-relative PSTs in eval).
     #[inline]
     pub const fn mirror_for(self, color: Color) -> Self {
@@ -454,7 +454,7 @@ mod tests {
 
     /// Anchors `rotate_90_cw` to an absolute direction. The group-law property
     /// tests in `tests/bitboard_props.rs` (four cw rotations = identity, cw/ccw
-    /// are mutual inverses) only prove the two are *consistent with each other* —
+    /// are mutual inverses) only prove the two are *consistent with each other*;
     /// that would hold even if both were secretly counter-clockwise. This pins it
     /// down: a physical clockwise spin (White's side, a1 bottom-left, h8
     /// top-right) sends each corner to the next one going bottom-left -> top-left
@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(Square::E4.bitboard().dilate(), expected);
     }
 
-    /// A1 has only 3 on-board neighbors (north, east, northeast) — the board-edge
+    /// A1 has only 3 on-board neighbors (north, east, northeast), the board-edge
     /// counterpart to the center-square case above.
     #[test]
     fn dilate_corner_square_drops_off_board_neighbors() {

@@ -5,7 +5,7 @@ use std::fmt;
 
 /// Declares a small `repr(u8)` enum with an `ALL` lookup table and
 /// `from_index`/`index` conversions, from a single list of variant names. Used for
-/// `File`, `Rank`, and `Square` below — the axis size (8, 8, 64) and variant list
+/// `File`, `Rank`, and `Square` below: the axis size (8, 8, 64) and variant list
 /// are the only things that differ between them.
 macro_rules! declare_axis {
     ($(#[$meta:meta])* $name:ident, $size:literal, { $($variant:ident),* $(,)? }) => {

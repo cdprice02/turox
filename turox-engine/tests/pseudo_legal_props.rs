@@ -2,7 +2,7 @@
 //!
 //! `pawn_moves`, `knight_moves`, `king_moves`, and `slider_moves` each get a
 //! proptest against an independent naive reference built only from
-//! `Square::offset` stepping and `Board` accessors — never from `Bitboard`'s
+//! `Square::offset` stepping and `Board` accessors, never from `Bitboard`'s
 //! shift primitives, `tables`, or `magic`, matching the discipline in
 //! `tests/attacks_props.rs` and `tests/tables_props.rs`. Move
 //! lists are compared as sorted `(from, to, flags)` triples, since `Move` has
@@ -11,8 +11,8 @@
 //! `castling_moves` gets concrete FEN tests instead of a proptest: legality
 //! hinges on `move_gen::attacks` (already independently tested), so what's
 //! worth pinning down here is the specific {Color}x{kingside,queenside}
-//! mapping, not attack correctness — exactly the shape flagged in `CLAUDE.md`
-//! as a repeat source of bugs in this crate.
+//! mapping, not attack correctness. That mapping shape has been a repeat
+//! source of bugs in this crate.
 
 mod common;
 
@@ -248,7 +248,7 @@ proptest! {
 #[test]
 fn white_double_push_blocked_by_piece_on_intermediate_square() {
     // e3 occupied blocks *both* the single push to e3 and the double push to
-    // e4 — a single shift-by-16 for the double push, skipping the
+    // e4, a single shift-by-16 for the double push, skipping the
     // intermediate-square check, would miss that e3 itself is occupied.
     let board = Board::try_from_fen("8/8/8/8/8/4n3/4P3/8 w - - 0 1").expect("valid FEN");
     let mut list = MoveList::new();
@@ -459,7 +459,7 @@ fn black_both_castles_available_on_an_empty_clear_board() {
 
 #[test]
 fn kingside_castle_blocked_by_occupied_transit_square() {
-    // Knight on f1 itself (not f2 — a transit-square blocker has to sit on the
+    // Knight on f1 itself (not f2, a transit-square blocker has to sit on the
     // rank the king/rook actually cross).
     let board = Board::try_from_fen("r3k2r/8/8/8/8/8/8/R3KN1R w KQkq - 0 1").expect("valid FEN");
     let mut list = MoveList::new();
@@ -583,7 +583,7 @@ fn queenside_castle_blocked_by_attacked_c1() {
 #[test]
 fn queenside_castle_is_still_legal_when_b1_is_attacked() {
     // b1 must be *empty* (the rook crosses it) but need not be *safe* (the
-    // king never does) — the one row of the castling table that differs from
+    // king never does), the one row of the castling table that differs from
     // every other transit square.
     let board = Board::try_from_fen("4k3/1r6/8/8/8/8/8/R3K2R w KQ - 0 1").expect("valid FEN");
     let mut list = MoveList::new();

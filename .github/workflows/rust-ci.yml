@@ -90,7 +90,7 @@ jobs:
 
       # `missing_docs` is denied workspace-wide (see the root Cargo.toml's
       # `[workspace.lints.rust]`), but that only checks that a doc comment
-      # exists, not that it renders — a broken intra-doc link (`[`board`]`)
+      # exists, not that it renders: a broken intra-doc link (`[`board`]`)
       # or malformed doc still passes `cargo build`.
       - name: Check documentation builds without warnings
         run: cargo doc --workspace --no-deps

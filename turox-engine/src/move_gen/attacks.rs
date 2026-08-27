@@ -63,19 +63,20 @@ pub fn in_check(board: &Board, color: Color) -> bool {
     }
 }
 
-/// Which pieces of `by` attack `sq` — the superpiece trick: stand each piece
+/// Which pieces of `by` attack `sq`, the superpiece trick: stand each piece
 /// type on `sq` in turn, radiate its attack pattern, and intersect with the
 /// real pieces of that type/color. The reverse of every other function in
 /// this module, and the one place a color bug can hide.
 ///
-/// Knight, king, and slider attack relations are *symmetric* — "a attacks b"
-/// iff "b attacks a" — so radiating from `sq` works unmodified for those
+/// Knight, king, and slider attack relations are *symmetric*: "a attacks b"
+/// iff "b attacks a", so radiating from `sq` works unmodified for those
 /// four. Pawns are **not**: a white pawn on d3 attacks c4/e4, but a pawn
 /// standing on c4 attacking as *white* would radiate onto b5/d5, not d3. To
-/// find white pawns attacking `sq`, radiate a *black* pawn from `sq` instead
-/// — `pawn_attacks(by.flip(), sq)`. This is the {Color}x{direction} shape
-/// `CLAUDE.md` flags, and the one other place it matters is en passant
-/// source lookup in `pseudo_legal`: it produces the right answer on any
+/// find white pawns attacking `sq`, radiate a *black* pawn from `sq`
+/// instead: `pawn_attacks(by.flip(), sq)`. This is a {Color}x{direction}
+/// shape, the same kind that has repeatedly produced scrambled bugs in this
+/// crate, and the one other place it matters is en passant source lookup in
+/// `pseudo_legal`. It produces the right answer on any
 /// vertically symmetric test position even with the flip missing or
 /// backward, so verify against an asymmetric one (a pawn a few ranks off the
 /// board's horizontal midline is enough).

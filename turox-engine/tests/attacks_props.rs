@@ -3,7 +3,7 @@
 //!
 //! Every function gets a reference-equivalence check against an independent
 //! implementation built directly from `Square::offset` stepping, not from
-//! `tables`/`magic` — same discipline as `tests/tables_props.rs` and
+//! `tables`/`magic`, same discipline as `tests/tables_props.rs` and
 //! `tests/magic_props.rs`. `attackers_of` in
 //! particular is checked against the *forward* naive definition rather than a
 //! second reverse one, per the module doc's reasoning: a forward
@@ -227,7 +227,7 @@ fn in_check_is_false_on_a_kingless_board() {
 // The one place a Color-flip bug in `attackers_of` is invisible on a
 // vertically symmetric board: knight/king/slider attack relations are
 // symmetric ("a attacks b" iff "b attacks a"), pawn relations are not. A white
-// pawn on d3 attacks c4/e4, not c2/e2 — these pin that down concretely rather
+// pawn on d3 attacks c4/e4, not c2/e2; these pin that down concretely rather
 // than trusting the proptest oracle (built with the same offset-stepping
 // technique) to be independently immune to the same mistake.
 
@@ -270,7 +270,7 @@ fn attacked_by_with_the_kings_own_square_removed_reveals_the_square_behind_it() 
     // Rook on e8, king on e2: with the king still in the occupancy, the rook's
     // ray down the e-file stops (inclusively) at e2, so e1 reads as safe. Lifting
     // the king out of `occupied` (as a caller checking "is e1 safe to step onto"
-    // must) reveals the ray continues straight through to e1 — exactly the case
+    // must) reveals the ray continues straight through to e1, exactly the case
     // `attacked_by` takes `occupied` explicitly for.
     let board = Board::try_from_fen("4r3/8/8/8/8/8/4K3/8 w - - 0 1").expect("valid FEN");
     let occupied_with_king = board.occupied();

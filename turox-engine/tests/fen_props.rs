@@ -5,7 +5,7 @@ use turox_engine::board::Board;
 
 /// A `Board` strategy: places between 2 and 24 random (color, piece, square)
 /// triples, skipping squares already taken. Not guaranteed "legal" chess-wise
-/// (may have no king, doubled kings, pawns on rank 1, etc.) — that's fine, FEN
+/// (may have no king, doubled kings, pawns on rank 1, etc.); that's fine, FEN
 /// round-tripping doesn't care, and legality is `move_gen`'s job, not `board`'s.
 fn any_board() -> impl Strategy<Value = Board> {
     use turox_engine::{Color, ColoredPiece, Piece, Square};

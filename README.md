@@ -18,7 +18,7 @@ real rating.
 Move generation is complete and verified end-to-end against perft (see
 below): `Board`, FEN parsing/formatting, attack tables, magic bitboards, and
 pseudolegal/legal move generation all work. `search`, `eval`, and `uci` are
-not yet implemented — the engine can enumerate every legal move from a
+not yet implemented: the engine can enumerate every legal move from a
 position, but nothing yet decides which one to play or speaks UCI to report
 it.
 
@@ -28,21 +28,21 @@ it.
 types  ->  board  ->  move_gen  ->  search / eval / uci
 ```
 
-- **`types`** — core value types (`Bitboard`, `Square`, `Color`, `Piece`,
+- **`types`**: core value types (`Bitboard`, `Square`, `Color`, `Piece`,
   `Move`, ...) with no dependency on `Board`. Sits at the crate root rather
   than nested under `board/` because move generation, search, and evaluation
   all need these types without depending on `Board` itself; re-exported at
   the crate root too, so callers write `turox_engine::Bitboard` rather than
   reaching into the module.
-- **`board`** — `Board` (piece placement plus game state) and FEN
+- **`board`**: `Board` (piece placement plus game state) and FEN
   parsing/formatting, built on `types`.
-- **`move_gen`** — attack tables, magic bitboards, pseudolegal and legal move
+- **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
   generation, and `perft`.
-- **`search`**, **`eval`**, **`uci`** — planned. Iterative deepening over a
+- **`search`**, **`eval`**, **`uci`**: planned. Iterative deepening over a
   transposition table, static position evaluation, and the UCI protocol that
   will drive the engine from `turox-cli`.
 
-`turox-engine` takes zero runtime dependencies, deliberately — see the
+`turox-engine` takes zero runtime dependencies, deliberately; see the
 "Dependency policy" comment in `turox-engine/Cargo.toml`.
 
 ## Building and running
@@ -61,11 +61,10 @@ cargo nextest run --workspace
 The suite is almost entirely property tests (`proptest`) checked against
 independently-built reference implementations, plus concrete FEN-based
 scenarios for rule-heavy or stateful logic (castling, en passant, promotion,
-check/pin detection). See `CLAUDE.md` for the collaboration pattern this
-follows.
+check/pin detection).
 
-A handful of tests — the deepest `perft` depths, which push into the
-millions of nodes — are `#[ignore]`d by default so the default suite stays
+A handful of tests, the deepest `perft` depths, which push into the
+millions of nodes, are `#[ignore]`d by default so the default suite stays
 fast. Run them deliberately, in `--release` (the default `dev` profile is far
 too slow for perft at depth):
 

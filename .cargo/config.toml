@@ -4,7 +4,7 @@
 # get equivalent instructions unconditionally as baseline ISA anyway.
 #
 # Caveat for whoever writes PEXT-based magic bitboards later: bmi2's PEXT/PDEP
-# run via slow microcode on AMD Zen1/Zen2, not real hardware execution — genuinely
+# run via slow microcode on AMD Zen1/Zen2, not real hardware execution; genuinely
 # fast on AMD only from Zen3 (2020) on. This flag makes the instructions
 # available and correct everywhere in the 2017+ baseline; it doesn't mean they're
 # fast everywhere in it. Benchmark before assuming a PEXT path is a win on AMD.

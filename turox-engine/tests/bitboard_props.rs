@@ -1,9 +1,9 @@
 //! Property tests for `Bitboard`: the executable version of the contracts
 //! documented on each method in `src/types/bitboard.rs`.
 //!
-//! These bitboard primitives are what the entire engine's correctness rests on —
+//! These bitboard primitives are what the entire engine's correctness rests on:
 //! every square set, move generated, and position evaluated eventually bottoms
-//! out in one of these operations — so coverage here is deliberately heavier than
+//! out in one of these operations, so coverage here is deliberately heavier than
 //! elsewhere: every function gets a reference-equivalence check against an
 //! independent (if naive/slow) implementation built from already-verified
 //! primitives, not just algebraic sanity properties.
@@ -273,7 +273,7 @@ proptest! {
     //
     // The group-law properties below (four cw rotations = identity, cw and ccw are
     // mutual inverses) only prove rotate_90_cw and rotate_90_ccw are *consistent
-    // with each other* — that holds even if both were secretly counter-clockwise.
+    // with each other*; that holds even if both were secretly counter-clockwise.
     // The absolute direction is pinned down by a plain #[test] (not a property, so
     // it lives with the other unit tests in src/types/bitboard.rs, not here) named
     // rotate_90_cw_matches_known_corner_mapping.

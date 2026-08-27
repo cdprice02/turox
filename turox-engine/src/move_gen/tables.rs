@@ -5,7 +5,7 @@
 //! Every function here is a `const fn` that computes its answer directly on
 //! each call rather than indexing into a precomputed static table: the leaper
 //! attacks are already O(1) bit tricks, so a `[Bitboard; 64]` lookup would
-//! trade that for a cache-line load — likely a wash, not a win. `between`/
+//! trade that for a cache-line load, likely a wash, not a win. `between`/
 //! `line` do more real work (a bounded ray walk), so a precomputed 64x64
 //! table is a more plausible future win there, but that's a candidate perf
 //! pass for once something benchmarks-driven can show it matters, not a guess
@@ -16,8 +16,8 @@ use crate::types::color::Color;
 use crate::types::square::Square;
 
 /// Every square a knight standing on `sq` attacks. Not a `shift`/fill
-/// composition — knight moves are a discontinuous jump, not a smear or single
-/// step — but they have their own compound shift-with-masking formula (CPW's
+/// composition: knight moves are a discontinuous jump, not a smear or single
+/// step, but they have their own compound shift-with-masking formula (CPW's
 /// "Knight Pattern"), same technique family as `Bitboard::shift`'s diagonals,
 /// just wider file-edge masks since a knight can cross two files in one move.
 pub const fn knight_attacks(sq: Square) -> Bitboard {

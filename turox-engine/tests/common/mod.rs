@@ -2,7 +2,7 @@
 //! (`attacks_props.rs`, and the pseudolegal/legal test files that follow it).
 //! `tests/common/mod.rs` rather than `tests/common.rs`: the `mod.rs` name keeps
 //! `cargo`/`nextest` from treating this as its own standalone test binary (which
-//! would fail to build — it has no `#[test]`s of its own).
+//! would fail to build; it has no `#[test]`s of its own).
 //!
 //! `tests/fen_props.rs` already has its own `any_board()`, deliberately not
 //! reused here: that one exists to prove FEN round-tripping doesn't care whether
@@ -16,7 +16,7 @@ use turox_engine::{CastlingRights, Color, ColoredPiece, Piece, Rank, Square};
 /// A `Board` strategy for move-generation tests: always exactly one king per
 /// side (distinct squares), other pieces placed at random with pawns kept off
 /// the back ranks, castling rights only ever set when the king and the matching
-/// rook actually sit on their home squares. En passant is always `None` — no
+/// rook actually sit on their home squares. En passant is always `None`; no
 /// test in this crate needs a proptest-random ep state; the concrete FEN tests
 /// in `pseudo_legal_props.rs` cover that rule directly, and legal move
 /// generation (once it exists) produces real ep states from real move

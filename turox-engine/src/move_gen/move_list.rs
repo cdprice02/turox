@@ -1,7 +1,7 @@
 //! A stack-allocated move buffer for legal move generation to fill.
 //!
 //! `Move` is a `Copy` 2-byte value with no `Drop` (see `types::moves`), so a fixed
-//! `[Move; 256]` + length is the whole implementation — no `arrayvec` dependency,
+//! `[Move; 256]` + length is the whole implementation: no `arrayvec` dependency,
 //! no `MaybeUninit`, no unsafe. 256 is comfortably above the maximum legal moves in
 //! any reachable chess position (218, in a constructed extreme position); 512
 //! bytes total versus `Vec<Move>`'s heap allocation per position is the entire
@@ -84,7 +84,7 @@ impl<'a> IntoIterator for &'a MoveList {
     }
 }
 
-/// The live slice only — not all 256 backing-array entries, most of which are
+/// The live slice only, not all 256 backing-array entries, most of which are
 /// unused filler past `len`.
 impl fmt::Debug for MoveList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

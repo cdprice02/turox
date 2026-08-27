@@ -8,14 +8,14 @@ use crate::move_gen::move_list::MoveList;
 use crate::move_gen::pseudo_legal::pseudo_legal_moves;
 
 /// Every legal move for `board.side_to_move()`: `pseudo_legal_moves` filtered
-/// to the moves that don't leave the mover's own king in check — no separate
+/// to the moves that don't leave the mover's own king in check. No separate
 /// pin detection, no discovered-check bookkeeping. `board.make_move(m)`
 /// produces the actual resulting position and `in_check` actually re-scans
 /// it, so pins, discovered checks, and en-passant-discovered checks along the
 /// capturing pawn's rank all fall out for free. This is slower than the
 /// pin-aware bitboard techniques a faster engine wants (a full `make_move`
 /// plus a full `attacked_by` scan per candidate, rather than a cheap
-/// pin-mask check), but it's obviously correct by construction — perft is
+/// pin-mask check), but it's obviously correct by construction. Perft is
 /// what proves that, and what a later perf pass would benchmark a cleverer
 /// version against.
 pub fn legal_moves(board: &Board) -> MoveList {
