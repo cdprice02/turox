@@ -5,7 +5,8 @@
 // undocumented `fn main`.
 #![allow(missing_docs)]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use turox_engine::board::Board;
 
 /// A handful of representative positions rather than just the start position, so

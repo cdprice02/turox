@@ -18,7 +18,8 @@
 // undocumented `fn main`.
 #![allow(missing_docs)]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use std::hint::black_box;
 use turox_engine::{Bitboard, Square};
 
 const SAMPLE_COUNT: usize = 1024;
