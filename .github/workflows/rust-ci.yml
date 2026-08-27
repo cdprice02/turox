@@ -62,7 +62,7 @@ jobs:
 
       - name: Upload JUnit test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-test-results
           path: target/nextest/ci/junit.xml
@@ -173,7 +173,7 @@ jobs:
 
       - name: Upload mutants report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-report
           path: mutants.out
@@ -210,7 +210,7 @@ jobs:
           cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage/lcov.info
@@ -242,7 +242,7 @@ jobs:
 
       - name: Upload criterion report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: criterion-report
           path: target/criterion
