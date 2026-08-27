@@ -61,9 +61,16 @@ pub const fn king_square(board: &Board, color: Color) -> Option<Square> {
 
 /// Whether `color`'s king is currently attacked. `false` if `color` has no
 /// king, rather than panicking.
+///
+/// Goes through `attackers_of` rather than `is_attacked`/`attacked_by`: this
+/// is the hottest line in `legal_moves` (once per pseudolegal move, via
+/// `make_move` + `in_check`), and `attackers_of` answers "is this one square
+/// attacked" in five lookups where `attacked_by` builds the enemy's entire
+/// attack set (all six piece types over every enemy piece) just to test one
+/// bit of it.
 pub fn in_check(board: &Board, color: Color) -> bool {
     if let Some(sq) = king_square(board, color) {
-        is_attacked(board, sq, color.flip())
+        !attackers_of(board, sq, color.flip()).is_empty()
     } else {
         false
     }

@@ -26,7 +26,7 @@ impl MoveList {
     /// An empty list.
     pub const fn new() -> Self {
         Self {
-            moves: [Self::SENTINEL; 256],
+            moves: [Self::SENTINEL; Self::CAPACITY],
             len: 0,
         }
     }
@@ -42,6 +42,21 @@ impl MoveList {
         }
         self.moves[self.len] = m;
         self.len += 1;
+    }
+
+    /// Keeps only the moves for which `f` returns `true`, in place and in
+    /// order. `legal_moves` uses this to filter `pseudo_legal_moves`'s output
+    /// down to legal moves without allocating a second `MoveList` (and paying
+    /// for its 256-entry sentinel-array init) just to copy the survivors into.
+    pub fn retain(&mut self, mut f: impl FnMut(Move) -> bool) {
+        let mut write = 0;
+        for read in 0..self.len {
+            if f(self.moves[read]) {
+                self.moves[write] = self.moves[read];
+                write += 1;
+            }
+        }
+        self.len = write;
     }
 
     /// The number of moves pushed so far.
@@ -100,7 +115,7 @@ impl fmt::Debug for MoveList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{MoveFlags, Square};
+    use crate::types::{MoveFlags, Rank, Square};
 
     fn m(from: Square, to: Square) -> Move {
         Move::new(from, to, MoveFlags::Quiet)
@@ -128,6 +143,44 @@ mod tests {
         assert_eq!(list.len(), 3);
         assert!(!list.is_empty());
         assert_eq!(list.as_slice(), &moves);
+    }
+
+    #[test]
+    fn retain_drops_non_matching_and_preserves_order_of_the_rest() {
+        let mut list = MoveList::new();
+        let moves = [
+            m(Square::E2, Square::E4),
+            m(Square::G1, Square::F3),
+            m(Square::B1, Square::C3),
+            m(Square::D2, Square::D4),
+        ];
+        for &mv in &moves {
+            list.push(mv);
+        }
+        // Keep only moves landing on the 4th rank: E4 and D4, in their
+        // original relative order.
+        list.retain(|mv| mv.to().rank() == Rank::R4);
+        assert_eq!(list.as_slice(), &[moves[0], moves[3]]);
+    }
+
+    #[test]
+    fn retain_keeping_everything_is_a_no_op() {
+        let mut list = MoveList::new();
+        let moves = [m(Square::E2, Square::E4), m(Square::G1, Square::F3)];
+        for &mv in &moves {
+            list.push(mv);
+        }
+        list.retain(|_| true);
+        assert_eq!(list.as_slice(), &moves);
+    }
+
+    #[test]
+    fn retain_dropping_everything_empties_the_list() {
+        let mut list = MoveList::new();
+        list.push(m(Square::E2, Square::E4));
+        list.push(m(Square::G1, Square::F3));
+        list.retain(|_| false);
+        assert!(list.is_empty());
     }
 
     #[test]

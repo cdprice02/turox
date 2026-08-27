@@ -66,10 +66,7 @@ pub fn pawn_moves(board: &Board, list: &mut MoveList) {
 /// for if a pawn rule ever needs a third variant.
 fn pawn_pushes(board: &Board, list: &mut MoveList, color: Color) {
     let empty = board.empty();
-    let dir = match color {
-        Color::White => Direction::North,
-        Color::Black => Direction::South,
-    };
+    let dir = color.forward();
     for sq in board.pieces(color, Piece::Pawn) {
         let push = sq.bitboard().shift(dir).and(empty);
         if !push.is_empty() {
