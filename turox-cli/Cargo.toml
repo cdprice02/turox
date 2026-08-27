@@ -2,6 +2,8 @@
 name = "turox-cli"
 version = "0.1.0"
 edition = "2021"
+# Matches turox-engine's floor (see its Cargo.toml), which this depends on.
+rust-version = "1.87"
 
 [lints]
 workspace = true

@@ -109,7 +109,7 @@ impl Board {
     /// `try_from_fen` builds its result this way, and so can anything else that
     /// wants a specific side-to-move/castling/en-passant/clock combination
     /// without hand-assembling a FEN string first (test helpers, in particular).
-    pub fn from_parts(
+    pub const fn from_parts(
         placement: Board,
         side_to_move: Color,
         castling: CastlingRights,
@@ -138,47 +138,51 @@ impl Board {
     }
 
     /// O(1) lookup of whatever is on `sq`, via the mailbox.
-    pub fn piece_at(&self, sq: Square) -> Option<ColoredPiece> {
+    pub const fn piece_at(&self, sq: Square) -> Option<ColoredPiece> {
         self.mailbox[sq.index() as usize]
     }
 
     /// All pieces of a given color and kind.
-    pub fn pieces(&self, color: Color, piece: Piece) -> Bitboard {
-        self[piece].and(self[color])
+    pub const fn pieces(&self, color: Color, piece: Piece) -> Bitboard {
+        // Indexes `by_piece`/`by_color` directly rather than through `self[piece]`/
+        // `self[color]`: the `Index` trait's `index` method isn't `const`.
+        self.by_piece[piece as usize].and(self.by_color[color as usize])
     }
 
     /// Every occupied square, regardless of color or piece kind.
-    pub fn occupied(&self) -> Bitboard {
-        self[Color::White].or(self[Color::Black])
+    pub const fn occupied(&self) -> Bitboard {
+        self.by_color[Color::White as usize].or(self.by_color[Color::Black as usize])
     }
 
     /// Every unoccupied square.
-    pub fn empty(&self) -> Bitboard {
-        !self.occupied()
+    pub const fn empty(&self) -> Bitboard {
+        // `self.occupied().not()`, not `!self.occupied()`: the `Not` trait's
+        // `not` method isn't `const`, only `Bitboard`'s own inherent `not` is.
+        self.occupied().not()
     }
 
     /// Which color is to move.
-    pub fn side_to_move(&self) -> Color {
+    pub const fn side_to_move(&self) -> Color {
         self.side_to_move
     }
 
     /// The castling rights still available to either side.
-    pub fn castling_rights(&self) -> CastlingRights {
+    pub const fn castling_rights(&self) -> CastlingRights {
         self.castling
     }
 
     /// The square a pawn could capture en passant onto, if any.
-    pub fn en_passant(&self) -> Option<Square> {
+    pub const fn en_passant(&self) -> Option<Square> {
         self.en_passant
     }
 
     /// Plies since the last pawn move or capture (the fifty-move-rule counter).
-    pub fn halfmove_clock(&self) -> u8 {
+    pub const fn halfmove_clock(&self) -> u8 {
         self.halfmove_clock
     }
 
     /// The full-move number, incrementing after each Black move.
-    pub fn fullmove_number(&self) -> u16 {
+    pub const fn fullmove_number(&self) -> u16 {
         self.fullmove_number
     }
 }

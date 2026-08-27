@@ -24,7 +24,7 @@ impl MoveList {
     const SENTINEL: Move = Move::new(Square::A1, Square::A1, MoveFlags::Quiet);
 
     /// An empty list.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             moves: [Self::SENTINEL; 256],
             len: 0,
@@ -34,27 +34,32 @@ impl MoveList {
     /// Appends `m`. Panics if the list is already at `CAPACITY` - legal move
     /// generation should never produce more moves than that from a reachable
     /// position, so this is a bug check, not a runtime condition to handle.
-    pub fn push(&mut self, m: Move) {
+    /// The panic message can't include the actual length: `const fn` panics
+    /// only accept a literal string, not `format!`-style arguments.
+    pub const fn push(&mut self, m: Move) {
         if self.len >= Self::CAPACITY {
-            panic!("MoveList already at capacity. A valid chess position should never reach this number ({}) of moves.", self.len + 1);
+            panic!("MoveList already at capacity; a valid chess position should never reach this many moves");
         }
         self.moves[self.len] = m;
         self.len += 1;
     }
 
     /// The number of moves pushed so far.
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Whether no moves have been pushed.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// The pushed moves, in push order.
-    pub fn as_slice(&self) -> &[Move] {
-        &self.moves[..self.len]
+    pub const fn as_slice(&self) -> &[Move] {
+        // `&self.moves[..self.len]` would be more idiomatic, but range
+        // indexing isn't const-callable yet (`Index` isn't a const trait on
+        // stable); `split_at` is.
+        self.moves.split_at(self.len).0
     }
 }
 
