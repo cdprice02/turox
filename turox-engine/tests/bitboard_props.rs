@@ -29,10 +29,6 @@ fn small_bitboard() -> impl Strategy<Value = Bitboard> {
     })
 }
 
-fn any_color() -> impl Strategy<Value = Color> {
-    prop_oneof![Just(Color::White), Just(Color::Black)]
-}
-
 /// Reference definition of `north_fill`: within each file, smear every set bit
 /// upward (toward higher ranks). Built from `contains`/`with`, not from whatever
 /// technique `north_fill` itself uses.
@@ -110,32 +106,6 @@ fn naive_occluded_fill(a: Bitboard, empty: Bitboard, dir: Direction) -> Bitboard
                 break;
             }
             current = next;
-        }
-    }
-    result
-}
-
-/// Reference definition of `knight_attacks`: for every set square, every one of
-/// the 8 (df, dr) knight deltas that stays on the board. Built from
-/// `Square::offset`/`Bitboard::with`, not from whatever shift-and-mask technique
-/// `knight_attacks` itself uses.
-fn naive_knight_attacks(a: Bitboard) -> Bitboard {
-    const DELTAS: [(i8, i8); 8] = [
-        (1, 2),
-        (2, 1),
-        (2, -1),
-        (1, -2),
-        (-1, -2),
-        (-2, -1),
-        (-2, 1),
-        (-1, 2),
-    ];
-    let mut result = Bitboard::EMPTY;
-    for sq in a {
-        for (df, dr) in DELTAS {
-            if let Some(target) = sq.offset(df, dr) {
-                result = result.with(target);
-            }
         }
     }
     result
@@ -442,56 +412,6 @@ proptest! {
         prop_assert_eq!(a.occluded_fill(Bitboard::ALL, Direction::South), a.south_fill());
     }
 
-    // ---- Pawn attacks ----
-
-    #[test]
-    fn pawn_attacks_east_matches_shift(a in any_bitboard(), color in any_color()) {
-        let expected = match color {
-            Color::White => a.shift(Direction::NorthEast),
-            Color::Black => a.shift(Direction::SouthEast),
-        };
-        prop_assert_eq!(a.pawn_attacks_east(color), expected);
-    }
-
-    #[test]
-    fn pawn_attacks_west_matches_shift(a in any_bitboard(), color in any_color()) {
-        let expected = match color {
-            Color::White => a.shift(Direction::NorthWest),
-            Color::Black => a.shift(Direction::SouthWest),
-        };
-        prop_assert_eq!(a.pawn_attacks_west(color), expected);
-    }
-
-    #[test]
-    fn pawn_attacks_never_increase_count(a in any_bitboard(), color in any_color()) {
-        prop_assert!(a.pawn_attacks_east(color).count() <= a.count());
-        prop_assert!(a.pawn_attacks_west(color).count() <= a.count());
-    }
-
-    // ---- Pawn pushes ----
-
-    #[test]
-    fn pawn_pushes_matches_shift_and_empty(
-        a in any_bitboard(),
-        empty in any_bitboard(),
-        color in any_color(),
-    ) {
-        let expected = match color {
-            Color::White => a.shift(Direction::North).and(empty),
-            Color::Black => a.shift(Direction::South).and(empty),
-        };
-        prop_assert_eq!(a.pawn_pushes(color, empty), expected);
-    }
-
-    #[test]
-    fn pawn_pushes_always_land_on_empty_squares(
-        a in any_bitboard(),
-        empty in any_bitboard(),
-        color in any_color(),
-    ) {
-        prop_assert_eq!(a.pawn_pushes(color, empty).and_not(empty), Bitboard::EMPTY);
-    }
-
     // ---- Dilation ----
 
     #[test]
@@ -506,20 +426,5 @@ proptest! {
     #[test]
     fn dilate_is_a_superset(a in any_bitboard()) {
         prop_assert_eq!(a.and_not(a.dilate()), Bitboard::EMPTY);
-    }
-
-    // ---- Knight attacks ----
-    //
-    // Unlike dilate, self is NOT a subset of knight_attacks(self) — a knight
-    // never attacks its own square — so there's no superset property here.
-
-    #[test]
-    fn knight_attacks_matches_naive_deltas(a in any_bitboard()) {
-        prop_assert_eq!(a.knight_attacks(), naive_knight_attacks(a));
-    }
-
-    #[test]
-    fn knight_attacks_never_exceeds_eight_per_square(a in any_bitboard()) {
-        prop_assert!(a.knight_attacks().count() <= a.count() * 8);
     }
 }

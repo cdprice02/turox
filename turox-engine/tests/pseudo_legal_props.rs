@@ -2,9 +2,9 @@
 //!
 //! `pawn_moves`, `knight_moves`, `king_moves`, and `slider_moves` each get a
 //! proptest against an independent naive reference built only from
-//! `Square::offset` stepping and `Board` accessors — never from
-//! `Bitboard::pawn_pushes`/`pawn_attacks_*`/`tables`/`magic`, matching the
-//! discipline in `tests/attacks_props.rs` and `tests/tables_props.rs`. Move
+//! `Square::offset` stepping and `Board` accessors — never from `Bitboard`'s
+//! shift primitives, `tables`, or `magic`, matching the discipline in
+//! `tests/attacks_props.rs` and `tests/tables_props.rs`. Move
 //! lists are compared as sorted `(from, to, flags)` triples, since `Move` has
 //! no `Ord` and generation order isn't part of the contract.
 //!

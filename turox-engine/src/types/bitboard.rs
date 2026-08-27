@@ -258,7 +258,7 @@ impl Bitboard {
     /// order), and to `self.bits().reverse_bits()`.
     #[inline]
     pub const fn rotate_180(self) -> Self {
-        self.flip_vertical().flip_horizontal()
+        Bitboard::from_bits(self.bits().reverse_bits())
     }
 
     /// Flip vertically for `Black`, identity for `White` — views the board from
@@ -271,12 +271,12 @@ impl Bitboard {
         }
     }
 
-    // ---- Planned for the move-generation change ----
+    // ---- Move-generation helpers ----
     // Signatures fixed now so downstream code has a stable shape to write against.
 
-    /// Every subset of `self`, via Carry-Rippler (`sub = (sub - self) & self`),
-    /// including `EMPTY` and `self`. Walks a magic-bitboard mask's occupancies
-    /// during table generation; not meant for boards with many bits set.
+    /// Every subset of `self`, via Carry-Rippler, including `EMPTY` and `self`.
+    /// Walks a magic-bitboard mask's occupancies during table generation;
+    /// not meant for boards with many bits set.
     pub fn subsets(self) -> impl Iterator<Item = Bitboard> {
         let mut next: Option<Bitboard> = Some(Bitboard::EMPTY);
         std::iter::from_fn(move || {
@@ -341,34 +341,6 @@ impl Bitboard {
         gen
     }
 
-    /// Pawns of `color` on `self`, attacking east (white: NE; black: SE).
-    #[inline]
-    pub const fn pawn_attacks_east(self, color: Color) -> Self {
-        match color {
-            Color::White => self.shift(Direction::NorthEast),
-            Color::Black => self.shift(Direction::SouthEast),
-        }
-    }
-
-    /// Pawns of `color` on `self`, attacking west (white: NW; black: SW).
-    #[inline]
-    pub const fn pawn_attacks_west(self, color: Color) -> Self {
-        match color {
-            Color::White => self.shift(Direction::NorthWest),
-            Color::Black => self.shift(Direction::SouthWest),
-        }
-    }
-
-    /// Single-step forward pushes for pawns of `color` on `self`, onto `empty`
-    /// squares only.
-    #[inline]
-    pub const fn pawn_pushes(self, color: Color, empty: Self) -> Self {
-        match color {
-            Color::White => self.shift(Direction::North).and(empty),
-            Color::Black => self.shift(Direction::South).and(empty),
-        }
-    }
-
     /// 8-neighbour expansion: `self` unioned with every adjacent square (king-move
     /// dilation, for king safety / king-ring evaluation).
     #[inline]
@@ -377,25 +349,6 @@ impl Bitboard {
         dilated.or(dilated
             .shift(Direction::North)
             .or(dilated.shift(Direction::South)))
-    }
-
-    /// Every square a knight on `self` attacks, for every knight in the set at
-    /// once. Not a `shift`/fill composition — knight moves are a discontinuous
-    /// jump, not a smear or single step — but they do have their own compound
-    /// shift-with-masking formula (CPW's "Knight Pattern"), same technique family
-    /// as `shift`'s diagonals, just wider file-edge masks since a knight can
-    /// cross two files in one move. Also what generates the eventual per-square
-    /// `KNIGHT_ATTACKS` lookup table in `move_gen/tables.rs`.
-    #[inline]
-    pub const fn knight_attacks(self) -> Self {
-        let x = self.bits();
-        let l1 = (x >> 1) & 0x7F7F7F7F7F7F7F7F;
-        let l2 = (x >> 2) & 0x3F3F3F3F3F3F3F3F;
-        let r1 = (x << 1) & 0xFEFEFEFEFEFEFEFE;
-        let r2 = (x << 2) & 0xFCFCFCFCFCFCFCFC;
-        let h1 = l1 | r1;
-        let h2 = l2 | r2;
-        Self::from_bits((h1 << 16) | (h1 >> 16) | (h2 << 8) | (h2 >> 8))
     }
 }
 
@@ -540,28 +493,5 @@ mod tests {
             .with(Square::B1)
             .with(Square::B2);
         assert_eq!(Square::A1.bitboard().dilate(), expected);
-    }
-
-    /// A knight on a central square has all 8 legal moves.
-    #[test]
-    fn knight_attacks_center_square_has_all_eight_moves() {
-        let expected = Bitboard::EMPTY
-            .with(Square::F6)
-            .with(Square::G5)
-            .with(Square::G3)
-            .with(Square::F2)
-            .with(Square::D2)
-            .with(Square::C3)
-            .with(Square::C5)
-            .with(Square::D6);
-        assert_eq!(Square::E4.bitboard().knight_attacks(), expected);
-    }
-
-    /// A knight in the corner has only 2 legal moves — the classic "knight on
-    /// the rim is dim" case.
-    #[test]
-    fn knight_attacks_corner_square_has_only_two_moves() {
-        let expected = Bitboard::EMPTY.with(Square::B3).with(Square::C2);
-        assert_eq!(Square::A1.bitboard().knight_attacks(), expected);
     }
 }

@@ -3,8 +3,8 @@
 //!
 //! Every function gets a reference-equivalence check against an independent
 //! implementation built directly from `Square::offset` stepping, not from
-//! `tables`/`magic`/`Bitboard::knight_attacks` — same discipline as
-//! `tests/tables_props.rs` and `tests/magic_props.rs`. `attackers_of` in
+//! `tables`/`magic` — same discipline as `tests/tables_props.rs` and
+//! `tests/magic_props.rs`. `attackers_of` in
 //! particular is checked against the *forward* naive definition rather than a
 //! second reverse one, per the module doc's reasoning: a forward
 //! implementation can't get the pawn-color flip wrong because it never inverts
