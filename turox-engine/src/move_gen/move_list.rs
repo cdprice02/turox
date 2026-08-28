@@ -76,6 +76,14 @@ impl MoveList {
         // stable); `split_at` is.
         self.moves.split_at(self.len).0
     }
+
+    /// The pushed moves, in push order, mutably: what move ordering (e.g.
+    /// MVV-LVA capture ordering) sorts in place. Same `split_at`-based
+    /// approach as `as_slice`, so it's just as incapable of touching the
+    /// unused tail past `len`: the returned slice never includes it.
+    pub fn as_mut_slice(&mut self) -> &mut [Move] {
+        self.moves.split_at_mut(self.len).0
+    }
 }
 
 impl Default for MoveList {
@@ -92,6 +100,15 @@ impl std::ops::Deref for MoveList {
 
     fn deref(&self) -> &[Move] {
         self.as_slice()
+    }
+}
+
+/// Same reasoning as `Deref`, mutably: lets a `&mut MoveList` be sorted
+/// in place (`.sort_by_key(..)`, `.reverse()`, ...) without callers writing
+/// `.as_mut_slice()` everywhere.
+impl std::ops::DerefMut for MoveList {
+    fn deref_mut(&mut self) -> &mut [Move] {
+        self.as_mut_slice()
     }
 }
 
@@ -216,6 +233,43 @@ mod tests {
         list.push(m(Square::D2, Square::D4));
         let via_deref: &[Move] = &list;
         assert_eq!(via_deref, list.as_slice());
+    }
+
+    #[test]
+    fn as_mut_slice_reorders_in_place_without_disturbing_len_or_the_tail() {
+        let mut list = MoveList::new();
+        let moves = [
+            m(Square::E2, Square::E4),
+            m(Square::G1, Square::F3),
+            m(Square::B1, Square::C3),
+        ];
+        for &mv in &moves {
+            list.push(mv);
+        }
+        list.as_mut_slice().reverse();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.as_slice(), &[moves[2], moves[1], moves[0]]);
+
+        // If reordering had somehow touched `len` or the backing array past
+        // it (rather than being confined to the live `len()`-element slice
+        // `as_mut_slice` hands out), a push right after would land on the
+        // wrong index or silently overwrite something already there.
+        let fourth = m(Square::D2, Square::D4);
+        list.push(fourth);
+        assert_eq!(list.len(), 4);
+        assert_eq!(list.as_slice(), &[moves[2], moves[1], moves[0], fourth]);
+    }
+
+    #[test]
+    fn deref_mut_matches_as_mut_slice() {
+        let mut list = MoveList::new();
+        list.push(m(Square::E2, Square::E4));
+        list.push(m(Square::D2, Square::D4));
+        list.reverse(); // via DerefMut, not a direct as_mut_slice() call
+        assert_eq!(
+            list.as_slice(),
+            &[m(Square::D2, Square::D4), m(Square::E2, Square::E4)]
+        );
     }
 
     #[test]
