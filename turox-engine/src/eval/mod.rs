@@ -1,6 +1,6 @@
 //! Static position evaluation: material (below), piece-square tables
-//! (`pst`, landing separately in #22), and pawn structure (#23), returned
-//! from the side-to-move's perspective via `evaluate`.
+//! (`pst`), and pawn structure (#23), returned from the side-to-move's
+//! perspective via `evaluate`.
 //!
 //! `eval_white_pov` is the absolute (White-relative) sum of terms;
 //! `evaluate` is the side-to-move-relative wrapper negamax search wants.
@@ -10,8 +10,11 @@
 //! eval breakdown is readable in White-POV and confusing in side-relative.
 
 use crate::board::Board;
+use crate::eval::pst::pst_value;
 use crate::types::Color;
 use crate::Piece;
+
+pub mod pst;
 
 /// A position score in centipawns. Positive favors whoever the score is
 /// relative to: White for `eval_white_pov`, the side to move for `evaluate`.
@@ -27,20 +30,26 @@ pub type Score = i32;
 /// side, so a king value would cancel identically and only invite overflow.
 const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
 
-/// Material sum from White's perspective: positive means White is ahead,
-/// regardless of who's actually to move.
+/// Material plus piece-square sum from White's perspective: positive means
+/// White is ahead, regardless of who's actually to move.
 ///
-/// Sum `PIECE_VALUES[piece] * board.pieces(color, piece).count()` over every
-/// `(Color, Piece)` pair, White's total minus Black's. Iterate
-/// `board.pieces` (bitboard counts), not `board.piece_at` over `Square::ALL`:
-/// the mailbox walk is reserved for `tests/eval_props.rs`'s independent
-/// reference, which this gets checked against and shouldn't share code with.
+/// For every `(Color, Piece)` pair, sums `PIECE_VALUES[piece] + pst_value`
+/// over each of that color's squares, White's total minus Black's. Iterates
+/// `board.pieces` (a `Bitboard`, so `for sq in ...` walks its set squares),
+/// not `board.piece_at` over `Square::ALL`: the mailbox walk is reserved for
+/// `tests/eval_props.rs`'s independent reference, which this gets checked
+/// against and shouldn't share code with.
 pub fn eval_white_pov(board: &Board) -> Score {
     let mut score = Score::default();
     for piece in Piece::ALL {
-        score += (board.pieces(Color::White, piece).count() as i32
-            - board.pieces(Color::Black, piece).count() as i32)
-            * PIECE_VALUES[piece as usize];
+        for sq in board.pieces(Color::White, piece) {
+            score += PIECE_VALUES[piece as usize];
+            score += pst_value(Color::White, piece, sq);
+        }
+        for sq in board.pieces(Color::Black, piece) {
+            score -= PIECE_VALUES[piece as usize];
+            score -= pst_value(Color::Black, piece, sq);
+        }
     }
     score
 }
