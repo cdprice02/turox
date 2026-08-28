@@ -1,7 +1,10 @@
 //! `Board::make_move`: copy-make application of a single legal move.
 
 use super::Board;
-use crate::types::{CastlingRights, Color, ColoredPiece, Move, MoveFlags, Piece, Square};
+use crate::{
+    board::zobrist,
+    types::{CastlingRights, Color, ColoredPiece, Move, MoveFlags, Piece, Square},
+};
 
 impl Board {
     /// Applies `m` to a copy of this position and returns the result (copy-make;
@@ -9,6 +12,8 @@ impl Board {
     pub fn make_move(&self, m: Move) -> Board {
         let mut board = *self;
         let color = board.side_to_move();
+        let castling = board.castling_rights();
+        let en_passant = board.en_passant();
 
         let moved_piece = board
             .remove(m.from())
@@ -122,6 +127,20 @@ impl Board {
             board.fullmove_number += 1;
         }
         board.side_to_move = color.flip();
+
+        // `board.hash` still carries the *old* castling/en-passant/side-to-move
+        // contribution (only `place`/`remove` touched the hash above, for the
+        // piece-square deltas). XORing the old value in again on its own would
+        // just cancel that contribution to zero, not swap it for the new one,
+        // so both halves go in together per fact: XORing the same value in
+        // twice is a no-op, which is exactly "cancel old, then add new."
+        board.hash ^= zobrist::castling_hash(castling)
+            ^ zobrist::castling_hash(board.castling_rights())
+            ^ zobrist::en_passant_hash(en_passant)
+            ^ zobrist::en_passant_hash(board.en_passant())
+            ^ zobrist::side_to_move_hash(color)
+            ^ zobrist::side_to_move_hash(color.flip());
+
         board
     }
 }

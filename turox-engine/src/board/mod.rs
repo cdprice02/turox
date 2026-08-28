@@ -14,10 +14,11 @@ pub use error::InvalidFenError;
 
 /// A chess position.
 ///
-/// `Copy` and ~136 bytes (8 bitboards + a 64-byte mailbox + game state), built for
-/// copy-make: `make_move` takes `&self` and returns a new `Board` rather than
-/// mutating in place plus an undo stack. No undo-state bugs, and it stays trivially
-/// parallel if lazy SMP search happens later.
+/// `Copy` and ~144 bytes (8 bitboards + a 64-byte mailbox + game state + the
+/// Zobrist hash), built for copy-make: `make_move` takes `&self` and returns
+/// a new `Board` rather than mutating in place plus an undo stack. No
+/// undo-state bugs, and it stays trivially parallel if lazy SMP search
+/// happens later.
 ///
 /// The mailbox (`piece_at` in O(1)) exists alongside the bitboards specifically
 /// because captures, SEE, and eval all want "what's on this square" far more often
@@ -25,7 +26,7 @@ pub use error::InvalidFenError;
 /// 6-bitboard scan is worth it. `ColoredPiece` being a single `repr(u8)` enum rather
 /// than a `{ color, piece }` struct is what keeps `Option<ColoredPiece>` to 1 byte
 /// (a niche in the 12..=255 range) instead of 2, halving this array from 128 bytes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Eq)]
 pub struct Board {
     by_color: [Bitboard; 2],
     by_piece: [Bitboard; 6],
@@ -35,6 +36,31 @@ pub struct Board {
     en_passant: Option<Square>,
     halfmove_clock: u8,
     fullmove_number: u16,
+    /// This position's Zobrist hash (`zobrist`), maintained incrementally by
+    /// `place`/`remove`/`from_parts`/`make_move`. Deliberately excluded from
+    /// `PartialEq` (see the manual impl below): it's a pure function of
+    /// every other field, not part of a position's identity, so it
+    /// shouldn't change what "equal" means for callers. A hash-maintenance
+    /// bug should surface as a `tests/zobrist_props.rs` failure, not as
+    /// every unrelated equality-based test in the suite going red alongside
+    /// it.
+    hash: u64,
+}
+
+/// Compares every field except `hash`; see that field's own doc for why.
+/// `tests/zobrist_props.rs` checks hash correctness directly, through
+/// `Board::hash()`/`zobrist::compute_hash`, rather than through this impl.
+impl PartialEq for Board {
+    fn eq(&self, other: &Self) -> bool {
+        self.by_color == other.by_color
+            && self.by_piece == other.by_piece
+            && self.mailbox == other.mailbox
+            && self.side_to_move == other.side_to_move
+            && self.castling == other.castling
+            && self.en_passant == other.en_passant
+            && self.halfmove_clock == other.halfmove_clock
+            && self.fullmove_number == other.fullmove_number
+    }
 }
 
 impl Default for Board {
@@ -60,6 +86,10 @@ impl Board {
             en_passant: None,
             halfmove_clock: 0,
             fullmove_number: 1,
+            // No pieces, White to move, no rights, no en passant target:
+            // every one of `zobrist`'s contributions is absent, so `0` is
+            // the actually-correct hash here, not just a placeholder.
+            hash: 0,
         }
     }
 
@@ -111,8 +141,16 @@ impl Board {
             );
             i += 1;
         }
-        board.castling = CastlingRights::ALL;
-        board
+        // Routes through `from_parts` rather than `board.castling =
+        // CastlingRights::ALL` directly (as this used to): `from_parts` is
+        // documented as "the single path every non-placement field goes
+        // through," which this was quietly the one exception to, and now
+        // that non-placement state feeds the Zobrist hash too, bypassing it
+        // would leave `START_POS`'s hash missing its castling-rights
+        // contribution. `blank()`'s side_to_move/en_passant/clocks already
+        // match what start position wants, so only `castling` actually
+        // changes here.
+        Self::from_parts(board, Color::White, CastlingRights::ALL, None, 0, 1)
     }
 
     /// Places `cp` on `sq`, keeping the mailbox and the bitboards in sync. Does not
@@ -126,6 +164,7 @@ impl Board {
         self.mailbox[sq.index() as usize] = Some(cp);
         self.by_color[cp.color() as usize] = self.by_color[cp.color() as usize].or(sq.bitboard());
         self.by_piece[cp.piece() as usize] = self.by_piece[cp.piece() as usize].or(sq.bitboard());
+        self.hash ^= zobrist::piece_square_hash(cp, sq);
     }
 
     /// Builds a full `Board` from a placement-only board (assembled via
@@ -142,12 +181,25 @@ impl Board {
         halfmove_clock: u8,
         fullmove_number: u16,
     ) -> Board {
+        // `placement.hash` only ever carries the piece-square contribution
+        // (that's all `place`/`remove` touch), regardless of whatever
+        // side_to_move/castling/en_passant `placement` itself happened to
+        // have, since those are about to be fully overwritten below. XORing
+        // in the side-to-move/castling/en-passant contribution for the
+        // *final* state here, once, is what keeps every non-incremental
+        // construction path (FEN parsing, `start_pos`, test helpers) hashed
+        // correctly without needing its own copy of this logic.
+        let hash = placement.hash
+            ^ zobrist::side_to_move_hash(side_to_move)
+            ^ zobrist::castling_hash(castling)
+            ^ zobrist::en_passant_hash(en_passant);
         Board {
             side_to_move,
             castling,
             en_passant,
             halfmove_clock,
             fullmove_number,
+            hash,
             ..placement
         }
     }
@@ -159,6 +211,7 @@ impl Board {
             self.by_color[cp.color() as usize].and_not(sq.bitboard());
         self.by_piece[cp.piece() as usize] =
             self.by_piece[cp.piece() as usize].and_not(sq.bitboard());
+        self.hash ^= zobrist::piece_square_hash(cp, sq);
         Some(cp)
     }
 
@@ -209,6 +262,13 @@ impl Board {
     /// The full-move number, incrementing after each Black move.
     pub const fn fullmove_number(&self) -> u16 {
         self.fullmove_number
+    }
+
+    /// This position's Zobrist hash. Read this, not `zobrist::compute_hash`
+    /// (that exists purely as this field's incremental-maintenance test
+    /// oracle, checked against it in `tests/zobrist_props.rs`).
+    pub const fn hash(&self) -> u64 {
+        self.hash
     }
 }
 
