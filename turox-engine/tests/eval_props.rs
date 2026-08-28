@@ -119,7 +119,7 @@ proptest! {
 // board, and the start position is its own mirror (White's setup is exactly
 // Black's, rank-flipped and color-swapped). So eval_white_pov(start) ==
 // -eval_white_pov(mirrored(start)) == -eval_white_pov(start), which forces
-// eval_white_pov(start) == 0 regardless of what's in PST -- true for any
+// eval_white_pov(start) == 0 regardless of what's in PST: true for any
 // self-mirror-symmetric position, not a coincidence about these particular
 // table values.
 #[test]

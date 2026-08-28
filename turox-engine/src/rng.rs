@@ -1,6 +1,6 @@
 //! A deterministic, fixed-seed PRNG. Crate-private: this exists to make search
-//! results (magic numbers, and eventually Zobrist keys) reproducible across runs
-//! and platforms, not for anything an outside caller should reach for.
+//! results (magic numbers, and Zobrist keys) reproducible across runs and
+//! platforms, not for anything an outside caller should reach for.
 //!
 //! `xorshift64star` is the algorithm, not an implementation choice up for grabs:
 //! Sebastiano Vigna's xorshift64* (2014), the same generator Stockfish uses for
@@ -12,14 +12,15 @@
 //! output against known-answer test vectors, cross-checked outside this crate,
 //! rather than trusting it by inspection.
 //!
-//! `board/zobrist.rs`'s TODO already commits to needing a fixed-seed const PRNG
-//! for its key table; this is that PRNG's home. `benches/bitboard.rs`'s local
-//! `XorShift64` (used only to generate varied bench inputs) can't fold into this
-//! the same way, despite the similar shape: benches compile as their own binary,
-//! like `tests/*.rs`, so they only see `pub` API. `xorshift64star` staying
-//! crate-private is deliberate (see above), which means it stays invisible there
-//! regardless. That duplication is fine; only the *reproducible-across-runs*
-//! use case (magics, Zobrist keys) needs the real thing.
+//! `board::zobrist::generate_keys` is this PRNG's other caller, walking it
+//! forward from a fixed seed to build the Zobrist key table at compile time.
+//! `benches/bitboard.rs`'s local `XorShift64` (used only to generate varied
+//! bench inputs) can't fold into this the same way, despite the similar
+//! shape: benches compile as their own binary, like `tests/*.rs`, so they
+//! only see `pub` API. `xorshift64star` staying crate-private is deliberate
+//! (see above), which means it stays invisible there regardless. That
+//! duplication is fine; only the *reproducible-across-runs* use case
+//! (magics, Zobrist keys) needs the real thing.
 //!
 //! # Gotcha: zero is a fixed point
 //!
@@ -33,10 +34,11 @@
 /// Deterministic: the same `state` always produces the same output, on any
 /// platform, in any Rust version. That reproducibility is the entire point of
 /// hand-rolling this instead of using a real RNG crate. See the module doc for
-/// the zero-is-a-fixed-point gotcha; `state` must be nonzero. Wired up by
-/// `move_gen::magic::regen`'s magic search, the only caller; that module is
-/// `#[cfg(test)]`-gated, so a plain (non-test) build has no caller at all.
-#[allow(dead_code)] // only called from regen, which is #[cfg(test)]-only
+/// the zero-is-a-fixed-point gotcha; `state` must be nonzero. Two callers:
+/// `move_gen::magic::regen`'s magic search (`#[cfg(test)]`-gated) and
+/// `board::zobrist::generate_keys` (not gated at all: it runs at compile
+/// time to build every real build's Zobrist key table), so unlike most of
+/// this module, a plain non-test build does exercise this function.
 pub(crate) const fn xorshift64star(state: u64) -> u64 {
     let mut x = state;
     x ^= x >> 12;
