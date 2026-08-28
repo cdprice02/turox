@@ -28,6 +28,10 @@ name = "bitboard"
 harness = false
 
 [[bench]]
+name = "eval"
+harness = false
+
+[[bench]]
 name = "fen"
 harness = false
 

@@ -121,3 +121,55 @@ pub fn any_board() -> impl Strategy<Value = Board> {
             Board::from_parts(board, side_to_move, rights, None, 0, 1)
         })
 }
+
+/// The color-swapped mirror of `board`: every White piece becomes the same
+/// kind of Black piece on the rank-flipped square, and vice versa. Side to
+/// move, castling rights, and the en passant square (if any) are swapped and
+/// rank-flipped to match. Used by `tests/eval_props.rs`'s mirror-symmetry
+/// check (`eval_white_pov(b) == -eval_white_pov(mirrored(b))`), the single
+/// test most likely to catch a scrambled White/Black lookup, since it's
+/// checked against every randomly generated position rather than one
+/// hand-written case.
+///
+/// Test-only and built purely from `Board`'s public API (`piece_at`,
+/// `place`, `from_parts`) rather than promoted onto `Board` itself: nothing
+/// outside tests needs a whole-position color swap yet, so this stays here
+/// until something does.
+pub fn mirrored(board: &Board) -> Board {
+    let mut placement = Board::default();
+    for sq in Square::ALL {
+        if let Some(cp) = board.piece_at(sq) {
+            let mirrored_cp = ColoredPiece::new(cp.color().flip(), cp.piece());
+            placement.place(sq.flip_rank(), mirrored_cp);
+        }
+    }
+    Board::from_parts(
+        placement,
+        board.side_to_move().flip(),
+        mirror_castling_rights(board.castling_rights()),
+        board.en_passant().map(Square::flip_rank),
+        board.halfmove_clock(),
+        board.fullmove_number(),
+    )
+}
+
+/// `rights` with White's and Black's castling rights swapped.
+/// `CastlingRights` has no such method itself (nothing outside this mirror
+/// needs one); built from `contains`/`with` rather than poking at its
+/// internal bit layout.
+fn mirror_castling_rights(rights: CastlingRights) -> CastlingRights {
+    let mut swapped = CastlingRights::NONE;
+    if rights.contains(CastlingRights::WHITE_KINGSIDE) {
+        swapped = swapped.with(CastlingRights::BLACK_KINGSIDE);
+    }
+    if rights.contains(CastlingRights::WHITE_QUEENSIDE) {
+        swapped = swapped.with(CastlingRights::BLACK_QUEENSIDE);
+    }
+    if rights.contains(CastlingRights::BLACK_KINGSIDE) {
+        swapped = swapped.with(CastlingRights::WHITE_KINGSIDE);
+    }
+    if rights.contains(CastlingRights::BLACK_QUEENSIDE) {
+        swapped = swapped.with(CastlingRights::WHITE_QUEENSIDE);
+    }
+    swapped
+}
