@@ -1,6 +1,55 @@
-//! Static position evaluation: material, piece-square tables, and pawn structure
-//! (using `Bitboard::north_fill`/`file_fill` for passed/isolated/doubled pawns once
-//! those land), returned from the side-to-move's perspective.
+//! Static position evaluation: material (below), piece-square tables
+//! (`pst`, landing separately in #22), and pawn structure (#23), returned
+//! from the side-to-move's perspective via `evaluate`.
 //!
-//! Not yet implemented; waits on `board` for position state and, for the pawn
-//! structure terms specifically, on the Kogge-Stone fill methods on `Bitboard`.
+//! `eval_white_pov` is the absolute (White-relative) sum of terms;
+//! `evaluate` is the side-to-move-relative wrapper negamax search wants.
+//! Kept as two functions rather than one: the mirror-symmetry property test
+//! in `tests/eval_props.rs` (`eval_white_pov(b) == -eval_white_pov(mirrored(b))`)
+//! is only cleanly expressible against the absolute version, and a printed
+//! eval breakdown is readable in White-POV and confusing in side-relative.
+
+use crate::board::Board;
+use crate::types::Color;
+use crate::Piece;
+
+/// A position score in centipawns. Positive favors whoever the score is
+/// relative to: White for `eval_white_pov`, the side to move for `evaluate`.
+pub type Score = i32;
+
+/// Standard piece values in centipawns, indexed by `Piece as usize`. Lives
+/// here rather than as a `Piece::value()` method: what a knight is worth is
+/// an evaluation policy that will change as the engine gets tuned, not an
+/// intrinsic property of the type, and `types` shouldn't depend on `eval`'s
+/// opinions.
+///
+/// Kings score 0: every position `legal_moves` can reach has exactly one per
+/// side, so a king value would cancel identically and only invite overflow.
+const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
+
+/// Material sum from White's perspective: positive means White is ahead,
+/// regardless of who's actually to move.
+///
+/// Sum `PIECE_VALUES[piece] * board.pieces(color, piece).count()` over every
+/// `(Color, Piece)` pair, White's total minus Black's. Iterate
+/// `board.pieces` (bitboard counts), not `board.piece_at` over `Square::ALL`:
+/// the mailbox walk is reserved for `tests/eval_props.rs`'s independent
+/// reference, which this gets checked against and shouldn't share code with.
+pub fn eval_white_pov(board: &Board) -> Score {
+    let mut score = Score::default();
+    for piece in Piece::ALL {
+        score += (board.pieces(Color::White, piece).count() as i32
+            - board.pieces(Color::Black, piece).count() as i32)
+            * PIECE_VALUES[piece as usize];
+    }
+    score
+}
+
+/// Side-to-move-relative score: positive means the side to move is ahead.
+/// The convention negamax search wants.
+pub fn evaluate(board: &Board) -> Score {
+    match board.side_to_move() {
+        Color::White => eval_white_pov(board),
+        Color::Black => -eval_white_pov(board),
+    }
+}
