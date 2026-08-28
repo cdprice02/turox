@@ -23,7 +23,12 @@ impl Board {
         if piece == Piece::Pawn || m.flags().is_capture() {
             board.halfmove_clock = 0;
         } else {
-            board.halfmove_clock += 1;
+            // `saturating_add`, not `+=`: a deep search line starting from a
+            // position with the clock already near 255 would otherwise
+            // overflow-panic in debug or silently wrap in release, well
+            // before search::draw's fifty-move check (>= 100) would ever
+            // trigger to end the line first.
+            board.halfmove_clock = board.halfmove_clock.saturating_add(1);
         }
 
         if piece == Piece::King {
@@ -308,6 +313,26 @@ mod tests {
         let next = board.make_move(Move::new(Square::E1, Square::G1, MoveFlags::KingCastle));
 
         assert_eq!(next.halfmove_clock(), 12);
+    }
+
+    #[test]
+    fn halfmove_clock_saturates_instead_of_overflowing() {
+        // Starts at 253 so three consecutive non-pawn, non-capture moves
+        // push past u8::MAX (255): 254, then 255, then a third that would
+        // wrap to 0 with a plain `+= 1` instead of staying at 255.
+        let board = Board::try_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 253 1").expect("valid FEN");
+        let after_one = board.make_move(Move::new(Square::E1, Square::D1, MoveFlags::Quiet));
+        assert_eq!(after_one.halfmove_clock(), 254);
+
+        let after_two = after_one.make_move(Move::new(Square::E8, Square::D8, MoveFlags::Quiet));
+        assert_eq!(after_two.halfmove_clock(), 255);
+
+        let after_three = after_two.make_move(Move::new(Square::D1, Square::E1, MoveFlags::Quiet));
+        assert_eq!(
+            after_three.halfmove_clock(),
+            u8::MAX,
+            "must saturate at u8::MAX, not wrap to 0"
+        );
     }
 
     #[test]
