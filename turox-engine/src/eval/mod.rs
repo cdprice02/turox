@@ -28,7 +28,11 @@ pub type Score = i32;
 ///
 /// Kings score 0: every position `legal_moves` can reach has exactly one per
 /// side, so a king value would cancel identically and only invite overflow.
-const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
+///
+/// `pub(crate)` rather than private: `search`'s MVV-LVA move ordering reuses
+/// this same value scale for ranking captures, rather than maintaining a
+/// second table that could drift out of sync with this one.
+pub(crate) const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
 
 /// Material plus piece-square sum from White's perspective: positive means
 /// White is ahead, regardless of who's actually to move.

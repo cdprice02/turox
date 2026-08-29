@@ -9,10 +9,12 @@
 //!   formatting, built on `types`.
 //! - [`move_gen`]: attack tables, magic bitboards, pseudolegal and legal move
 //!   generation, and `perft`.
-//! - `search`: iterative deepening search over a transposition table.
+//! - [`search`]: negamax with alpha-beta over iterative deepening, driven by
+//!   a depth or node budget (a transposition table is a later addition).
+//! - [`eval`]: static position evaluation (material and piece-square
+//!   tables).
+//! - `uci`: the UCI protocol, driving the engine from `turox-cli`.
 //!   *(planned)*
-//! - `eval`: static position evaluation. *(planned)*
-//! - `uci`: the UCI protocol, driving the engine from `turox-cli`. *(planned)*
 //!
 //! `types` sits at the crate root rather than under `board` because move
 //! generation, search, and evaluation all need `Bitboard`/`Square`/`Move` without
@@ -29,7 +31,7 @@ pub mod uci;
 pub use types::*;
 
 /// The engine's top-level handle: the position it's tracking, plus (once
-/// `search`/`uci` land) the loop that drives it from a UCI-speaking GUI.
+/// `uci` lands) the loop that drives it from a UCI-speaking GUI.
 #[derive(Debug, Default)]
 pub struct Engine {
     board: board::Board,
@@ -47,6 +49,6 @@ impl Engine {
     }
 
     /// Drives the engine from stdin/stdout via UCI. Not yet implemented;
-    /// waits on `search`/`uci`.
+    /// waits on `uci`.
     pub fn run(&self) {}
 }
