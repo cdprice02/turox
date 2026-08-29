@@ -13,6 +13,8 @@ use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
 use crate::search::draw::is_draw;
 use crate::types::Move;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The score magnitude of a certain checkmate. A node where the side to
@@ -86,11 +88,15 @@ pub struct Search {
     /// reaches this count. A wall-clock deadline makes "iterative deepening
     /// was interrupted partway through a deeper iteration" untestable
     /// without a flaky sleep; a node budget makes it exact and repeatable
-    /// (see `tests/search_props.rs`). UCI's real-clock wiring (a later
-    /// issue) is expected to layer `deadline` on top of this mechanism, not
-    /// replace it.
+    /// (see `tests/search_props.rs`).
     max_nodes: Option<u64>,
-    stop: bool,
+    /// `Arc`, not a plain `bool`: UCI's `stop` command arrives on a
+    /// different thread than the one running `search` (see #26's threading
+    /// model), so setting it has to be visible across threads without
+    /// `Search` itself being shared. [`Search::stop_flag`] hands out a
+    /// clone of this same `Arc` before a caller moves `Search` onto its own
+    /// search thread, so the main thread can still set it later.
+    stop: Arc<AtomicBool>,
 }
 
 impl Search {
@@ -105,7 +111,7 @@ impl Search {
             history,
             deadline: None,
             max_nodes: None,
-            stop: false,
+            stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -123,12 +129,23 @@ impl Search {
         self
     }
 
-    /// Requests that the search stop as soon as it's next checked. A later
-    /// issue's UCI `stop` handler is expected to call this from another
-    /// thread via a shared flag; this synchronous version is the plumbing
-    /// that wires into, not the cross-thread mechanism itself.
+    /// Requests that the search stop as soon as it's next checked (a plain
+    /// `Relaxed` store: `should_abort` only ever needs to see the flag
+    /// eventually, not synchronize any other memory with it). Equivalent to
+    /// setting the handle from [`Search::stop_flag`] directly; this is the
+    /// convenience version for callers on the same thread as the search.
     pub fn request_stop(&mut self) {
-        self.stop = true;
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    /// A shareable handle to this search's stop flag: clone it out *before*
+    /// moving `Search` onto its own search thread, and a caller on another
+    /// thread (UCI's `stop` command handler, see #26's threading model) can
+    /// still set it via `Ordering::Relaxed` `store`, honored the next time
+    /// `should_abort` checks (same `nodes & 2047` schedule as `deadline`
+    /// and `max_nodes`).
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
     }
 
     /// Total nodes visited so far by this `Search`.
@@ -144,7 +161,7 @@ impl Search {
     /// the top of `negamax`/`quiescence`.
     fn should_abort(&self) -> bool {
         self.nodes & 2047 == 0
-            && (self.stop
+            && (self.stop.load(Ordering::Relaxed)
                 || self.deadline.is_some_and(|d| Instant::now() >= d)
                 || self.max_nodes.is_some_and(|max| self.nodes >= max))
     }

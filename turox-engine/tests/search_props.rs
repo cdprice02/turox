@@ -39,6 +39,8 @@ mod common;
 
 use common::any_board;
 use proptest::prelude::*;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use turox_engine::board::Board;
 use turox_engine::eval::{evaluate, Score};
 use turox_engine::move_gen::attacks::in_check;
@@ -326,6 +328,77 @@ fn interrupted_iteration_keeps_the_last_completed_result() {
         result.best_move.is_some(),
         "the depth-1 iteration completed before the budget tripped, so its move must survive"
     );
+}
+
+/// `Search::stop_flag` hands out an `Arc<AtomicBool>` meant to be cloned
+/// out *before* moving `Search` to its own thread, so a caller elsewhere
+/// (UCI's `stop` handler) can still reach it. Proves the handle really is
+/// shared across a thread boundary: set it from a genuinely different
+/// thread, then confirm `search` (called afterward, on this thread) sees
+/// it and aborts well short of the requested depth. Deterministic rather
+/// than racing a running search: the atomic visibility this depends on
+/// doesn't change based on when the write happens relative to the read,
+/// only on whether it happens through the same shared `Arc`, which is
+/// exactly what this checks.
+///
+/// Not asserting `depth == 0`: `should_abort` only actually reads the flag
+/// every 2048th node (see its own doc), so a shallow position can complete
+/// a couple of cheap iterations before node count first crosses that
+/// boundary, even with the flag already set before `search` was ever
+/// called. That's the same amortized-check tradeoff `max_nodes`/`deadline`
+/// make too, not something specific to `stop`.
+#[test]
+fn stop_flag_set_from_another_thread_is_honored() {
+    let board = Board::start_pos();
+    let mut search = Search::new(Vec::new());
+    let stop_flag = search.stop_flag();
+
+    std::thread::spawn(move || {
+        stop_flag.store(true, Ordering::Relaxed);
+    })
+    .join()
+    .expect("stop-setting thread must not panic");
+
+    let result = search.search(&board, 50);
+    assert!(
+        result.depth < 50,
+        "the flag was already set before search started, so it must abort well short of depth 50, got {}",
+        result.depth
+    );
+}
+
+/// The one genuinely timing-sensitive test in this suite: a 100ms
+/// wall-clock deadline on a branchy position (kiwipete, the same one
+/// `benches/perft.rs`/`benches/search.rs` use) returns within a generous
+/// tolerance rather than running away past its budget. Marked explicitly as
+/// the test that can be flaky on a loaded CI runner, rather than pretending
+/// a wall-clock assertion is as reliable as the rest of the suite;
+/// `interrupted_iteration_keeps_the_last_completed_result` above already
+/// covers the same "return the last completed iteration" behavior
+/// deterministically via `with_max_nodes`, so this test's only job is
+/// proving the wall-clock path specifically isn't ignored.
+#[test]
+fn movetime_deadline_returns_within_a_generous_tolerance() {
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+
+    let deadline = Instant::now() + Duration::from_millis(100);
+    let mut search = Search::new(Vec::new()).with_deadline(deadline);
+
+    let started = Instant::now();
+    let result = search.search(&board, 50);
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "elapsed {elapsed:?} should stay close to the 100ms budget, not run away past it"
+    );
+    assert!(
+        result.nodes > 0,
+        "some search work must have actually happened"
+    );
+    assert!(result.best_move.is_some());
 }
 
 /// A poisoned pawn: `Qd4xd5` looks like a free pawn one ply deep (White up
