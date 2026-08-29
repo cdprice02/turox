@@ -44,6 +44,12 @@ impl MoveFlags {
         )
     }
 
+    /// The move is en passant.
+    #[inline]
+    pub const fn is_en_passant(self) -> bool {
+        matches!(self, MoveFlags::EnPassant)
+    }
+
     /// The piece a promotion variant promotes to, or `None` for non-promotions.
     pub const fn promotion_piece(self) -> Option<Piece> {
         match self {

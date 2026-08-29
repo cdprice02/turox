@@ -7,7 +7,9 @@
 //! bytes total versus `Vec<Move>`'s heap allocation per position is the entire
 //! point of `Move` being packed into a `u16` rather than kept as a wider struct.
 //!
-//! Filled by `pseudo_legal`/`legal`.
+//! Filled by `pseudo_legal`/`legal`, and reordered in place (`as_mut_slice`/
+//! `DerefMut`) by `search`'s move ordering once a position's moves are on
+//! hand to sort.
 
 use crate::{types::Move, MoveFlags, Square};
 use std::fmt;

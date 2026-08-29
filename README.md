@@ -19,10 +19,12 @@ real rating.
 
 Move generation is complete and verified end-to-end against perft (see
 below): `Board`, FEN parsing/formatting, attack tables, magic bitboards, and
-pseudolegal/legal move generation all work. `search`, `eval`, and `uci` are
-not yet implemented: the engine can enumerate every legal move from a
-position, but nothing yet decides which one to play or speaks UCI to report
-it.
+pseudolegal/legal move generation all work. `eval` (material and
+piece-square tables) and `search` (negamax with alpha-beta, iterative
+deepening, and quiescence) both work too: the engine can pick a move for a
+position, it just can't say so yet. `uci` is the one piece not yet
+implemented: nothing speaks the UCI protocol to report a move or drive the
+engine from a GUI.
 
 ## Architecture
 
@@ -40,9 +42,12 @@ types  ->  board  ->  move_gen  ->  search / eval / uci
   parsing/formatting, built on `types`.
 - **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
   generation, and `perft`.
-- **`search`**, **`eval`**, **`uci`**: planned. Iterative deepening over a
-  transposition table, static position evaluation, and the UCI protocol that
-  will drive the engine from `turox-cli`.
+- **`eval`**: static position evaluation (material and piece-square tables).
+- **`search`**: negamax with alpha-beta over iterative deepening and
+  quiescence, driven by a depth or node budget (a transposition table is a
+  later addition).
+- **`uci`**: planned. The UCI protocol that will drive the engine from
+  `turox-cli`.
 
 `turox-engine` takes zero runtime dependencies, deliberately; see the
 "Dependency policy" comment in `turox-engine/Cargo.toml`.
