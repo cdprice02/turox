@@ -1,6 +1,6 @@
-//! `turox-cli`: the binary that drives `turox_engine::Engine`, eventually over
-//! UCI (see `Engine::run`). Not yet a UCI frontend: the engine's own `uci`
-//! module is what it will call once that lands.
+//! `turox-cli`: the binary that drives `turox_engine::Engine` over UCI (see
+//! `Engine::run`), so any UCI-speaking GUI (or `lichess-bot`) can play
+//! against it.
 
 use clap::Parser;
 use turox_engine::Engine;
@@ -10,9 +10,13 @@ use turox_engine::Engine;
 struct Args {}
 
 fn main() {
-    let args = Args::parse();
-    println!("{:?}", args);
+    // No stray output before `Engine::run` takes over: a real UCI GUI reads
+    // stdout expecting only valid UCI responses, and anything else written
+    // ahead of those (a debug print of `Args`, say) would corrupt the
+    // stream from its perspective. `Args::parse()` still runs, so `--help`/
+    // `--version` (from `#[clap(author, version, about)]`) keep working.
+    Args::parse();
 
-    let engine = Engine::new();
+    let mut engine = Engine::new();
     engine.run();
 }

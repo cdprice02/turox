@@ -129,6 +129,17 @@ impl Search {
         self
     }
 
+    /// Uses `stop` as this search's stop flag instead of the fresh one
+    /// [`Search::new`] creates. For the UCI loop's `stop`/`quit` handling
+    /// specifically: the loop needs to reach into a search that's actively
+    /// blocking the thread that would otherwise poll for more commands, so
+    /// it has to hold onto (and be able to set) the exact same `Arc` the
+    /// search itself checks, not just a fresh one of its own.
+    pub fn with_stop_flag(mut self, stop: Arc<AtomicBool>) -> Self {
+        self.stop = stop;
+        self
+    }
+
     /// Requests that the search stop as soon as it's next checked (a plain
     /// `Relaxed` store: `should_abort` only ever needs to see the flag
     /// eventually, not synchronize any other memory with it). Equivalent to
