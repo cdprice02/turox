@@ -20,11 +20,12 @@ real rating.
 Move generation is complete and verified end-to-end against perft (see
 below): `Board`, FEN parsing/formatting, attack tables, magic bitboards, and
 pseudolegal/legal move generation all work. `eval` (material and
-piece-square tables) and `search` (negamax with alpha-beta, iterative
-deepening, and quiescence) both work too: the engine can pick a move for a
-position, it just can't say so yet. `uci` is the one piece not yet
-implemented: nothing speaks the UCI protocol to report a move or drive the
-engine from a GUI.
+piece-square tables), `search` (negamax with alpha-beta, iterative
+deepening, and quiescence), and `uci` (parsing commands, emitting
+responses, and a real stdin/stdout session loop) all work too: `turox-cli`
+speaks UCI end to end and can be driven by any UCI-speaking GUI. What's left
+is connecting it to lichess via `lichess-bot` for a real rating (see
+"Playing on lichess" below).
 
 ## Architecture
 
@@ -46,8 +47,8 @@ types  ->  board  ->  move_gen  ->  search / eval / uci
 - **`search`**: negamax with alpha-beta over iterative deepening and
   quiescence, driven by a depth or node budget (a transposition table is a
   later addition).
-- **`uci`**: planned. The UCI protocol that will drive the engine from
-  `turox-cli`.
+- **`uci`**: the UCI protocol: parsing commands, emitting responses, and the
+  stateful session loop that drives the engine from `turox-cli`.
 
 `turox-engine` takes zero runtime dependencies, deliberately; see the
 "Dependency policy" comment in `turox-engine/Cargo.toml`.
@@ -62,6 +63,40 @@ Requires Rust 1.87 or later (`Bitboard::shl`/`shr` use `u64::unbounded_shl`/
 cargo build --workspace
 cargo run -p turox-cli
 ```
+
+## Playing on lichess
+
+The concrete goal stated at the top: get `turox-cli` running as a bot on
+[lichess](https://lichess.org) via
+[`lichess-bot`](https://github.com/lichess-bot-devs/lichess-bot), so
+performance and correctness work has a real rating to point at instead of
+just "the tests pass."
+
+`lichess-bot` is a separate Python project. It isn't cloned into this repo
+or added as a dependency; it drives `turox-cli` as an external UCI process
+over stdin/stdout, the same way any UCI-speaking GUI would.
+
+1. Build a release binary; the default `dev` profile is far too slow for
+   real time controls:
+
+   ```sh
+   cargo build --release -p turox-cli
+   ```
+
+2. Clone `lichess-bot` elsewhere and follow its own setup instructions
+   (Python environment, dependencies, API token).
+3. Upgrading a Lichess account to a BOT account is irreversible and only
+   works on an account with zero rated games; pick or create one
+   deliberately, not the account you play on yourself.
+4. Point `lichess-bot`'s `config.yml` at the release binary's directory,
+   with `protocol: uci`. `turox-cli` needs no engine-specific UCI options:
+   it reads `go`'s `wtime`/`btime`/`winc`/`binc`/`movestogo`/`movetime`/
+   `depth`/`nodes` fields directly, so `lichess-bot`'s default time-control
+   handling works unmodified.
+5. Run `lichess-bot` and challenge it (or have it challenge another bot) at
+   bullet or blitz. Whether the rating stabilizes across a session, rather
+   than trending down, is the actual signal worth watching, more than any
+   single game's result.
 
 ## Testing
 
@@ -125,11 +160,11 @@ Coverage-guided fuzzing of `Board::try_from_fen`, via
 [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) (`cargo install
 cargo-fuzz`; requires a nightly toolchain, so this isn't part of the stable
 CI job, and runs on demand instead). `try_from_fen` is the one place the
-engine will take untrusted input directly off the wire, once UCI's `position
-fen <...>` is wired up: `Err` is a correct outcome for a malformed string, a
-panic is not. `tests/fen_props.rs` already checks the same property over
-proptest-generated inputs; this is the coverage-guided version of it, for
-inputs a random regex won't reliably hit.
+engine takes untrusted input directly off the wire, since UCI's `position
+fen <...>` command resolves through it: `Err` is a correct outcome for a
+malformed string, a panic is not. `tests/fen_props.rs` already checks the
+same property over proptest-generated inputs; this is the coverage-guided
+version of it, for inputs a random regex won't reliably hit.
 
 ## Development loop
 
