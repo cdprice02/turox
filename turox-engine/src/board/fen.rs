@@ -149,26 +149,10 @@ impl Board {
     }
 
     fn parse_square(s: &str) -> Result<Square, InvalidFenError> {
-        let invalid = || InvalidFenError::InvalidField {
+        Square::try_from_algebraic(s).ok_or_else(|| InvalidFenError::InvalidField {
             field: "en passant target",
             value: s.to_string(),
-        };
-        let mut chars = s.chars();
-        let file_ch = chars.next().ok_or_else(invalid)?;
-        let rank_ch = chars.next().ok_or_else(invalid)?;
-        if chars.next().is_some() {
-            return Err(invalid());
-        }
-
-        let file = match file_ch {
-            'a'..='h' => File::from_index(file_ch as u8 - b'a').expect("checked 'a'..='h'"),
-            _ => return Err(invalid()),
-        };
-        let rank = match rank_ch {
-            '1'..='8' => Rank::from_index(rank_ch as u8 - b'1').expect("checked '1'..='8'"),
-            _ => return Err(invalid()),
-        };
-        Ok(Square::new(file, rank))
+        })
     }
 
     /// Formats this position as a full 6-field FEN string.
