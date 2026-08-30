@@ -110,6 +110,31 @@ impl Square {
         Self::ALL[(rank.index() as usize) * 8 + file.index() as usize]
     }
 
+    /// Parses algebraic notation (`"e4"`, `"a1"`, `"h8"`): the inverse of
+    /// `Display`. Not `const fn`: char iteration over an arbitrary `&str`
+    /// isn't const-callable on stable. Shared by FEN's en passant field
+    /// (`board::fen::parse_square` wraps this with FEN's own error type)
+    /// and UCI move notation (`types::moves::Move::from_uci`) rather than
+    /// each parsing it separately, same reasoning `Display`'s own doc
+    /// gives for the opposite direction.
+    pub fn try_from_algebraic(s: &str) -> Option<Self> {
+        let mut chars = s.chars();
+        let file_ch = chars.next()?;
+        let rank_ch = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+        let file = match file_ch {
+            'a'..='h' => File::from_index(file_ch as u8 - b'a')?,
+            _ => return None,
+        };
+        let rank = match rank_ch {
+            '1'..='8' => Rank::from_index(rank_ch as u8 - b'1')?,
+            _ => return None,
+        };
+        Some(Self::new(file, rank))
+    }
+
     /// This square's file.
     pub const fn file(self) -> File {
         match File::from_index(self.index() % 8) {
@@ -224,6 +249,24 @@ mod tests {
             assert_eq!(Square::from_index(sq.index()), Some(sq));
         }
         assert_eq!(Square::from_index(64), None);
+    }
+
+    #[test]
+    fn try_from_algebraic_parses_every_square() {
+        for sq in Square::ALL {
+            assert_eq!(Square::try_from_algebraic(&sq.to_string()), Some(sq));
+        }
+    }
+
+    #[test]
+    fn try_from_algebraic_rejects_malformed_input() {
+        for bad in ["", "e", "e4e", "i4", "e9", "e0", "44", "ee"] {
+            assert_eq!(
+                Square::try_from_algebraic(bad),
+                None,
+                "expected None for {bad:?}"
+            );
+        }
     }
 
     #[test]

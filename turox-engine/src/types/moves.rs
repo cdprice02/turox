@@ -120,6 +120,80 @@ impl Move {
     pub const fn flags(self) -> MoveFlags {
         MoveFlags::from_bits((self.0 >> 12) as u8)
     }
+
+    /// Formats this move in UCI notation: `e2e4` for a quiet move or
+    /// capture, `e7e8q` for a promotion (lowercase piece letter, no `=` or
+    /// capture marker; the four promotion pieces only, matching
+    /// `MoveFlags::promotion_piece`'s own `Option<Piece>`).
+    ///
+    /// Castling needs no special case here: `pseudo_legal_moves` already
+    /// encodes a castling move's `to()` as the king's own real destination
+    /// square (`e1g1`, not `e1h1`, the rook's square) as part of computing
+    /// the move at all, not something this function has to know about or
+    /// reconstruct. Worth confirming for yourself rather than taking on
+    /// faith, since "does castling need special-casing" is exactly the
+    /// kind of thing that looks like it should from the UCI spec alone.
+    pub fn to_uci(self) -> String {
+        let mut s = format!("{}{}", self.from(), self.to());
+        if let Some(p) = self.flags().promotion_piece() {
+            s.push(match p {
+                Piece::Knight => 'n',
+                Piece::Bishop => 'b',
+                Piece::Rook => 'r',
+                Piece::Queen => 'q',
+                _ => unreachable!("promotion_piece() only ever returns one of these four"),
+            });
+        }
+        s
+    }
+
+    /// Parses a UCI move string (`"e2e4"`, `"e7e8q"`) and resolves it
+    /// against `legal`, the legal moves in the position this string is
+    /// meant to apply to. Returns `None` for a malformed string (bad
+    /// square notation, a promotion letter that isn't one of the four real
+    /// pieces) or a well-formed one that just isn't a legal move here (a
+    /// UCI move string alone carries no capture/en-passant/castling
+    /// information, so there's no way to reconstruct the real
+    /// `MoveFlags` without a legal move list to resolve it against; see
+    /// this module's own `Move` doc for why re-deriving flags from the
+    /// string independently would just duplicate `pseudo_legal`'s logic
+    /// with a second chance to get it wrong).
+    ///
+    /// `Square::try_from_algebraic` parses the two 2-character square
+    /// substrings; a fifth byte, if present, is the promotion letter
+    /// (`n`/`b`/`r`/`q`, lowercase only, per the UCI spec).
+    ///
+    /// Works in bytes, not `chars()`, on the strength of the `is_ascii()`
+    /// check up front: a UCI move string is never legitimately anything
+    /// else, and rejecting non-ASCII input outright (rather than walking a
+    /// `Chars` iterator to stay Unicode-correct for input that was never
+    /// going to be valid anyway) sidesteps `str`'s char-boundary slicing
+    /// panics entirely, not just in the common case. `bytes.get(4)`
+    /// (`None` past the end of the slice) replaces a separate length
+    /// branch for the optional promotion byte with a single match arm.
+    pub fn from_uci(s: &str, legal: &[Move]) -> Option<Move> {
+        if !(4..=5).contains(&s.len()) || !s.is_ascii() {
+            return None;
+        }
+
+        let from = Square::try_from_algebraic(&s[..2])?;
+        let to = Square::try_from_algebraic(&s[2..4])?;
+        let promotion_piece = match s.as_bytes().get(4) {
+            Some(b'n') => Some(Piece::Knight),
+            Some(b'b') => Some(Piece::Bishop),
+            Some(b'r') => Some(Piece::Rook),
+            Some(b'q') => Some(Piece::Queen),
+            Some(_) => return None,
+            None => None,
+        };
+
+        legal
+            .iter()
+            .find(|&m| {
+                m.from() == from && m.to() == to && m.flags().promotion_piece() == promotion_piece
+            })
+            .copied()
+    }
 }
 
 impl std::fmt::Debug for Move {
