@@ -2,4 +2,9 @@
 //! (`position`, `go`, `isready`, ...) and emitting responses (`bestmove`, `info`,
 //! ...), so `turox-cli` can drive the engine from any UCI-speaking GUI.
 //!
-//! Not yet implemented; waits on `search` to have something to report.
+//! `command` covers parsing; emitting responses and the stateful loop that
+//! actually drives `Engine` from stdin/stdout are later issues.
+
+pub mod command;
+
+pub use command::{parse, Command, GoOptions};
