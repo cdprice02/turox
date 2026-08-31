@@ -24,8 +24,19 @@ pub fn is_fifty_move_draw(board: &Board) -> bool {
 /// search with the real game history, not just the current search call's
 /// own path, so repetitions that actually happened in the game are visible
 /// too, not only ones the search tree itself revisits.
+///
+/// Called at every search node, so this stops scanning as soon as a second
+/// match is found rather than counting every match in `history`: `nth(1)`
+/// on the filtered iterator is the second matching element (0-indexed), and
+/// pulling it is what makes the underlying iterator stop advancing once
+/// found, unlike `count()`, which always walks the whole slice regardless
+/// of how early the answer became known.
 pub fn is_threefold_repetition(history: &[u64], current_hash: u64) -> bool {
-    history.iter().filter(|&&h| h == current_hash).count() >= 2
+    history
+        .iter()
+        .filter(|&&h| h == current_hash)
+        .nth(1)
+        .is_some()
 }
 
 /// Either draw condition at once: the single check a search node makes

@@ -337,8 +337,11 @@ impl Search {
 
         // probably not necessary, but is technically possible by definition of depth being a u32 (it could be 0 even on this root step)
         if depth == 0 {
+            // `moves` above was already generated for the mate/stalemate
+            // check; hand it to `quiescence` instead of making it generate
+            // the same board's moves again from scratch.
             return Some((
-                self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH)?,
+                self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves))?,
                 None,
             ));
         }
@@ -390,7 +393,9 @@ impl Search {
     ///    at this node's `ply`, not step 2's `0`.
     /// 4. `depth == 0` hands off to `quiescence` rather than returning
     ///    `evaluate(board)` directly, so a capture sequence hanging over the
-    ///    horizon gets resolved instead of cut off mid-exchange.
+    ///    horizon gets resolved instead of cut off mid-exchange. Step 3's
+    ///    `moves` is passed along rather than discarded, so `quiescence`
+    ///    doesn't regenerate the same board's legal moves a second time.
     /// 5. Otherwise, order the moves (`order_moves`) and negamax each child:
     ///    push `board.hash()` onto `self.history` before recursing into a
     ///    child, pop it after, matching `self.history`'s contract on the
@@ -422,7 +427,10 @@ impl Search {
         }
 
         if depth == 0 {
-            return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH);
+            // `moves` above was already generated for the mate/stalemate
+            // check; hand it to `quiescence` instead of making it generate
+            // the same board's moves again from scratch.
+            return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
         let mut max = Score::MIN;
@@ -468,12 +476,26 @@ impl Search {
     /// `qdepth == 0`, capture resolution stops and this behaves exactly as
     /// if no more captures were available, falling back to `stand_pat`
     /// (already `max`'s seed value) rather than searching further.
+    ///
+    /// `moves`: `negamax`/`search_root` already generate the full legal
+    /// move list for `board` to check for mate/stalemate before handing off
+    /// here at `depth == 0`; passing that list in via `Some` avoids
+    /// generating it again for the same board. `None` (used by this
+    /// function's own recursive calls, where `board` is a fresh child with
+    /// no move list generated yet) falls back to generating it here.
+    /// Neither case does the mate/stalemate check itself: see this
+    /// function's own doc above for why that's out of scope for quiescence.
+    ///
+    /// No `self.history` push/pop here, unlike `negamax`: this function
+    /// never calls `is_draw`, so there is nothing in `self.history` for a
+    /// capture-only line to need.
     fn quiescence(
         &mut self,
         board: &Board,
         mut alpha: Score,
         beta: Score,
         qdepth: u32,
+        moves: Option<MoveList>,
     ) -> Option<Score> {
         self.nodes += 1;
         if self.should_abort() {
@@ -491,17 +513,13 @@ impl Search {
         let mut max = stand_pat;
 
         if qdepth > 0 {
-            let mut moves = legal_moves(board);
+            let mut moves = moves.unwrap_or_else(|| legal_moves(board));
             moves.retain(|m| m.flags().is_capture());
 
             order_moves(board, &mut moves);
             for m in moves.iter() {
-                self.history.push(board.hash());
-
                 let child = board.make_move(*m);
-                let score = self.quiescence(&child, -beta, -alpha, qdepth - 1);
-
-                self.history.pop();
+                let score = self.quiescence(&child, -beta, -alpha, qdepth - 1, None);
 
                 let score = -score?;
                 if score > max {
