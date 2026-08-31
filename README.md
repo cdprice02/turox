@@ -149,6 +149,24 @@ on every push; it does not run them there, since GitHub's shared runners
 aren't consistent enough run-to-run for the numbers to mean much on a PR. A
 weekly scheduled job runs them for real, informationally (see below).
 
+## Self-play A/B testing
+
+```sh
+tools/selfplay/sprt.sh --base main --test my-branch
+```
+
+Benchmarks say whether a change made the engine faster; they say nothing
+about whether it made it play better. `tools/selfplay/sprt.sh` builds two
+turox binaries and plays them against each other under a sequential
+probability ratio test, so an evaluation or search change gets a pass/fail
+answer from games instead of from inspection. It drives
+[`fastchess`](https://github.com/Disservin/fastchess), a separate program
+rather than a crate dependency, over a 2494-position opening suite.
+
+See `tools/selfplay/README.md` for installing fastchess, for how to read an
+SPRT verdict, and for the reasoning behind the time control and the test
+bounds.
+
 ## Fuzzing
 
 ```sh
