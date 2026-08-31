@@ -298,6 +298,43 @@ fn seeded_repetition_scores_zero() {
     assert_eq!(result.score, 0);
 }
 
+/// A root position that's already a fifty-move draw, but still has plenty of
+/// legal moves (White has a king and two rooks against a lone king, dozens
+/// of legal moves, completely winning material): `search` must still return
+/// one of them rather than `None`, the bug issue #54 reports. The position
+/// genuinely is a draw at this exact point, so the score stays `0`, same as
+/// `seeded_repetition_scores_zero` above; only `best_move` differs from that
+/// test, since here `search` has moves to choose from.
+#[test]
+fn fifty_move_draw_at_root_still_returns_a_legal_move() {
+    let board = Board::try_from_fen("4k3/8/8/8/8/8/6R1/R3K3 w - - 100 1").expect("valid FEN");
+    let mut search = Search::new(Vec::new());
+    let result = search.search(&board, 4);
+    assert_eq!(result.score, 0);
+    let best_move = result
+        .best_move
+        .expect("dozens of legal moves exist; search must not report None");
+    assert!(legal_moves(&board).as_slice().contains(&best_move));
+}
+
+/// Mirror of `fifty_move_draw_at_root_still_returns_a_legal_move`, but for a
+/// genuine threefold repetition instead of the fifty-move rule: `history` is
+/// seeded with two prior occurrences of `board`'s own hash, per
+/// `draw::is_threefold_repetition`'s contract, rather than relying on
+/// `halfmove_clock`. Same bug, independent trigger condition.
+#[test]
+fn threefold_repetition_at_root_still_returns_a_legal_move() {
+    let board = Board::try_from_fen("4k3/8/8/8/8/8/6R1/R3K3 w - - 0 1").expect("valid FEN");
+    let history = vec![board.hash(), board.hash()];
+    let mut search = Search::new(history);
+    let result = search.search(&board, 4);
+    assert_eq!(result.score, 0);
+    let best_move = result
+        .best_move
+        .expect("dozens of legal moves exist; search must not report None");
+    assert!(legal_moves(&board).as_slice().contains(&best_move));
+}
+
 /// Iterative deepening must return the last *completed* iteration's result,
 /// not a deeper iteration's partial one. `with_max_nodes` makes this
 /// deterministic and repeatable: a wall-clock deadline can't reliably land
