@@ -218,7 +218,7 @@ impl Search {
     ///   nothing to deepen into: `search_root` reports that directly (see
     ///   its own doc) rather than `search` special-casing it up front.
     /// - Before starting each iteration past the first, a soft limit (see
-    ///   [`ITERATION_TIME_SAFETY_MARGIN`]) estimates whether there's a
+    ///   `ITERATION_TIME_SAFETY_MARGIN`) estimates whether there's a
     ///   realistic chance of finishing it before `self.deadline`, and
     ///   stops the loop early rather than starting (and later discarding)
     ///   an iteration with no real chance of completing. Only applies when
