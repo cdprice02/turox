@@ -298,13 +298,10 @@ fn seeded_repetition_scores_zero() {
     assert_eq!(result.score, 0);
 }
 
-/// A root position that's already a fifty-move draw, but still has plenty of
-/// legal moves (White has a king and two rooks against a lone king, dozens
-/// of legal moves, completely winning material): `search` must still return
-/// one of them rather than `None`, the bug issue #54 reports. The position
-/// genuinely is a draw at this exact point, so the score stays `0`, same as
-/// `seeded_repetition_scores_zero` above; only `best_move` differs from that
-/// test, since here `search` has moves to choose from.
+/// A root position that's already a fifty-move draw, but still has plenty
+/// of legal moves (a king and two rooks against a lone king): `search`
+/// must still return one of them, not `None`. Score stays `0`, same as
+/// `seeded_repetition_scores_zero` above.
 #[test]
 fn fifty_move_draw_at_root_still_returns_a_legal_move() {
     let board = Board::try_from_fen("4k3/8/8/8/8/8/6R1/R3K3 w - - 100 1").expect("valid FEN");
@@ -317,11 +314,9 @@ fn fifty_move_draw_at_root_still_returns_a_legal_move() {
     assert!(legal_moves(&board).as_slice().contains(&best_move));
 }
 
-/// Mirror of `fifty_move_draw_at_root_still_returns_a_legal_move`, but for a
-/// genuine threefold repetition instead of the fifty-move rule: `history` is
-/// seeded with two prior occurrences of `board`'s own hash, per
-/// `draw::is_threefold_repetition`'s contract, rather than relying on
-/// `halfmove_clock`. Same bug, independent trigger condition.
+/// Mirror of `fifty_move_draw_at_root_still_returns_a_legal_move`, but a
+/// genuine threefold repetition (`history` seeded with two prior
+/// occurrences) instead of the fifty-move rule.
 #[test]
 fn threefold_repetition_at_root_still_returns_a_legal_move() {
     let board = Board::try_from_fen("4k3/8/8/8/8/8/6R1/R3K3 w - - 0 1").expect("valid FEN");
@@ -462,21 +457,14 @@ fn quiescence_avoids_a_poisoned_pawn() {
     );
 }
 
-/// Issue #56: iterative deepening must not start an iteration with no
-/// realistic chance of finishing before `self.deadline`, wasting the
-/// remaining budget on a doomed iteration that gets discarded anyway (per
-/// `interrupted_iteration_keeps_the_last_completed_result` above). This
-/// self-calibrates against this machine's own real timings rather than a
-/// hardcoded millisecond figure, since branching factor and hardware both
-/// vary: it times an unbounded `depth`-ply search on kiwipete first, then
-/// hands a *fresh* search only `2x` that measured time as its whole budget
-/// and asks it for `depth + 1`. Kiwipete's real per-ply branching factor
-/// comfortably clears this soft limit's own `4x` safety margin (see
-/// `ITERATION_TIME_SAFETY_MARGIN`'s doc), so after `depth` completes
-/// (consuming close to the full budget on its own), the ~1x left over is
-/// nowhere near enough for `depth + 1` by even the conservative `4x`
-/// estimate; the soft limit must catch that and return `depth`'s own
-/// result rather than starting `depth + 1` at all.
+/// Iterative deepening must not start an iteration with no realistic
+/// chance of finishing before `self.deadline`. Self-calibrates against
+/// this machine's own timings rather than a hardcoded duration: times an
+/// unbounded `depth`-ply search first, then gives a fresh search only `2x`
+/// that as its whole budget and asks for `depth + 1`. Kiwipete's real
+/// branching factor clears the `4x` safety margin easily, so the ~1x left
+/// after `depth` completes is nowhere near enough for `depth + 1`; the
+/// soft limit must catch that and return `depth`'s own result.
 #[test]
 fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
     let board =
@@ -509,13 +497,10 @@ fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
     );
 }
 
-/// The regression case this issue is really about: a `go depth N` UCI
-/// command (`Search::search` with no `with_deadline` call at all, the
-/// majority shape of this test suite's own calls) must still reach exactly
-/// the requested depth, completely unaffected by the soft limit above.
-/// Kiwipete specifically, since it's the same branchy position the soft
-/// limit test above deliberately trips the limit on; here, with no
-/// deadline set, growth between iterations must never stop the loop early.
+/// The regression case that matters most: `go depth N` (no `with_deadline`
+/// call, the majority shape of this suite's own calls) must still reach
+/// exactly the requested depth. Kiwipete specifically, the same branchy
+/// position the soft limit test above deliberately trips the limit on.
 #[test]
 fn no_deadline_still_reaches_the_exact_requested_depth() {
     let board =
@@ -528,10 +513,8 @@ fn no_deadline_still_reaches_the_exact_requested_depth() {
     );
 }
 
-/// A `max_nodes`-only search (no deadline set) is equally unaffected: the
-/// soft limit only ever reasons about `self.deadline`, so a generous node
-/// budget that never actually trips `should_abort` must still reach the
-/// exact requested depth, same as `no_deadline_still_reaches_the_exact_requested_depth`.
+/// A `max_nodes`-only search (no deadline) is equally unaffected: the soft
+/// limit only ever reasons about `self.deadline`.
 #[test]
 fn max_nodes_only_search_unaffected_by_soft_limit() {
     let board =

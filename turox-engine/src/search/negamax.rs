@@ -45,27 +45,20 @@ pub const MATE: Score = 30_000;
 /// between two different search depths.
 pub const MAX_QUIESCENCE_DEPTH: u32 = 8;
 
-/// The safety-margin multiplier `Search::search_with_info`'s soft time
-/// limit applies to the previous iteration's own wall-clock time, as its
-/// estimate of the *next* iteration's cost: don't start iteration N+1
-/// unless at least `elapsed(N) * ITERATION_TIME_SAFETY_MARGIN` still
-/// remains before `self.deadline`.
+/// The safety-margin multiplier `search`'s soft time limit applies to the
+/// previous iteration's own elapsed time, as its estimate of the *next*
+/// iteration's cost: don't start iteration N+1 unless at least
+/// `elapsed(N) * ITERATION_TIME_SAFETY_MARGIN` still remains before
+/// `self.deadline`.
 ///
-/// Real measured branching factors near the horizon run roughly 7-9x from
-/// one iteration to the next (move ordering narrows this well below the
-/// raw legal-move count, but it's still a real multiplicative blowup, not
-/// a fixed increment). `4` is deliberately below that observed range
-/// rather than matching it: this soft limit only ever gets to be wrong in
-/// one of two directions, and they aren't equally costly. Setting the
-/// margin too high (skip too eagerly) throws away real search depth the
-/// position had time for, which directly costs playing strength. Setting
-/// it too low (skip too rarely) merely falls back to the pre-existing
-/// behavior this issue is about, an iteration gets started, aborted, and
-/// discarded, wasting time but not search quality. So this constant is
-/// biased toward the cheaper failure mode: `4x` only vetoes iterations
-/// that would need less than half the typically-observed growth factor to
-/// fit, catching the clearly-hopeless cases without second-guessing a
-/// position whose branching factor just happens to run leaner than usual.
+/// Real branching factors near the horizon run roughly 7-9x between
+/// iterations; `4` is deliberately below that rather than matching it,
+/// because the two ways this can be wrong aren't equally costly. Too high
+/// (skip too eagerly) throws away reachable search depth, a direct
+/// strength cost. Too low (skip too rarely) just falls back to today's
+/// waste-a-doomed-iteration behavior, a time cost but not a strength one.
+/// So this stays biased toward under-triggering: it only vetoes iterations
+/// that would need less than half the typical growth factor to fit.
 const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
 /// One completed call to [`Search::search`]: the best move and score found,
@@ -114,8 +107,9 @@ pub struct Search {
     /// (see `tests/search_props.rs`).
     max_nodes: Option<u64>,
     /// `Arc`, not a plain `bool`: UCI's `stop` command arrives on a
-    /// different thread than the one running `search` (see #26's threading
-    /// model), so setting it has to be visible across threads without
+    /// different thread than the one running `search` (the reader thread
+    /// parsing stdin, while the main thread blocks inside `search`), so
+    /// setting it has to be visible across threads without
     /// `Search` itself being shared. [`Search::stop_flag`] hands out a
     /// clone of this same `Arc` before a caller moves `Search` onto its own
     /// search thread, so the main thread can still set it later.
@@ -174,8 +168,8 @@ impl Search {
 
     /// A shareable handle to this search's stop flag: clone it out *before*
     /// moving `Search` onto its own search thread, and a caller on another
-    /// thread (UCI's `stop` command handler, see #26's threading model) can
-    /// still set it via `Ordering::Relaxed` `store`, honored the next time
+    /// thread (UCI's `stop` command handler, running on the reader thread)
+    /// can still set it via `Ordering::Relaxed` `store`, honored the next time
     /// `should_abort` checks (same `nodes & 2047` schedule as `deadline`
     /// and `max_nodes`).
     pub fn stop_flag(&self) -> Arc<AtomicBool> {
@@ -202,29 +196,16 @@ impl Search {
 
     /// Iterative deepening driver: repeatedly searches the root at
     /// increasing depths, keeping only the result of the last iteration
-    /// that ran to completion. Delegates to
-    /// [`Search::search_with_info`] with a no-op callback; see that
-    /// method to observe each completed iteration's result as it lands
-    /// rather than only the final one.
+    /// that ran to completion. Delegates to [`Search::search_with_info`]
+    /// with a no-op callback; see that method to observe each iteration's
+    /// result as it lands rather than only the final one.
     ///
-    /// Implementation gotchas:
-    /// - An iteration interrupted partway through (`search_root` returns
-    ///   `None`) must not overwrite the previous iteration's `SearchResult`;
-    ///   stop the loop there and return what the depths before it already
-    ///   found. Returning a partial iteration's in-progress best move is
-    ///   the classic bug here.
-    /// - Iterative deepening starts at depth 1, not 0.
-    /// - If the position handed in has no legal moves at all, there's
-    ///   nothing to deepen into: `search_root` reports that directly (see
-    ///   its own doc) rather than `search` special-casing it up front.
-    /// - Before starting each iteration past the first, a soft limit (see
-    ///   `ITERATION_TIME_SAFETY_MARGIN`) estimates whether there's a
-    ///   realistic chance of finishing it before `self.deadline`, and
-    ///   stops the loop early rather than starting (and later discarding)
-    ///   an iteration with no real chance of completing. Only applies when
-    ///   `self.deadline` is set: a `max_nodes`-bounded or fully unbounded
-    ///   search has no wall-clock deadline to estimate against, and must
-    ///   still deepen exactly as before.
+    /// An iteration interrupted partway through (`search_root` returns
+    /// `None`) must not overwrite the previous iteration's result;
+    /// returning a partial iteration's in-progress best move is the
+    /// classic bug here. Before starting each iteration past the first,
+    /// `ITERATION_TIME_SAFETY_MARGIN` may also stop the loop early rather
+    /// than start a doomed one; see its own doc.
     pub fn search(&mut self, board: &Board, max_depth: u32) -> SearchResult {
         self.search_with_info(board, max_depth, |_| {})
     }
@@ -282,28 +263,17 @@ impl Search {
         result
     }
 
-    /// One ply of root move loop. Unlike interior `negamax` nodes, the root
-    /// needs to remember *which* move produced the best score, not just the
-    /// score itself, so it's a separate small loop rather than a `ply == 0`
-    /// special case buried inside `negamax`.
+    /// One ply of root move loop: like `negamax`, but remembers *which*
+    /// move produced the best score, not just the score, so it's a
+    /// separate small loop rather than a `ply == 0` special case buried
+    /// inside `negamax`.
     ///
-    /// Checks apply to the root mostly as they do to any interior `negamax`
-    /// node, same order as `negamax`'s doc, with one deliberate difference:
-    /// - `draw::is_draw(board, &self.history, board.hash())` first: a
-    ///   position handed to `search` that's already a draw (the caller's
-    ///   seeded `history` already has two occurrences of it, or its
-    ///   halfmove clock alone already qualifies) scores `0` immediately,
-    ///   whatever `depth` was requested, same as an interior node. Unlike an
-    ///   interior node, though, this is the root: UCI still needs a legal
-    ///   move to hand back to the GUI so play (or an explicit draw claim)
-    ///   can continue, so this generates and orders the move list rather
-    ///   than returning `None` the way an interior node's `0` can afford to.
-    ///   `Some((0, None))` here is reserved for the true terminal case
-    ///   below, where there's no legal move to hand back at all.
-    /// - Then, no legal moves at all (checked again for the non-draw path):
-    ///   returns `Some((score, None))` without searching anything, `score`
-    ///   being `-MATE` (in check) or `0` (stalemate), the ply-0 case of the
-    ///   formula on [`MATE`]'s doc, not a separately hand-written literal.
+    /// Diverges from `negamax` in exactly one place: when the position is
+    /// already a draw, an interior node can just return `0` and stop (see
+    /// `negamax`'s own doc), but the root still needs a real move to hand
+    /// back to UCI so play can continue, so it generates and orders the
+    /// move list here instead. `Some((0, None))` stays reserved for the
+    /// true terminal case below: no legal moves at all.
     ///
     /// Returns `None` if the search was aborted before every move at this
     /// depth could be tried; `search` discards a `None` result rather than
@@ -337,9 +307,6 @@ impl Search {
 
         // probably not necessary, but is technically possible by definition of depth being a u32 (it could be 0 even on this root step)
         if depth == 0 {
-            // `moves` above was already generated for the mate/stalemate
-            // check; hand it to `quiescence` instead of making it generate
-            // the same board's moves again from scratch.
             return Some((
                 self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves))?,
                 None,
@@ -374,32 +341,20 @@ impl Search {
     }
 
     /// Fail-soft negamax with alpha-beta pruning: on a beta cutoff, returns
-    /// the actual score found, not the clamped `beta` bound (fail-soft, not
-    /// fail-hard). `ply` is the distance from the root (0 there), used only
-    /// for the mate-score formula on [`MATE`]'s doc and for keeping
-    /// `self.history` in step with the recursion.
+    /// the actual score found, not the clamped `beta` bound. `ply` is the
+    /// distance from the root (0 there), used for the mate-score formula on
+    /// [`MATE`]'s doc and for keeping `self.history` in step with the
+    /// recursion.
     ///
     /// Returns `None` if `should_abort()` trips; callers must propagate a
     /// `None` up immediately rather than treating it as a real score.
     ///
-    /// Order of operations, each one a real gotcha:
-    /// 1. Increment `self.nodes`, then check `should_abort()`.
-    /// 2. Check `draw::is_draw(board, &self.history, board.hash())` *before*
-    ///    generating moves: an already-drawn position scores `0` regardless
-    ///    of material, and shouldn't be searched further.
-    /// 3. Generate legal moves. An empty list is checkmate (if
-    ///    `in_check(board, board.side_to_move())`) or stalemate, not a draw
-    ///    in the fifty-move/repetition sense, and uses the [`MATE`] formula
-    ///    at this node's `ply`, not step 2's `0`.
-    /// 4. `depth == 0` hands off to `quiescence` rather than returning
-    ///    `evaluate(board)` directly, so a capture sequence hanging over the
-    ///    horizon gets resolved instead of cut off mid-exchange. Step 3's
-    ///    `moves` is passed along rather than discarded, so `quiescence`
-    ///    doesn't regenerate the same board's legal moves a second time.
-    /// 5. Otherwise, order the moves (`order_moves`) and negamax each child:
-    ///    push `board.hash()` onto `self.history` before recursing into a
-    ///    child, pop it after, matching `self.history`'s contract on the
-    ///    struct doc.
+    /// Two ordering gotchas, easy to get backwards: `is_draw` must be
+    /// checked *before* move generation, since an already-drawn position
+    /// scores `0` regardless of material and shouldn't be searched further.
+    /// And an empty move list is checkmate/stalemate (the [`MATE`] formula,
+    /// or `0`), a different terminal case from the draw check above it, not
+    /// the same `0` for a different reason.
     fn negamax(
         &mut self,
         board: &Board,
@@ -427,9 +382,6 @@ impl Search {
         }
 
         if depth == 0 {
-            // `moves` above was already generated for the mate/stalemate
-            // check; hand it to `quiescence` instead of making it generate
-            // the same board's moves again from scratch.
             return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
@@ -460,35 +412,28 @@ impl Search {
 
     /// Quiescence search: like `negamax`, but only ever considers captures,
     /// with "stand pat" (`evaluate(board)`) as the floor score, so a
-    /// position with no good captures available doesn't get forced into
-    /// playing one. Same fail-soft alpha-beta and abort propagation as
-    /// `negamax`. Deliberately out of scope here: mate detection (a
-    /// position that's actually checkmate mid-quiescence just falls back to
-    /// its, in that case misleading, stand-pat score) and repetition
-    /// detection (captures are irreversible, so a genuine repetition inside
-    /// a pure-capture line can't occur). Both are noted simplifications, not
-    /// oversights.
+    /// position with no good captures isn't forced into playing one. Same
+    /// fail-soft alpha-beta and abort propagation as `negamax`. Deliberately
+    /// out of scope: mate detection (an actual checkmate mid-quiescence
+    /// just falls back to its, in that case misleading, stand-pat score)
+    /// and repetition detection (captures are irreversible, so a genuine
+    /// repetition inside a pure-capture line can't occur); neither is an
+    /// oversight.
     ///
-    /// `qdepth` counts down from [`MAX_QUIESCENCE_DEPTH`] (set by the
-    /// `negamax` call that hands off here) and is unrelated to `negamax`'s
-    /// own `ply`: it bounds how many *more* plies of captures this call is
-    /// still willing to resolve, not the distance from the root. At
-    /// `qdepth == 0`, capture resolution stops and this behaves exactly as
-    /// if no more captures were available, falling back to `stand_pat`
-    /// (already `max`'s seed value) rather than searching further.
+    /// `qdepth` counts down from [`MAX_QUIESCENCE_DEPTH`] and is unrelated
+    /// to `negamax`'s own `ply`: it bounds how many more plies of captures
+    /// this call will still resolve, not the distance from the root. At
+    /// `qdepth == 0`, this behaves as if no captures were available,
+    /// falling back to `stand_pat`.
     ///
-    /// `moves`: `negamax`/`search_root` already generate the full legal
-    /// move list for `board` to check for mate/stalemate before handing off
-    /// here at `depth == 0`; passing that list in via `Some` avoids
-    /// generating it again for the same board. `None` (used by this
-    /// function's own recursive calls, where `board` is a fresh child with
-    /// no move list generated yet) falls back to generating it here.
-    /// Neither case does the mate/stalemate check itself: see this
-    /// function's own doc above for why that's out of scope for quiescence.
+    /// `moves`: `Some` when the caller (`negamax`/`search_root`) already
+    /// generated the full move list for its own mate/stalemate check, so
+    /// this doesn't generate the same board's moves twice; `None` (this
+    /// function's own recursive calls, where `board` is a fresh child)
+    /// generates here instead.
     ///
-    /// No `self.history` push/pop here, unlike `negamax`: this function
-    /// never calls `is_draw`, so there is nothing in `self.history` for a
-    /// capture-only line to need.
+    /// No `self.history` push/pop, unlike `negamax`: this function never
+    /// calls `is_draw`, so a capture-only line has nothing to need it for.
     fn quiescence(
         &mut self,
         board: &Board,
@@ -541,28 +486,23 @@ impl Search {
 /// Orders `moves` in place, most promising first, so alpha-beta prunes more
 /// of the tree: MVV-LVA (most valuable victim, least valuable attacker)
 /// among captures, ahead of quiet moves, since a capture that wins the most
-/// material with the cheapest piece is the one most likely to hold up and
-/// cause a beta cutoff early.
+/// material with the cheapest piece is most likely to hold up and cause a
+/// beta cutoff early.
 ///
-/// `PIECE_VALUES[piece as usize]` (re-exported `pub(crate)` from `eval` for
-/// exactly this) gives the value scale for both victim and attacker.
-/// `board.piece_at(m.to())` is the victim (`None` for a quiet move);
-/// `board.piece_at(m.from())` is the attacker (always `Some`: a pseudolegal
-/// move always has a piece on its own `from` square). En passant is the one
-/// capture whose victim isn't actually on `m.to()`; decide deliberately
-/// whether that's worth special-casing here or an acceptable ordering
-/// approximation, and say which in a comment either way.
+/// En passant's victim isn't actually on `m.to()`; scored as `0` (an
+/// equal-value trade) rather than looking up the true victim square, an
+/// accepted ordering approximation since it only affects search order, not
+/// legality or correctness.
 ///
-/// Uses [`MoveList::as_mut_slice`] (added for exactly this in the
-/// `MoveList` mutable-access work) to sort in place without a second
+/// Uses [`MoveList::as_mut_slice`] to sort in place without a second
 /// allocation.
 fn order_moves(board: &Board, moves: &mut MoveList) {
-    // purposefully inverted values from "standard" mvv_lva because `sort_unstable_by_key` sorts in ascending order
+    // Inverted from "standard" MVV-LVA: `sort_unstable_by_key` sorts
+    // ascending, so the most promising move needs the smallest key.
     let inv_mvv_lva = |m: &Move| {
         let flags = m.flags();
         if flags.is_capture() {
             if flags.is_en_passant() {
-                // en passant special case with equal victim and attacker value
                 0
             } else {
                 let attacker = board

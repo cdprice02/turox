@@ -26,11 +26,8 @@ pub fn is_fifty_move_draw(board: &Board) -> bool {
 /// too, not only ones the search tree itself revisits.
 ///
 /// Called at every search node, so this stops scanning as soon as a second
-/// match is found rather than counting every match in `history`: `nth(1)`
-/// on the filtered iterator is the second matching element (0-indexed), and
-/// pulling it is what makes the underlying iterator stop advancing once
-/// found, unlike `count()`, which always walks the whole slice regardless
-/// of how early the answer became known.
+/// match is found (`filter(...).nth(1)`) rather than walking the whole
+/// slice the way `filter(...).count() >= 2` would.
 pub fn is_threefold_repetition(history: &[u64], current_hash: u64) -> bool {
     history
         .iter()
