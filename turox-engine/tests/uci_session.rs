@@ -1,9 +1,8 @@
 //! End-to-end UCI session tests, driven over in-memory buffers instead of
-//! real stdin/stdout. This is what actually proves `#24` (parsing), `#25`
-//! (emission), and `#19`/`#20` (search) compose correctly together as one
-//! session, not just that each works in isolation; a genuine integration
-//! test, so it lives here rather than as a unit test alongside any one of
-//! those pieces.
+//! real stdin/stdout. This is what actually proves parsing, emission, and
+//! search compose correctly together as one session, not just that each
+//! works in isolation; a genuine integration test, so it lives here rather
+//! than as a unit test alongside any one of those pieces.
 
 use std::io::Cursor;
 use turox_engine::board::Board;
@@ -77,20 +76,16 @@ fn position_and_go_returns_a_legal_bestmove() {
     );
 }
 
-/// Issue #54: a root position that's already a draw (fifty-move rule or
-/// threefold repetition) still has to produce a real `bestmove`, not the
-/// null move `0000`, whenever legal moves exist. Two independent drawn
-/// positions, both reached the way a real GUI would drive them:
+/// A root position that's already a draw still has to produce a real
+/// `bestmove`, not the null move `0000`, whenever legal moves exist. Two
+/// independent drawn positions, both reached the way a real GUI would:
 ///
-/// - The fifty-move rule, set directly via a `position fen ...` with
-///   `halfmove_clock` already at the 100-half-move threshold. White has
-///   dozens of legal moves and is completely winning material.
-/// - A genuine threefold repetition, reached by three separate `position`
-///   commands each resending the full move list so far, matching how a real
-///   GUI resends `position` on every move; `session::run`'s own doc notes it
-///   samples one history hash per `position` command, so the repetition has
-///   to actually span commands to be visible here, not just be present
-///   within one command's move list.
+/// - The fifty-move rule, via `position fen ...` with `halfmove_clock`
+///   already at the 100-half-move threshold.
+/// - A genuine threefold repetition, via three separate `position`
+///   commands resending the growing move list, since `session::run` only
+///   samples one history hash per `position` command (see its own doc), so
+///   the repetition has to span commands to be visible here.
 #[test]
 fn drawn_root_position_still_returns_a_real_bestmove() {
     let fifty_move_output =
@@ -121,26 +116,19 @@ fn drawn_root_position_still_returns_a_real_bestmove() {
     );
 }
 
-/// Issue #56's optional scope: `session::run` streams an `info depth` line
-/// after *every* completed iteration of a multi-depth search, not just the
-/// final one alongside `bestmove`. No deadline involved (`go depth 3`, a
-/// plain depth-bounded search): every iteration from 1 through 3 completes
-/// deterministically, so this counts exactly three `info depth` lines
-/// rather than depending on timing to land a partial one.
+/// `session::run` streams an `info depth` line after every completed
+/// iteration, not just the final one. `go depth 3` with no deadline
+/// completes deterministically, so this counts exactly three lines rather
+/// than depending on timing to land a partial one.
 ///
-/// No trailing `quit` here, deliberately, same reason
-/// `session_ends_cleanly_on_eof_with_no_explicit_quit` above has none: the
-/// reader thread parses every line up front from this in-memory buffer, far
-/// faster than the main thread can work through `position`/`go`'s blocking
-/// search, so a `quit` right behind `go depth 3` races `Command::Go`'s
-/// handler for who sets `active_stop` first. If `quit`'s stop-flag write
-/// lands first, the search it was meant to interrupt hasn't started
-/// yet, so nothing consumes it. If `Command::Go` claims `active_stop`
-/// first, `quit`'s write lands in time and genuinely aborts depth 3
-/// partway through, exactly the kind of flake this test exists to avoid,
-/// and a preexisting property of this reader-thread design, not something
-/// this change introduced. Ending on EOF instead sidesteps the race
-/// entirely: nothing is left to race the search's own stop flag.
+/// No trailing `quit`, deliberately: the reader thread parses this whole
+/// in-memory buffer well before the main thread finishes `go depth 3`'s
+/// blocking search, so a `quit` right behind it races `Command::Go` for
+/// who sets `active_stop` first, and can genuinely abort depth 3 partway
+/// through depending who wins. A preexisting property of this reader
+/// design (see `session_ends_cleanly_on_eof_with_no_explicit_quit` above),
+/// not something this change introduced; ending on EOF instead sidesteps
+/// the race entirely.
 #[test]
 fn go_depth_streams_an_info_line_per_completed_depth() {
     let output = run_session("position startpos\ngo depth 3\n");

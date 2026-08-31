@@ -7,7 +7,7 @@
 //! hashes, for repetition detection that sees repeats from actual play, not
 //! just within one search tree) is approximated here as one hash pushed per
 //! `position` command received, not one per half-move actually played.
-//! `Command::Position` (#24) resolves a whole `position ... moves ...` line
+//! `Command::Position` resolves a whole `position ... moves ...` line
 //! down to just the final `Board`, discarding the intermediate positions
 //! each move in that list passed through, so there's currently no finer
 //! granularity to work with. A GUI that resends the full move list on every
@@ -75,23 +75,17 @@ where
 
                 let (mut search, max_depth) = build_search(board, history.clone(), &options, stop);
                 // `search_with_info`, not plain `search`: streams an `info`
-                // line after every depth that finishes, not just the last,
-                // so a GUI watching a long search sees progress rather than
-                // silence until `bestmove`. `result` (used below for the
-                // fallback and `bestmove` itself) is the same final value
-                // either method would have returned.
+                // line after every completed depth, so a GUI watching a
+                // long search sees progress instead of silence until
+                // `bestmove`.
                 let result = search.search_with_info(board, max_depth, |partial| {
                     send(&mut writer, info_response(partial));
                 });
 
                 *active_stop.lock().unwrap() = None;
 
-                // Only reached when zero iterations completed (`max_depth ==
-                // 0`, not reachable from a real `go depth N` a GUI would
-                // send, but not `search`'s job to rule out): the callback
-                // above never fired, so this is the one `info` line for the
-                // call, matching what a plain `search` caller got before
-                // per-depth streaming existed.
+                // Zero iterations completed (max_depth == 0): the callback
+                // above never fired, so send the one info line here instead.
                 if result.depth == 0 {
                     send(&mut writer, info_response(&result));
                 }
