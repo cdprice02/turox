@@ -219,16 +219,23 @@ impl Search {
     /// score itself, so it's a separate small loop rather than a `ply == 0`
     /// special case buried inside `negamax`.
     ///
-    /// Checks apply to the root exactly as they do to any interior
-    /// `negamax` node, same order as `negamax`'s doc:
+    /// Checks apply to the root mostly as they do to any interior `negamax`
+    /// node, same order as `negamax`'s doc, with one deliberate difference:
     /// - `draw::is_draw(board, &self.history, board.hash())` first: a
     ///   position handed to `search` that's already a draw (the caller's
-    ///   seeded `history` already has two occurrences of it) scores `0`
-    ///   immediately, whatever `depth` was requested.
-    /// - Then, no legal moves at all: returns `Some((score, None))` without
-    ///   searching anything, `score` being `-MATE` (in check) or `0`
-    ///   (stalemate), the ply-0 case of the formula on [`MATE`]'s doc, not a
-    ///   separately hand-written literal.
+    ///   seeded `history` already has two occurrences of it, or its
+    ///   halfmove clock alone already qualifies) scores `0` immediately,
+    ///   whatever `depth` was requested, same as an interior node. Unlike an
+    ///   interior node, though, this is the root: UCI still needs a legal
+    ///   move to hand back to the GUI so play (or an explicit draw claim)
+    ///   can continue, so this generates and orders the move list rather
+    ///   than returning `None` the way an interior node's `0` can afford to.
+    ///   `Some((0, None))` here is reserved for the true terminal case
+    ///   below, where there's no legal move to hand back at all.
+    /// - Then, no legal moves at all (checked again for the non-draw path):
+    ///   returns `Some((score, None))` without searching anything, `score`
+    ///   being `-MATE` (in check) or `0` (stalemate), the ply-0 case of the
+    ///   formula on [`MATE`]'s doc, not a separately hand-written literal.
     ///
     /// Returns `None` if the search was aborted before every move at this
     /// depth could be tried; `search` discards a `None` result rather than
@@ -240,7 +247,12 @@ impl Search {
         }
 
         if is_draw(board, &self.history, board.hash()) {
-            return Some((0, None));
+            let mut drawn_moves = legal_moves(board);
+            if drawn_moves.is_empty() {
+                return Some((0, None));
+            }
+            order_moves(board, &mut drawn_moves);
+            return Some((0, Some(drawn_moves.as_slice()[0])));
         }
 
         let mut moves = legal_moves(board);

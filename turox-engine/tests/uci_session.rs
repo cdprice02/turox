@@ -77,6 +77,50 @@ fn position_and_go_returns_a_legal_bestmove() {
     );
 }
 
+/// Issue #54: a root position that's already a draw (fifty-move rule or
+/// threefold repetition) still has to produce a real `bestmove`, not the
+/// null move `0000`, whenever legal moves exist. Two independent drawn
+/// positions, both reached the way a real GUI would drive them:
+///
+/// - The fifty-move rule, set directly via a `position fen ...` with
+///   `halfmove_clock` already at the 100-half-move threshold. White has
+///   dozens of legal moves and is completely winning material.
+/// - A genuine threefold repetition, reached by three separate `position`
+///   commands each resending the full move list so far, matching how a real
+///   GUI resends `position` on every move; `session::run`'s own doc notes it
+///   samples one history hash per `position` command, so the repetition has
+///   to actually span commands to be visible here, not just be present
+///   within one command's move list.
+#[test]
+fn drawn_root_position_still_returns_a_real_bestmove() {
+    let fifty_move_output =
+        run_session("position fen 4k3/8/8/8/8/8/6R1/R3K3 w - - 100 1\ngo depth 4\nquit\n");
+    let fifty_move_bestmove = fifty_move_output
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .unwrap_or_else(|| panic!("no bestmove line in output: {fifty_move_output:?}"));
+    assert_ne!(
+        fifty_move_bestmove, "bestmove 0000",
+        "fifty-move draw with legal moves available must not report the null move, output: {fifty_move_output:?}"
+    );
+
+    let threefold_output = run_session(concat!(
+        "position startpos\n",
+        "position startpos moves g1f3 g8f6 f3g1 f6g8\n",
+        "position startpos moves g1f3 g8f6 f3g1 f6g8 g1f3 g8f6 f3g1 f6g8\n",
+        "go depth 4\n",
+        "quit\n",
+    ));
+    let threefold_bestmove = threefold_output
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .unwrap_or_else(|| panic!("no bestmove line in output: {threefold_output:?}"));
+    assert_ne!(
+        threefold_bestmove, "bestmove 0000",
+        "threefold repetition with legal moves available must not report the null move, output: {threefold_output:?}"
+    );
+}
+
 /// No trailing `quit`: the reader thread hits EOF, drops its `Sender`, and
 /// the main loop's `for command in rx` ends on its own once the channel
 /// closes. Proves the session doesn't hang waiting for a `quit` that never
