@@ -121,6 +121,48 @@ fn drawn_root_position_still_returns_a_real_bestmove() {
     );
 }
 
+/// Issue #56's optional scope: `session::run` streams an `info depth` line
+/// after *every* completed iteration of a multi-depth search, not just the
+/// final one alongside `bestmove`. No deadline involved (`go depth 3`, a
+/// plain depth-bounded search): every iteration from 1 through 3 completes
+/// deterministically, so this counts exactly three `info depth` lines
+/// rather than depending on timing to land a partial one.
+///
+/// No trailing `quit` here, deliberately, same reason
+/// `session_ends_cleanly_on_eof_with_no_explicit_quit` above has none: the
+/// reader thread parses every line up front from this in-memory buffer, far
+/// faster than the main thread can work through `position`/`go`'s blocking
+/// search, so a `quit` right behind `go depth 3` races `Command::Go`'s
+/// handler for who sets `active_stop` first. If `quit`'s stop-flag write
+/// lands first, the search it was meant to interrupt hasn't started
+/// yet, so nothing consumes it. If `Command::Go` claims `active_stop`
+/// first, `quit`'s write lands in time and genuinely aborts depth 3
+/// partway through, exactly the kind of flake this test exists to avoid,
+/// and a preexisting property of this reader-thread design, not something
+/// this change introduced. Ending on EOF instead sidesteps the race
+/// entirely: nothing is left to race the search's own stop flag.
+#[test]
+fn go_depth_streams_an_info_line_per_completed_depth() {
+    let output = run_session("position startpos\ngo depth 3\n");
+
+    let info_depths: Vec<u32> = output
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .map(|line| {
+            line.strip_prefix("info depth ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|depth| depth.parse().ok())
+                .unwrap_or_else(|| panic!("malformed info depth line: {line:?}"))
+        })
+        .collect();
+
+    assert_eq!(
+        info_depths,
+        vec![1, 2, 3],
+        "expected one info line per completed depth 1..=3, output: {output:?}"
+    );
+}
+
 /// No trailing `quit`: the reader thread hits EOF, drops its `Sender`, and
 /// the main loop's `for command in rx` ends on its own once the channel
 /// closes. Proves the session doesn't hang waiting for a `quit` that never

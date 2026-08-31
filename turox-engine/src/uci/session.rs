@@ -21,7 +21,7 @@
 
 use crate::board::Board;
 use crate::search::time::allocate_time;
-use crate::search::Search;
+use crate::search::{Search, SearchResult};
 use crate::types::Color;
 use crate::uci::{self, Command, GoOptions, Response};
 use std::io::{BufRead, Write};
@@ -74,19 +74,27 @@ where
                 *active_stop.lock().unwrap() = Some(Arc::clone(&stop));
 
                 let (mut search, max_depth) = build_search(board, history.clone(), &options, stop);
-                let result = search.search(board, max_depth);
+                // `search_with_info`, not plain `search`: streams an `info`
+                // line after every depth that finishes, not just the last,
+                // so a GUI watching a long search sees progress rather than
+                // silence until `bestmove`. `result` (used below for the
+                // fallback and `bestmove` itself) is the same final value
+                // either method would have returned.
+                let result = search.search_with_info(board, max_depth, |partial| {
+                    send(&mut writer, info_response(partial));
+                });
 
                 *active_stop.lock().unwrap() = None;
 
-                send(
-                    &mut writer,
-                    Response::Info {
-                        depth: result.depth,
-                        score: result.score,
-                        nodes: result.nodes,
-                        pv: result.best_move.into_iter().collect(),
-                    },
-                );
+                // Only reached when zero iterations completed (`max_depth ==
+                // 0`, not reachable from a real `go depth N` a GUI would
+                // send, but not `search`'s job to rule out): the callback
+                // above never fired, so this is the one `info` line for the
+                // call, matching what a plain `search` caller got before
+                // per-depth streaming existed.
+                if result.depth == 0 {
+                    send(&mut writer, info_response(&result));
+                }
                 send(&mut writer, Response::BestMove(result.best_move));
             }
             // Already handled by `read_commands` setting `active_stop`
@@ -102,6 +110,19 @@ where
     // the channel, which ends `for command in rx` on its own); joining
     // either way just waits for that thread to have actually finished.
     let _ = reader_handle.join();
+}
+
+/// Builds the `Response::Info` line for one completed iteration's
+/// `SearchResult`, shared between the per-depth streaming callback and the
+/// zero-iterations fallback in `Command::Go`'s handling above, so both
+/// paths format identically.
+fn info_response(result: &SearchResult) -> Response {
+    Response::Info {
+        depth: result.depth,
+        score: result.score,
+        nodes: result.nodes,
+        pv: result.best_move.into_iter().collect(),
+    }
 }
 
 fn send(writer: &mut impl Write, response: Response) {

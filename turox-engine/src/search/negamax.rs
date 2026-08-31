@@ -15,7 +15,7 @@ use crate::search::draw::is_draw;
 use crate::types::Move;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The score magnitude of a certain checkmate. A node where the side to
 /// move has no legal moves and is in check scores `ply as Score - MATE`:
@@ -44,6 +44,29 @@ pub const MATE: Score = 30_000;
 /// drift out of sync and silently turn the property test into a comparison
 /// between two different search depths.
 pub const MAX_QUIESCENCE_DEPTH: u32 = 8;
+
+/// The safety-margin multiplier `Search::search_with_info`'s soft time
+/// limit applies to the previous iteration's own wall-clock time, as its
+/// estimate of the *next* iteration's cost: don't start iteration N+1
+/// unless at least `elapsed(N) * ITERATION_TIME_SAFETY_MARGIN` still
+/// remains before `self.deadline`.
+///
+/// Real measured branching factors near the horizon run roughly 7-9x from
+/// one iteration to the next (move ordering narrows this well below the
+/// raw legal-move count, but it's still a real multiplicative blowup, not
+/// a fixed increment). `4` is deliberately below that observed range
+/// rather than matching it: this soft limit only ever gets to be wrong in
+/// one of two directions, and they aren't equally costly. Setting the
+/// margin too high (skip too eagerly) throws away real search depth the
+/// position had time for, which directly costs playing strength. Setting
+/// it too low (skip too rarely) merely falls back to the pre-existing
+/// behavior this issue is about, an iteration gets started, aborted, and
+/// discarded, wasting time but not search quality. So this constant is
+/// biased toward the cheaper failure mode: `4x` only vetoes iterations
+/// that would need less than half the typically-observed growth factor to
+/// fit, catching the clearly-hopeless cases without second-guessing a
+/// position whose branching factor just happens to run leaner than usual.
+const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
 /// One completed call to [`Search::search`]: the best move and score found,
 /// and the depth actually reached. `depth` can be less than the requested
@@ -179,7 +202,10 @@ impl Search {
 
     /// Iterative deepening driver: repeatedly searches the root at
     /// increasing depths, keeping only the result of the last iteration
-    /// that ran to completion.
+    /// that ran to completion. Delegates to
+    /// [`Search::search_with_info`] with a no-op callback; see that
+    /// method to observe each completed iteration's result as it lands
+    /// rather than only the final one.
     ///
     /// Implementation gotchas:
     /// - An iteration interrupted partway through (`search_root` returns
@@ -191,14 +217,52 @@ impl Search {
     /// - If the position handed in has no legal moves at all, there's
     ///   nothing to deepen into: `search_root` reports that directly (see
     ///   its own doc) rather than `search` special-casing it up front.
+    /// - Before starting each iteration past the first, a soft limit (see
+    ///   `ITERATION_TIME_SAFETY_MARGIN`) estimates whether there's a
+    ///   realistic chance of finishing it before `self.deadline`, and
+    ///   stops the loop early rather than starting (and later discarding)
+    ///   an iteration with no real chance of completing. Only applies when
+    ///   `self.deadline` is set: a `max_nodes`-bounded or fully unbounded
+    ///   search has no wall-clock deadline to estimate against, and must
+    ///   still deepen exactly as before.
     pub fn search(&mut self, board: &Board, max_depth: u32) -> SearchResult {
+        self.search_with_info(board, max_depth, |_| {})
+    }
+
+    /// Same iterative deepening driver as [`Search::search`], but calls
+    /// `on_iteration_complete` with the result of every iteration that
+    /// runs to completion, not just the last one; `search` is this method
+    /// with a no-op callback. Kept as a separate method (rather than
+    /// threading an `Option<impl FnMut>` through `search` itself) so
+    /// existing callers that only want a final result (`benches/search.rs`,
+    /// most of `tests/search_props.rs`) don't need to know callbacks exist.
+    pub fn search_with_info<F: FnMut(&SearchResult)>(
+        &mut self,
+        board: &Board,
+        max_depth: u32,
+        mut on_iteration_complete: F,
+    ) -> SearchResult {
         let mut result = SearchResult {
             best_move: None,
             score: 0,
             depth: 0,
             nodes: 0,
         };
+        // Only tracked when `self.deadline` is set: a `max_nodes`-bounded or
+        // fully unbounded search has nothing to estimate against, so this
+        // stays `None` the whole loop and the soft-limit check below never
+        // fires, leaving that path byte-for-byte unaffected by this check.
+        let mut previous_iteration_elapsed: Option<Duration> = None;
+
         for depth in 1..=max_depth {
+            if let (Some(deadline), Some(elapsed)) = (self.deadline, previous_iteration_elapsed) {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if elapsed.saturating_mul(ITERATION_TIME_SAFETY_MARGIN) > remaining {
+                    break;
+                }
+            }
+
+            let iteration_started = self.deadline.is_some().then(Instant::now);
             match self.search_root(board, depth) {
                 None => break,
                 Some((score, best_move)) => {
@@ -208,7 +272,11 @@ impl Search {
                         depth,
                         nodes: self.nodes(),
                     };
+                    on_iteration_complete(&result);
                 }
+            }
+            if let Some(started) = iteration_started {
+                previous_iteration_elapsed = Some(started.elapsed());
             }
         }
         result

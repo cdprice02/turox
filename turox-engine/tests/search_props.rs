@@ -462,6 +462,94 @@ fn quiescence_avoids_a_poisoned_pawn() {
     );
 }
 
+/// Issue #56: iterative deepening must not start an iteration with no
+/// realistic chance of finishing before `self.deadline`, wasting the
+/// remaining budget on a doomed iteration that gets discarded anyway (per
+/// `interrupted_iteration_keeps_the_last_completed_result` above). This
+/// self-calibrates against this machine's own real timings rather than a
+/// hardcoded millisecond figure, since branching factor and hardware both
+/// vary: it times an unbounded `depth`-ply search on kiwipete first, then
+/// hands a *fresh* search only `2x` that measured time as its whole budget
+/// and asks it for `depth + 1`. Kiwipete's real per-ply branching factor
+/// comfortably clears this soft limit's own `4x` safety margin (see
+/// `ITERATION_TIME_SAFETY_MARGIN`'s doc), so after `depth` completes
+/// (consuming close to the full budget on its own), the ~1x left over is
+/// nowhere near enough for `depth + 1` by even the conservative `4x`
+/// estimate; the soft limit must catch that and return `depth`'s own
+/// result rather than starting `depth + 1` at all.
+#[test]
+fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+    let depth = 3;
+
+    let timed_start = Instant::now();
+    let baseline = Search::new(Vec::new()).search(&board, depth);
+    let depth_elapsed = timed_start.elapsed();
+    assert_eq!(
+        baseline.depth, depth,
+        "sanity check: an unbounded search must reach the requested depth"
+    );
+
+    let deadline = Instant::now() + depth_elapsed * 2;
+    let mut bounded = Search::new(Vec::new()).with_deadline(deadline);
+    let result = bounded.search(&board, depth + 1);
+
+    assert_eq!(
+        result.depth, depth,
+        "a budget of only ~2x depth {depth}'s own measured time must not be enough for depth {} \
+         on a position whose real branching factor is well above this soft limit's 4x margin, got depth {}",
+        depth + 1,
+        result.depth
+    );
+    assert_eq!(
+        result.best_move, baseline.best_move,
+        "the soft limit must return depth {depth}'s own result unchanged, not some other move"
+    );
+}
+
+/// The regression case this issue is really about: a `go depth N` UCI
+/// command (`Search::search` with no `with_deadline` call at all, the
+/// majority shape of this test suite's own calls) must still reach exactly
+/// the requested depth, completely unaffected by the soft limit above.
+/// Kiwipete specifically, since it's the same branchy position the soft
+/// limit test above deliberately trips the limit on; here, with no
+/// deadline set, growth between iterations must never stop the loop early.
+#[test]
+fn no_deadline_still_reaches_the_exact_requested_depth() {
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+    let result = Search::new(Vec::new()).search(&board, 4);
+    assert_eq!(
+        result.depth, 4,
+        "no deadline was set, so the soft limit must never apply and depth 4 must complete"
+    );
+}
+
+/// A `max_nodes`-only search (no deadline set) is equally unaffected: the
+/// soft limit only ever reasons about `self.deadline`, so a generous node
+/// budget that never actually trips `should_abort` must still reach the
+/// exact requested depth, same as `no_deadline_still_reaches_the_exact_requested_depth`.
+#[test]
+fn max_nodes_only_search_unaffected_by_soft_limit() {
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+
+    let unbounded = Search::new(Vec::new()).search(&board, 4);
+    assert_eq!(unbounded.depth, 4, "sanity check on the unbounded baseline");
+
+    let mut bounded = Search::new(Vec::new()).with_max_nodes(unbounded.nodes * 2);
+    let result = bounded.search(&board, 4);
+    assert_eq!(
+        result.depth, 4,
+        "a node budget generous enough to never trip should_abort must still reach depth 4, \
+         the soft limit must not apply without a deadline"
+    );
+}
+
 /// Looks `from`/`to` up against `board`'s own legal moves, rather than
 /// constructing `Move` values by hand: no UCI string parser exists yet
 /// (that's a later, UCI-specific issue), and this stays honest about which
