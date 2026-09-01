@@ -27,3 +27,8 @@
 # === Secrets ===
 .env
 .env.*
+
+# === Agent harness (local only) ===
+.claude/settings.local.json
+.claude/worktrees/
+.claude/.cc-writes/

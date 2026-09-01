@@ -12,11 +12,11 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-# Zero runtime dependencies, deliberately. See the "Dependency policy" section of
-# docs/plans (or ask why): every candidate considered (anyhow, thiserror, smallvec,
-# derive_more, bitflags) is either wrong-shaped for a hot-path engine or cheap enough
-# to hand-write that pulling in a proc-macro crate isn't worth it. Keeps compile times
-# down and the engine core close to no_std, which matters if a WASM build happens later.
+# Zero runtime dependencies, deliberately: every candidate considered (anyhow,
+# thiserror, smallvec, derive_more, bitflags) is either wrong-shaped for a
+# hot-path engine or cheap enough to hand-write that pulling in a proc-macro
+# crate isn't worth it. Keeps compile times down and the engine core close to
+# no_std, which matters if a WASM build happens later.
 [dependencies]
 
 [dev-dependencies]
