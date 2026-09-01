@@ -54,7 +54,8 @@ analyzer = "nextest"
 command = ["cargo", "doc", "--no-deps"]
 need_stdout = false
 
-# Runs turox-cli. Not much to see yet (UCI isn't implemented), but useful once it is.
+# Runs turox-cli, which speaks UCI end to end; drive it from a UCI-speaking GUI
+# or by hand over stdin/stdout.
 [jobs.run]
 command = ["cargo", "run", "-p", "turox-cli"]
 need_stdout = true
