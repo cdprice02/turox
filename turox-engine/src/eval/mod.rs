@@ -43,6 +43,7 @@ pub(crate) const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
 /// not `board.piece_at` over `Square::ALL`: the mailbox walk is reserved for
 /// `tests/eval_props.rs`'s independent reference, which this gets checked
 /// against and shouldn't share code with.
+#[must_use]
 pub fn eval_white_pov(board: &Board) -> Score {
     let mut score = Score::default();
     for piece in Piece::ALL {
@@ -60,6 +61,7 @@ pub fn eval_white_pov(board: &Board) -> Score {
 
 /// Side-to-move-relative score: positive means the side to move is ahead.
 /// The convention negamax search wants.
+#[must_use]
 pub fn evaluate(board: &Board) -> Score {
     match board.side_to_move() {
         Color::White => eval_white_pov(board),

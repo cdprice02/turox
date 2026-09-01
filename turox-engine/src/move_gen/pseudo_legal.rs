@@ -1,10 +1,11 @@
-//! Pseudolegal move generation: every move a piece's basic movement rule
-//! allows, for `board.side_to_move()`, without checking whether it leaves the
-//! mover's own king in check; that filter is `legal`'s job. Each of the five
-//! generators below is its own `pub` function (not folded into
-//! `pseudo_legal_moves`) so each gets its own reference-oracle proptest, and a
-//! bug in one fails in isolation rather than inside a diff against the whole
-//! move list.
+//! Pseudolegal move generation: every move a piece's basic movement rule allows, for
+//! `board.side_to_move()`, without checking whether it leaves the mover's own king in
+//! check.
+//!
+//! That filter is `legal`'s job. Each of the five generators below is its own `pub`
+//! function (not folded into `pseudo_legal_moves`) so each gets its own reference-oracle
+//! proptest, and a bug in one fails in isolation rather than inside a diff against the
+//! whole move list.
 
 use crate::board::Board;
 use crate::move_gen::attacks::{attacked_by, king_square, piece_attacks};
@@ -13,6 +14,7 @@ use crate::move_gen::tables::between;
 use crate::{Bitboard, CastlingRights, Color, Direction, File, Move, MoveFlags, Piece, Square};
 
 /// Generates every pseudolegal move for `board.side_to_move()` into `list`.
+///
 /// Calls the five functions below; their outputs never overlap (each covers a
 /// disjoint set of piece types / move shapes), so order between them doesn't
 /// matter.
@@ -50,19 +52,18 @@ fn push_promotions(list: &mut MoveList, from: Square, to: Square, capturing: boo
     }
 }
 
-/// Pushes (via `pawn_pushes`), captures, en passant, and all four
-/// capturing-promotion variants for every pawn of `board.side_to_move()`.
-/// Each pawn's own attack squares (`piece_attacks`) are checked against the
-/// en passant target and the enemy occupancy directly, rather than reversing
-/// the lookup the way `attacks::attackers_of` does: there's only one pawn's
-/// worth of targets per iteration, so there's no set to intersect against.
+/// Pushes (via `pawn_pushes`), captures, en passant, and all four capturing-promotion
+/// variants for every pawn of `board.side_to_move()`.
+///
+/// Each pawn's own attack squares (`piece_attacks`) are checked against the en passant
+/// target and the enemy occupancy directly, rather than reversing the lookup the way
+/// `attacks::attackers_of` does: there's only one pawn's worth of targets per iteration,
+/// so there's no set to intersect against.
 pub fn pawn_moves(board: &Board, list: &mut MoveList) {
     let color = board.side_to_move();
     pawn_pushes(board, list, color);
 
-    let en_passant = board
-        .en_passant()
-        .map_or(Bitboard::EMPTY, |sq| sq.bitboard());
+    let en_passant = board.en_passant().map_or(Bitboard::EMPTY, Square::bitboard);
     let enemy = board[color.flip()];
     let occupied = board.occupied();
     for sq in board.pieces(color, Piece::Pawn) {
@@ -113,12 +114,13 @@ pub fn knight_moves(board: &Board, list: &mut MoveList) {
     nonpawn_moves(board, list, Piece::Knight);
 }
 
-/// Every quiet move and capture for `board.side_to_move()`'s king,
-/// deliberately including moves onto attacked squares. Pre-filtering against
-/// `attacks::attacked_by` here would be a plausible-looking optimization
-/// that's wrong on its own: it doesn't know about pins, discovered checks, or
-/// castling-through-check, and `legal`'s copy-make already has to handle all
-/// three, so there's no partial win from duplicating part of it here.
+/// Every quiet move and capture for `board.side_to_move()`'s king, deliberately including
+/// moves onto attacked squares.
+///
+/// Pre-filtering against `attacks::attacked_by` here would be a plausible-looking
+/// optimization that's wrong on its own: it doesn't know about pins, discovered checks,
+/// or castling-through-check, and `legal`'s copy-make already has to handle all three, so
+/// there's no partial win from duplicating part of it here.
 pub fn king_moves(board: &Board, list: &mut MoveList) {
     nonpawn_moves(board, list, Piece::King);
 }
@@ -148,34 +150,37 @@ fn nonpawn_moves(board: &Board, list: &mut MoveList, piece: Piece) {
     }
 }
 
-/// Kingside and queenside castling for `board.side_to_move()`, where the
-/// relevant `CastlingRights` bit is set, the squares between king and rook are
-/// empty, and the king's start/transit/landing squares are all unattacked.
+/// Kingside and queenside castling for `board.side_to_move()`.
 ///
-/// The {Color}x{kingside,queenside} four-way mapping is a shape that has
-/// repeatedly produced scrambled bugs in this crate: `valid_castle` derives
-/// every square that matters
-/// (`tables::between(king_sq, rook_sq)`) from where the king and rook
-/// actually stand, so Black isn't a separate case: it falls out of
-/// `king_sq`/`rook_sq` already being Black's squares. The rook lookup below
-/// filters by `color.back_rank()` as well as file, not file alone: "the piece
-/// of `color`/`Rook` on file A/H" is wrong the moment a pawn has promoted to
-/// a rook on that file (e.g. Black promoting on a1 while Black's real
-/// queenside rook is still on a8). Picking the wrong one doesn't panic:
-/// `between` on two unaligned squares returns `Bitboard::EMPTY`, which
-/// trivially passes the occupancy check and collapses the safety check to
-/// "is `king_sq` itself attacked", skipping the real transit squares. Perft
-/// caught this at depth 4 on the standard "Position 4" test position, built
-/// to reach exactly this promotion-creates-an-ambiguous-same-file-rook
-/// scenario within a few plies; no hand-written FEN scenario thought to
-/// construct it.
+/// Legal only where the relevant `CastlingRights` bit is set, the squares between king
+/// and rook are empty, and the king's start/transit/landing squares are all unattacked.
 ///
-/// This needs `attacks::attacked_by` here rather than being deferred to
-/// `legal`'s filter: `legal`'s copy-make only inspects the *resulting*
-/// position, so it can catch landing in check but not castling *through* it.
-/// b1/b8 must be **empty but need not be unattacked**: the king never
-/// crosses it, only the rook does, so `valid_castle`'s occupancy check uses
-/// the full `between` set while its safety check excludes `File::B`.
+/// The {Color}x{kingside,queenside} four-way mapping is a shape that has repeatedly
+/// produced scrambled bugs in this crate: `valid_castle` derives every square that
+/// matters (`tables::between(king_sq, rook_sq)`) from where the king and rook actually
+/// stand, so Black isn't a separate case: it falls out of `king_sq`/`rook_sq` already
+/// being Black's squares. The rook lookup below filters by `color.back_rank()` as well as
+/// file, not file alone: "the piece of `color`/`Rook` on file A/H" is wrong the moment a
+/// pawn has promoted to a rook on that file (e.g. Black promoting on a1 while Black's
+/// real queenside rook is still on a8). Picking the wrong one doesn't panic: `between` on
+/// two unaligned squares returns `Bitboard::EMPTY`, which trivially passes the occupancy
+/// check and collapses the safety check to "is `king_sq` itself attacked", skipping the
+/// real transit squares. Perft caught this at depth 4 on the standard "Position 4" test
+/// position, built to reach exactly this promotion-creates-an-ambiguous-same-file-rook
+/// scenario within a few plies; no hand-written FEN scenario thought to construct it.
+///
+/// This needs `attacks::attacked_by` here rather than being deferred to `legal`'s filter:
+/// `legal`'s copy-make only inspects the *resulting* position, so it can catch landing in
+/// check but not castling *through* it. b1/b8 must be **empty but need not be
+/// unattacked**: the king never crosses it, only the rook does, so `valid_castle`'s
+/// occupancy check uses the full `between` set while its safety check excludes `File::B`.
+///
+/// # Panics
+///
+/// If `board`'s `CastlingRights` claims a side has castling rights but the expected rook
+/// isn't actually on its corner square, or if `board` has no king of `color` at all: both
+/// are invariants `Board` is supposed to maintain, not conditions this function is meant
+/// to recover from.
 pub fn castling_moves(board: &Board, list: &mut MoveList) {
     let color = board.side_to_move();
     let Some(king_sq) = king_square(board, color) else {

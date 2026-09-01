@@ -49,6 +49,10 @@ proptest! {
 const OPEN_CASTLE_POSITION_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const OPEN_CASTLE_POSITION_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";
 
+// Test-only helper, not itself a `#[test]` fn, so clippy's test-context
+// detection doesn't cover it; the interpolated fen/flags in the panic
+// message are worth keeping over a plain `.expect("...")`.
+#[allow(clippy::panic)]
 fn castle_move(fen: &str, flags: MoveFlags) -> Move {
     let board = Board::try_from_fen(fen).expect("valid FEN");
     *legal_moves(&board)

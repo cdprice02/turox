@@ -1,19 +1,21 @@
-//! Square-attack queries: "is this square attacked, and by what?" Built on top
-//! of `tables` (leaper attacks) and `magic` (slider attacks), both **forward**:
-//! given a piece standing on `sq` with some `occupied` set, what does it hit.
-//! Everything here composes in that same forward direction, with one
-//! deliberate exception (`attackers_of`) below.
+//! Square-attack queries: "is this square attacked, and by what?"
+//!
+//! Built on top of `tables` (leaper attacks) and `magic` (slider attacks), both
+//! **forward**: given a piece standing on `sq` with some `occupied` set, what does it
+//! hit. Everything here composes in that same forward direction, with one deliberate
+//! exception (`attackers_of`) below.
 
 use crate::board::Board;
 use crate::move_gen::magic::{bishop_attacks, queen_attacks, rook_attacks};
 use crate::move_gen::tables::{king_attacks, knight_attacks, pawn_attacks};
 use crate::types::{Bitboard, Color, Piece, Square};
 
-/// Every square a piece of `piece`/`color` standing on `sq` attacks, given
-/// `occupied`. The single dispatch point from `Piece` to the right
-/// `tables`/`magic` function; every other function in this module and in
-/// `move_gen::pseudo_legal` should go through this rather than matching on
-/// `Piece` itself.
+/// Every square a piece of `piece`/`color` standing on `sq` attacks, given `occupied`.
+///
+/// The single dispatch point from `Piece` to the right `tables`/`magic` function; every
+/// other function in this module and in `move_gen::pseudo_legal` should go through this
+/// rather than matching on `Piece` itself.
+#[must_use]
 pub const fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     match piece {
         Piece::Pawn => pawn_attacks(color, sq),
@@ -26,6 +28,7 @@ pub const fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bit
 }
 
 /// Union of every square attacked by any piece of `by`, against `occupied`.
+///
 /// Takes `occupied` explicitly rather than always using `board.occupied()`:
 /// for king safety, the correct occupancy has the king already lifted off
 /// its old square, or a square directly behind it through an enemy slider
@@ -36,6 +39,7 @@ pub const fn piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bit
 /// as an index/`lsb` walk would buy a `const` no caller currently needs, at
 /// a real readability cost, so this stays a plain `fn`. Same reasoning
 /// applies to `attackers_of` below.
+#[must_use]
 pub fn attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard {
     let mut attacked_by = Bitboard::EMPTY;
     for piece in Piece::ALL {
@@ -48,6 +52,7 @@ pub fn attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard {
 }
 
 /// Whether any piece of `by` attacks `sq`, given the board's own occupancy.
+#[must_use]
 pub fn is_attacked(board: &Board, sq: Square, by: Color) -> bool {
     !attacked_by(board, by, board.occupied())
         .and(sq.bitboard())
@@ -55,6 +60,7 @@ pub fn is_attacked(board: &Board, sq: Square, by: Color) -> bool {
 }
 
 /// `color`'s king's square, or `None` if it has no king.
+#[must_use]
 pub const fn king_square(board: &Board, color: Color) -> Option<Square> {
     board.pieces(color, Piece::King).lsb()
 }
@@ -68,18 +74,16 @@ pub const fn king_square(board: &Board, color: Color) -> Option<Square> {
 /// attacked" in five lookups where `attacked_by` builds the enemy's entire
 /// attack set (all six piece types over every enemy piece) just to test one
 /// bit of it.
+#[must_use]
 pub fn in_check(board: &Board, color: Color) -> bool {
-    if let Some(sq) = king_square(board, color) {
-        !attackers_of(board, sq, color.flip()).is_empty()
-    } else {
-        false
-    }
+    king_square(board, color).is_some_and(|sq| !attackers_of(board, sq, color.flip()).is_empty())
 }
 
-/// Which pieces of `by` attack `sq`, the superpiece trick: stand each piece
-/// type on `sq` in turn, radiate its attack pattern, and intersect with the
-/// real pieces of that type/color. The reverse of every other function in
-/// this module, and the one place a color bug can hide.
+/// Which pieces of `by` attack `sq`, the superpiece trick.
+///
+/// Stand each piece type on `sq` in turn, radiate its attack pattern, and intersect with
+/// the real pieces of that type/color. The reverse of every other function in this
+/// module, and the one place a color bug can hide.
 ///
 /// Knight, king, and slider attack relations are *symmetric*: "a attacks b"
 /// iff "b attacks a", so radiating from `sq` works unmodified for those
@@ -93,6 +97,7 @@ pub fn in_check(board: &Board, color: Color) -> bool {
 /// vertically symmetric test position even with the flip missing or
 /// backward, so verify against an asymmetric one (a pawn a few ranks off the
 /// board's horizontal midline is enough).
+#[must_use]
 pub fn attackers_of(board: &Board, sq: Square, by: Color) -> Bitboard {
     let mut attackers_of = Bitboard::EMPTY;
     for piece in Piece::ALL {

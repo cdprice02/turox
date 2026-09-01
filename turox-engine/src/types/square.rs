@@ -3,10 +3,11 @@
 use super::bitboard::Bitboard;
 use std::fmt;
 
-/// Declares a small `repr(u8)` enum with an `ALL` lookup table and
-/// `from_index`/`index` conversions, from a single list of variant names. Used for
-/// `File`, `Rank`, and `Square` below: the axis size (8, 8, 64) and variant list
-/// are the only things that differ between them.
+/// Declares a small `repr(u8)` axis enum, from a single list of variant names.
+///
+/// Adds an `ALL` lookup table and `from_index`/`index` conversions. Used for `File`,
+/// `Rank`, and `Square` below: the axis size (8, 8, 64) and variant list are the only
+/// things that differ between them.
 macro_rules! declare_axis {
     ($(#[$meta:meta])* $name:ident, $size:literal, { $($variant:ident),* $(,)? }) => {
         $(#[$meta])*
@@ -53,10 +54,11 @@ declare_axis!(
 );
 
 declare_axis!(
-    /// A single board square, stored as a LERF (Little-Endian Rank-File) index:
+    /// A single board square, stored as a LERF (Little-Endian Rank-File) index.
+    ///
     /// a1 = 0, b1 = 1, ..., h1 = 7, a2 = 8, ..., h8 = 63. This ordering is what the
-    /// `Bitboard` transform constants (see `bitboard.rs`) assume. `Debug` is
-    /// implemented manually below (algebraic notation) rather than derived.
+    /// `Bitboard` transform constants (see `bitboard.rs`) assume. `Debug` is implemented
+    /// manually below (algebraic notation) rather than derived.
     Square, 64, {
         A1, B1, C1, D1, E1, F1, G1, H1,
         A2, B2, C2, D2, E2, F2, G2, H2,
@@ -72,16 +74,17 @@ declare_axis!(
 impl File {
     /// Every square on this file, as a `Bitboard`.
     #[inline]
+    #[must_use]
     pub const fn bitboard(self) -> Bitboard {
         match self {
-            File::A => Bitboard::from_bits(0x0101010101010101),
-            File::B => Bitboard::from_bits(0x0202020202020202),
-            File::C => Bitboard::from_bits(0x0404040404040404),
-            File::D => Bitboard::from_bits(0x0808080808080808),
-            File::E => Bitboard::from_bits(0x1010101010101010),
-            File::F => Bitboard::from_bits(0x2020202020202020),
-            File::G => Bitboard::from_bits(0x4040404040404040),
-            File::H => Bitboard::from_bits(0x8080808080808080),
+            Self::A => Bitboard::from_bits(0x0101_0101_0101_0101),
+            Self::B => Bitboard::from_bits(0x0202_0202_0202_0202),
+            Self::C => Bitboard::from_bits(0x0404_0404_0404_0404),
+            Self::D => Bitboard::from_bits(0x0808_0808_0808_0808),
+            Self::E => Bitboard::from_bits(0x1010_1010_1010_1010),
+            Self::F => Bitboard::from_bits(0x2020_2020_2020_2020),
+            Self::G => Bitboard::from_bits(0x4040_4040_4040_4040),
+            Self::H => Bitboard::from_bits(0x8080_8080_8080_8080),
         }
     }
 }
@@ -89,22 +92,24 @@ impl File {
 impl Rank {
     /// Every square on this rank, as a `Bitboard`.
     #[inline]
+    #[must_use]
     pub const fn bitboard(self) -> Bitboard {
         match self {
-            Rank::R1 => Bitboard::from_bits(0x00000000000000FF),
-            Rank::R2 => Bitboard::from_bits(0x000000000000FF00),
-            Rank::R3 => Bitboard::from_bits(0x0000000000FF0000),
-            Rank::R4 => Bitboard::from_bits(0x00000000FF000000),
-            Rank::R5 => Bitboard::from_bits(0x000000FF00000000),
-            Rank::R6 => Bitboard::from_bits(0x0000FF0000000000),
-            Rank::R7 => Bitboard::from_bits(0x00FF000000000000),
-            Rank::R8 => Bitboard::from_bits(0xFF00000000000000),
+            Self::R1 => Bitboard::from_bits(0x0000_0000_0000_00FF),
+            Self::R2 => Bitboard::from_bits(0x0000_0000_0000_FF00),
+            Self::R3 => Bitboard::from_bits(0x0000_0000_00FF_0000),
+            Self::R4 => Bitboard::from_bits(0x0000_0000_FF00_0000),
+            Self::R5 => Bitboard::from_bits(0x0000_00FF_0000_0000),
+            Self::R6 => Bitboard::from_bits(0x0000_FF00_0000_0000),
+            Self::R7 => Bitboard::from_bits(0x00FF_0000_0000_0000),
+            Self::R8 => Bitboard::from_bits(0xFF00_0000_0000_0000),
         }
     }
 }
 
 impl Square {
     /// The square at the intersection of `file` and `rank`.
+    #[must_use]
     pub const fn new(file: File, rank: Rank) -> Self {
         // ALL is laid out rank-major (LERF), so this is the inverse of file()/rank().
         Self::ALL[(rank.index() as usize) * 8 + file.index() as usize]
@@ -117,6 +122,7 @@ impl Square {
     /// and UCI move notation (`types::moves::Move::from_uci`) rather than
     /// each parsing it separately, same reasoning `Display`'s own doc
     /// gives for the opposite direction.
+    #[must_use]
     pub fn try_from_algebraic(s: &str) -> Option<Self> {
         let mut chars = s.chars();
         let file_ch = chars.next()?;
@@ -136,6 +142,7 @@ impl Square {
     }
 
     /// This square's file.
+    #[must_use]
     pub const fn file(self) -> File {
         match File::from_index(self.index() % 8) {
             Some(f) => f,
@@ -144,6 +151,7 @@ impl Square {
     }
 
     /// This square's rank.
+    #[must_use]
     pub const fn rank(self) -> Rank {
         match Rank::from_index(self.index() / 8) {
             Some(r) => r,
@@ -152,21 +160,24 @@ impl Square {
     }
 
     /// This square's single-bit mask within a `Bitboard`.
+    #[must_use]
     pub const fn bitboard(self) -> Bitboard {
         Bitboard::from_bits(1u64 << self.index())
     }
 
     /// Mirror across the horizontal midline (a1 <-> a8, e4 <-> e5).
+    #[must_use]
     pub const fn flip_rank(self) -> Self {
-        match Self::from_index(self.index() ^ 0b111000) {
+        match Self::from_index(self.index() ^ 0b11_1000) {
             Some(sq) => sq,
             None => unreachable!(),
         }
     }
 
     /// Mirror across the vertical midline (a1 <-> h1, d4 <-> e4).
+    #[must_use]
     pub const fn flip_file(self) -> Self {
-        match Self::from_index(self.index() ^ 0b000111) {
+        match Self::from_index(self.index() ^ 0b00_0111) {
             Some(sq) => sq,
             None => unreachable!(),
         }
@@ -174,6 +185,7 @@ impl Square {
 
     /// The square offset by `df` files and `dr` ranks, or `None` if that would leave
     /// the board.
+    #[must_use]
     pub const fn offset(self, df: i8, dr: i8) -> Option<Self> {
         let file = self.file().index() as i8 + df;
         let rank = self.rank().index() as i8 + dr;
@@ -181,18 +193,17 @@ impl Square {
             return None;
         }
         // Checked above: both are in 0..=7, so these conversions always succeed.
-        let file = match File::from_index(file as u8) {
-            Some(f) => f,
-            None => unreachable!(),
+        let Some(file) = File::from_index(file as u8) else {
+            unreachable!()
         };
-        let rank = match Rank::from_index(rank as u8) {
-            Some(r) => r,
-            None => unreachable!(),
+        let Some(rank) = Rank::from_index(rank as u8) else {
+            unreachable!()
         };
         Some(Self::new(file, rank))
     }
 
     /// Chebyshev (king-move) distance between two squares.
+    #[must_use]
     pub const fn distance(self, other: Self) -> u8 {
         let df = (self.file().index() as i8 - other.file().index() as i8).unsigned_abs();
         let dr = (self.rank().index() as i8 - other.rank().index() as i8).unsigned_abs();

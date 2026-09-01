@@ -177,8 +177,8 @@ fn parses_go_with_a_real_game_clock() {
     assert_eq!(
         parse("go wtime 60000 btime 55000 winc 1000 binc 2000 movestogo 30"),
         Some(Command::Go(GoOptions {
-            wtime: Some(Duration::from_millis(60000)),
-            btime: Some(Duration::from_millis(55000)),
+            wtime: Some(Duration::from_secs(60)),
+            btime: Some(Duration::from_secs(55)),
             winc: Some(Duration::from_millis(1000)),
             binc: Some(Duration::from_millis(2000)),
             movestogo: Some(30),

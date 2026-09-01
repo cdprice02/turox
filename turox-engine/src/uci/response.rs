@@ -1,7 +1,8 @@
-//! Formatting UCI protocol responses, free of I/O: `Response`'s `Display`
-//! impl produces exactly the line to write, the same way `command::parse`
-//! stays pure on the input side. The UCI loop (a later issue) is the only
-//! piece that actually writes to stdout.
+//! Formatting UCI protocol responses, free of I/O.
+//!
+//! `Response`'s `Display` impl produces exactly the line to write, the same way
+//! `command::parse` stays pure on the input side. `super::session` is the only piece that
+//! actually writes to stdout.
 
 use crate::eval::Score;
 use crate::search::MATE;
@@ -14,7 +15,7 @@ use std::fmt;
 /// each (this engine's own name and author), not something a caller
 /// supplies per call, so they're baked into `Display` directly rather than
 /// threaded through as fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
     /// `id name turox`.
     IdName,
@@ -79,7 +80,7 @@ enum ScoreKind {
 /// inspection: `tests/uci_response.rs` pins specific mate scores
 /// already confirmed correct by `search`'s own mate-puzzle tests in #19
 /// (`MATE - 1`, `MATE - 3`, ...) to their expected `mate N` output.
-fn classify_score(score: Score) -> ScoreKind {
+const fn classify_score(score: Score) -> ScoreKind {
     if score.abs() > MATE / 2 {
         let ply = MATE - score.abs();
         let moves = (ply + 1) / 2;
@@ -92,18 +93,18 @@ fn classify_score(score: Score) -> ScoreKind {
 impl fmt::Display for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Response::IdName => write!(f, "id name turox"),
-            Response::IdAuthor => write!(f, "id author Carson Price"),
-            Response::UciOk => write!(f, "uciok"),
-            Response::ReadyOk => write!(f, "readyok"),
-            Response::BestMove(m) => {
+            Self::IdName => write!(f, "id name turox"),
+            Self::IdAuthor => write!(f, "id author Carson Price"),
+            Self::UciOk => write!(f, "uciok"),
+            Self::ReadyOk => write!(f, "readyok"),
+            Self::BestMove(m) => {
                 write!(f, "bestmove ")?;
                 match m {
                     None => write!(f, "0000"),
                     Some(m) => write!(f, "{}", m.to_uci()),
                 }
             }
-            Response::Info {
+            Self::Info {
                 depth,
                 score,
                 nodes,

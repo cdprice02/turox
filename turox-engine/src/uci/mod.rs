@@ -1,10 +1,11 @@
-//! UCI (Universal Chess Interface) protocol: parsing commands from stdin
-//! (`position`, `go`, `isready`, ...) and emitting responses (`bestmove`, `info`,
-//! ...), so `turox-cli` can drive the engine from any UCI-speaking GUI.
+//! UCI (Universal Chess Interface) protocol.
 //!
-//! `command` covers parsing, `response` covers emitting, and `session` is
-//! the stateful loop that drives an `Engine`'s `Board` from stdin/stdout
-//! using both.
+//! Parsing commands from stdin (`position`, `go`, `isready`, ...) and emitting responses
+//! (`bestmove`, `info`, ...), so `turox-cli` can drive the engine from any UCI-speaking
+//! GUI.
+//!
+//! `command` covers parsing, `response` covers emitting, and `session` is the stateful
+//! loop that drives an `Engine`'s `Board` from stdin/stdout using both.
 
 pub mod command;
 pub mod response;

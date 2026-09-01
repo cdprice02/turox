@@ -18,13 +18,13 @@ pub enum Piece {
 
 impl Piece {
     /// Every piece kind.
-    pub const ALL: [Piece; 6] = [
-        Piece::Pawn,
-        Piece::Knight,
-        Piece::Bishop,
-        Piece::Rook,
-        Piece::Queen,
-        Piece::King,
+    pub const ALL: [Self; 6] = [
+        Self::Pawn,
+        Self::Knight,
+        Self::Bishop,
+        Self::Rook,
+        Self::Queen,
+        Self::King,
     ];
 }
 
@@ -54,24 +54,26 @@ pub enum ColoredPiece {
 
 impl ColoredPiece {
     /// Build a `ColoredPiece` from its color and piece kind.
+    #[must_use]
     pub const fn new(color: Color, piece: Piece) -> Self {
         match (color, piece) {
-            (Color::White, Piece::Pawn) => ColoredPiece::WhitePawn,
-            (Color::White, Piece::Knight) => ColoredPiece::WhiteKnight,
-            (Color::White, Piece::Bishop) => ColoredPiece::WhiteBishop,
-            (Color::White, Piece::Rook) => ColoredPiece::WhiteRook,
-            (Color::White, Piece::Queen) => ColoredPiece::WhiteQueen,
-            (Color::White, Piece::King) => ColoredPiece::WhiteKing,
-            (Color::Black, Piece::Pawn) => ColoredPiece::BlackPawn,
-            (Color::Black, Piece::Knight) => ColoredPiece::BlackKnight,
-            (Color::Black, Piece::Bishop) => ColoredPiece::BlackBishop,
-            (Color::Black, Piece::Rook) => ColoredPiece::BlackRook,
-            (Color::Black, Piece::Queen) => ColoredPiece::BlackQueen,
-            (Color::Black, Piece::King) => ColoredPiece::BlackKing,
+            (Color::White, Piece::Pawn) => Self::WhitePawn,
+            (Color::White, Piece::Knight) => Self::WhiteKnight,
+            (Color::White, Piece::Bishop) => Self::WhiteBishop,
+            (Color::White, Piece::Rook) => Self::WhiteRook,
+            (Color::White, Piece::Queen) => Self::WhiteQueen,
+            (Color::White, Piece::King) => Self::WhiteKing,
+            (Color::Black, Piece::Pawn) => Self::BlackPawn,
+            (Color::Black, Piece::Knight) => Self::BlackKnight,
+            (Color::Black, Piece::Bishop) => Self::BlackBishop,
+            (Color::Black, Piece::Rook) => Self::BlackRook,
+            (Color::Black, Piece::Queen) => Self::BlackQueen,
+            (Color::Black, Piece::King) => Self::BlackKing,
         }
     }
 
     /// This piece's color.
+    #[must_use]
     pub const fn color(self) -> Color {
         if (self as u8) < 6 {
             Color::White
@@ -81,6 +83,7 @@ impl ColoredPiece {
     }
 
     /// This piece's kind, independent of color.
+    #[must_use]
     pub const fn piece(self) -> Piece {
         const PIECES: [Piece; 6] = [
             Piece::Pawn,
@@ -97,6 +100,7 @@ impl ColoredPiece {
     /// `is_ascii_uppercase`, not `is_uppercase`: FEN is ASCII-only, and
     /// `is_uppercase` isn't `const` (it's Unicode-aware, which is both wrong
     /// for FEN and unavailable in a `const fn`).
+    #[must_use]
     pub const fn try_from_fen(c: char) -> Option<Self> {
         let color = if c.is_ascii_uppercase() {
             Color::White
@@ -116,20 +120,21 @@ impl ColoredPiece {
     }
 
     /// Convert a `ColoredPiece` into its FEN character.
+    #[must_use]
     pub const fn to_fen(self) -> char {
         match self {
-            ColoredPiece::WhitePawn => 'P',
-            ColoredPiece::WhiteKnight => 'N',
-            ColoredPiece::WhiteBishop => 'B',
-            ColoredPiece::WhiteRook => 'R',
-            ColoredPiece::WhiteQueen => 'Q',
-            ColoredPiece::WhiteKing => 'K',
-            ColoredPiece::BlackPawn => 'p',
-            ColoredPiece::BlackKnight => 'n',
-            ColoredPiece::BlackBishop => 'b',
-            ColoredPiece::BlackRook => 'r',
-            ColoredPiece::BlackQueen => 'q',
-            ColoredPiece::BlackKing => 'k',
+            Self::WhitePawn => 'P',
+            Self::WhiteKnight => 'N',
+            Self::WhiteBishop => 'B',
+            Self::WhiteRook => 'R',
+            Self::WhiteQueen => 'Q',
+            Self::WhiteKing => 'K',
+            Self::BlackPawn => 'p',
+            Self::BlackKnight => 'n',
+            Self::BlackBishop => 'b',
+            Self::BlackRook => 'r',
+            Self::BlackQueen => 'q',
+            Self::BlackKing => 'k',
         }
     }
 }

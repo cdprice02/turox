@@ -1,13 +1,14 @@
-//! Sliding-piece (bishop, rook, queen) attack generation via magic bitboards:
-//! a slider's attack set only depends on the occupancy of squares it could
-//! actually be blocked by (its *relevant occupancy mask*), so `magic_index`
-//! hashes a real occupancy, restricted to that mask, down to a small table
-//! index: a lookup instead of a ray walk on every call.
+//! Sliding-piece (bishop, rook, queen) attack generation via magic bitboards.
+//!
+//! A slider's attack set only depends on the occupancy of squares it could actually be
+//! blocked by (its *relevant occupancy mask*), so `magic_index` hashes a real occupancy,
+//! restricted to that mask, down to a small table index: a lookup instead of a ray walk
+//! on every call.
 //!
 //! The `Magic` parameters and `ROOK_ATTACKS`/`BISHOP_ATTACKS` tables below are
-//! precomputed and committed (`magics.rs`, `rook_attacks.bin`/
-//! `bishop_attacks.bin`); `regen` is the `#[cfg(test)]`-only search that found
-//! them and keeps them honest against drift.
+//! precomputed and committed (`magics.rs`, `rook_attacks.bin`/`bishop_attacks.bin`);
+//! `regen` is the `#[cfg(test)]`-only search that found them and keeps them honest
+//! against drift.
 
 use crate::types::bitboard::Bitboard;
 use crate::types::square::Square;
@@ -36,6 +37,11 @@ const BISHOP_TABLE_SIZE: usize = 5_248;
 /// where its slice starts in the flat `ROOK_ATTACKS`/`BISHOP_ATTACKS` array
 /// (`offset`). One array of 64 of these per piece type.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+// `magic` is the actual chess-programming term for this field (the
+// multiplier that makes the hash collision-free); renaming it to something
+// generic like `multiplier` would read worse to anyone who already knows
+// magic bitboards, which is the entire audience for this module.
+#[allow(clippy::struct_field_names)]
 struct Magic {
     mask: Bitboard,
     magic: u64,
@@ -86,9 +92,11 @@ static ROOK_ATTACKS: [Bitboard; ROOK_TABLE_SIZE] = decode(include_bytes!("rook_a
 /// `static`-not-`const` reasoning as `ROOK_ATTACKS`.
 static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] = decode(include_bytes!("bishop_attacks.bin"));
 
-/// Every square a rook standing on `sq` attacks, given `occupied` (both empty
-/// and enemy/friendly squares; this module doesn't know about color). Stops
-/// at, and includes, the first occupied square in each of the four directions.
+/// Every square a rook standing on `sq` attacks, given `occupied` (both empty and
+/// enemy/friendly squares; this module doesn't know about color).
+///
+/// Stops at, and includes, the first occupied square in each of the four directions.
+#[must_use]
 pub const fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
     let m = &ROOK_MAGICS[sq.index() as usize];
     ROOK_ATTACKS[m.offset + magic_index(occupied, m)]
@@ -96,6 +104,7 @@ pub const fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
 
 /// Every square a bishop standing on `sq` attacks, given `occupied`. Same
 /// blocked-and-inclusive contract as `rook_attacks`.
+#[must_use]
 pub const fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
     let m = &BISHOP_MAGICS[sq.index() as usize];
     BISHOP_ATTACKS[m.offset + magic_index(occupied, m)]
@@ -103,6 +112,7 @@ pub const fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
 
 /// Every square a queen standing on `sq` attacks: the union of `rook_attacks`
 /// and `bishop_attacks`.
+#[must_use]
 pub const fn queen_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
     rook_attacks(sq, occupied).or(bishop_attacks(sq, occupied))
 }

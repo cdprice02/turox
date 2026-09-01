@@ -157,7 +157,7 @@ pub fn mirrored(board: &Board) -> Board {
 /// `CastlingRights` has no such method itself (nothing outside this mirror
 /// needs one); built from `contains`/`with` rather than poking at its
 /// internal bit layout.
-fn mirror_castling_rights(rights: CastlingRights) -> CastlingRights {
+const fn mirror_castling_rights(rights: CastlingRights) -> CastlingRights {
     let mut swapped = CastlingRights::NONE;
     if rights.contains(CastlingRights::WHITE_KINGSIDE) {
         swapped = swapped.with(CastlingRights::BLACK_KINGSIDE);

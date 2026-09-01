@@ -91,8 +91,9 @@ const VISUAL_PST: [[Score; 64]; 6] = [
     ],
 ];
 
-/// `piece`'s positional bonus for a piece of `color` sitting on `sq`, from
-/// that piece's own side's perspective (positive is good for `color`,
+/// `piece`'s positional bonus for a piece of `color` sitting on `sq`.
+///
+/// From that piece's own side's perspective (positive is good for `color`,
 /// regardless of whether `color` is actually to move): the same
 /// White-relative-but-per-side convention `eval::eval_white_pov` sums this
 /// into.
@@ -125,7 +126,8 @@ const VISUAL_PST: [[Score; 64]; 6] = [
 /// `tests/eval_props.rs`'s orientation-anchor tests exist specifically to
 /// catch this, the same `{Color}x{direction}` shape that's bitten this
 /// crate before.
-pub fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
+#[must_use]
+pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
     let sq = match color {
         // The composed reindex-then-Black-flip cancels to nothing for
         // Black (see this function's own doc); White is left holding the

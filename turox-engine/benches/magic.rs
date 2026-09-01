@@ -32,7 +32,7 @@ const SAMPLE_COUNT: usize = 1024;
 struct XorShift64(u64);
 
 impl XorShift64 {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;

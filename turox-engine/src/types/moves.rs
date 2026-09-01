@@ -27,56 +27,60 @@ pub enum MoveFlags {
 
 impl MoveFlags {
     /// True for any of the eight promotion variants (with or without capture).
+    #[must_use]
     pub const fn is_promotion(self) -> bool {
         (self as u8) & 0b1000 != 0
     }
 
     /// True for `Capture`, `EnPassant`, or any promotion-with-capture variant.
+    #[must_use]
     pub const fn is_capture(self) -> bool {
         matches!(
             self,
-            MoveFlags::Capture
-                | MoveFlags::EnPassant
-                | MoveFlags::PromoteCaptureKnight
-                | MoveFlags::PromoteCaptureBishop
-                | MoveFlags::PromoteCaptureRook
-                | MoveFlags::PromoteCaptureQueen
+            Self::Capture
+                | Self::EnPassant
+                | Self::PromoteCaptureKnight
+                | Self::PromoteCaptureBishop
+                | Self::PromoteCaptureRook
+                | Self::PromoteCaptureQueen
         )
     }
 
     /// The move is en passant.
     #[inline]
+    #[must_use]
     pub const fn is_en_passant(self) -> bool {
-        matches!(self, MoveFlags::EnPassant)
+        matches!(self, Self::EnPassant)
     }
 
     /// The piece a promotion variant promotes to, or `None` for non-promotions.
+    #[must_use]
     pub const fn promotion_piece(self) -> Option<Piece> {
         match self {
-            MoveFlags::PromoteKnight | MoveFlags::PromoteCaptureKnight => Some(Piece::Knight),
-            MoveFlags::PromoteBishop | MoveFlags::PromoteCaptureBishop => Some(Piece::Bishop),
-            MoveFlags::PromoteRook | MoveFlags::PromoteCaptureRook => Some(Piece::Rook),
-            MoveFlags::PromoteQueen | MoveFlags::PromoteCaptureQueen => Some(Piece::Queen),
+            Self::PromoteKnight | Self::PromoteCaptureKnight => Some(Piece::Knight),
+            Self::PromoteBishop | Self::PromoteCaptureBishop => Some(Piece::Bishop),
+            Self::PromoteRook | Self::PromoteCaptureRook => Some(Piece::Rook),
+            Self::PromoteQueen | Self::PromoteCaptureQueen => Some(Piece::Queen),
             _ => None,
         }
     }
 
     const fn from_bits(bits: u8) -> Self {
         match bits {
-            0 => MoveFlags::Quiet,
-            1 => MoveFlags::DoublePawnPush,
-            2 => MoveFlags::KingCastle,
-            3 => MoveFlags::QueenCastle,
-            4 => MoveFlags::Capture,
-            5 => MoveFlags::EnPassant,
-            8 => MoveFlags::PromoteKnight,
-            9 => MoveFlags::PromoteBishop,
-            10 => MoveFlags::PromoteRook,
-            11 => MoveFlags::PromoteQueen,
-            12 => MoveFlags::PromoteCaptureKnight,
-            13 => MoveFlags::PromoteCaptureBishop,
-            14 => MoveFlags::PromoteCaptureRook,
-            15 => MoveFlags::PromoteCaptureQueen,
+            0 => Self::Quiet,
+            1 => Self::DoublePawnPush,
+            2 => Self::KingCastle,
+            3 => Self::QueenCastle,
+            4 => Self::Capture,
+            5 => Self::EnPassant,
+            8 => Self::PromoteKnight,
+            9 => Self::PromoteBishop,
+            10 => Self::PromoteRook,
+            11 => Self::PromoteQueen,
+            12 => Self::PromoteCaptureKnight,
+            13 => Self::PromoteCaptureBishop,
+            14 => Self::PromoteCaptureRook,
+            15 => Self::PromoteCaptureQueen,
             // Every 4-bit value not covered above (6, 7) is simply unused encoding
             // space; a `Move` is only ever constructed via `Move::new`, which is the
             // sole place bits get packed, so this is unreachable in practice.
@@ -95,12 +99,14 @@ pub struct Move(u16);
 
 impl Move {
     /// Packs a move from `from` to `to` with the given `flags`.
+    #[must_use]
     pub const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
         let bits = (from.index() as u16) | ((to.index() as u16) << 6) | ((flags as u16) << 12);
         Self(bits)
     }
 
     /// The square this move starts from.
+    #[must_use]
     pub const fn from(self) -> Square {
         match Square::from_index((self.0 & 0x3F) as u8) {
             Some(sq) => sq,
@@ -109,6 +115,7 @@ impl Move {
     }
 
     /// The square this move lands on.
+    #[must_use]
     pub const fn to(self) -> Square {
         match Square::from_index(((self.0 >> 6) & 0x3F) as u8) {
             Some(sq) => sq,
@@ -117,6 +124,7 @@ impl Move {
     }
 
     /// This move's kind.
+    #[must_use]
     pub const fn flags(self) -> MoveFlags {
         MoveFlags::from_bits((self.0 >> 12) as u8)
     }
@@ -133,6 +141,7 @@ impl Move {
     /// reconstruct. Worth confirming for yourself rather than taking on
     /// faith, since "does castling need special-casing" is exactly the
     /// kind of thing that looks like it should from the UCI spec alone.
+    #[must_use]
     pub fn to_uci(self) -> String {
         let mut s = format!("{}{}", self.from(), self.to());
         if let Some(p) = self.flags().promotion_piece() {
@@ -171,7 +180,8 @@ impl Move {
     /// panics entirely, not just in the common case. `bytes.get(4)`
     /// (`None` past the end of the slice) replaces a separate length
     /// branch for the optional promotion byte with a single match arm.
-    pub fn from_uci(s: &str, legal: &[Move]) -> Option<Move> {
+    #[must_use]
+    pub fn from_uci(s: &str, legal: &[Self]) -> Option<Self> {
         if !(4..=5).contains(&s.len()) || !s.is_ascii() {
             return None;
         }

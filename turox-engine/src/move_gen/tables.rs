@@ -22,17 +22,19 @@ use crate::types::bitboard::{Bitboard, Direction};
 use crate::types::color::Color;
 use crate::types::square::Square;
 
-/// Every square a knight standing on `sq` attacks. Not a `shift`/fill
-/// composition: knight moves are a discontinuous jump, not a smear or single
-/// step, but they have their own compound shift-with-masking formula (CPW's
-/// "Knight Pattern"), same technique family as `Bitboard::shift`'s diagonals,
-/// just wider file-edge masks since a knight can cross two files in one move.
+/// Every square a knight standing on `sq` attacks.
+///
+/// Not a `shift`/fill composition: knight moves are a discontinuous jump, not a smear or
+/// single step, but they have their own compound shift-with-masking formula (CPW's
+/// "Knight Pattern"), same technique family as `Bitboard::shift`'s diagonals, just wider
+/// file-edge masks since a knight can cross two files in one move.
+#[must_use]
 pub const fn knight_attacks(sq: Square) -> Bitboard {
     let x = sq.bitboard().bits();
-    let l1 = (x >> 1) & 0x7F7F7F7F7F7F7F7F;
-    let l2 = (x >> 2) & 0x3F3F3F3F3F3F3F3F;
-    let r1 = (x << 1) & 0xFEFEFEFEFEFEFEFE;
-    let r2 = (x << 2) & 0xFCFCFCFCFCFCFCFC;
+    let l1 = (x >> 1) & 0x7F7F_7F7F_7F7F_7F7F;
+    let l2 = (x >> 2) & 0x3F3F_3F3F_3F3F_3F3F;
+    let r1 = (x << 1) & 0xFEFE_FEFE_FEFE_FEFE;
+    let r2 = (x << 2) & 0xFCFC_FCFC_FCFC_FCFC;
     let h1 = l1 | r1;
     let h2 = l2 | r2;
     Bitboard::from_bits((h1 << 16) | (h1 >> 16) | (h2 << 8) | (h2 >> 8))
@@ -40,6 +42,7 @@ pub const fn knight_attacks(sq: Square) -> Bitboard {
 
 /// Every square a king standing on `sq` attacks (the 8 neighbors; unlike
 /// `Bitboard::dilate`, this does not include `sq` itself).
+#[must_use]
 pub const fn king_attacks(sq: Square) -> Bitboard {
     sq.bitboard().dilate().without(sq)
 }
@@ -61,6 +64,7 @@ const fn pawn_attacks_west(bb: Bitboard, color: Color) -> Bitboard {
 }
 
 /// Both capture squares for a pawn of `color` standing on `sq`.
+#[must_use]
 pub const fn pawn_attacks(color: Color, sq: Square) -> Bitboard {
     let bb = sq.bitboard();
     pawn_attacks_east(bb, color).or(pawn_attacks_west(bb, color))
@@ -109,10 +113,12 @@ const fn ray_direction(a: Square, b: Square) -> Option<Direction> {
 }
 
 /// Squares strictly between `a` and `b` on a shared rank, file, or diagonal.
+///
 /// `Bitboard::EMPTY` if they don't share one, including when `a == b`. Fills
 /// from `a` toward `b` via `occluded_fill`, treating every square but `b` as
 /// passable so the fill stops exactly at `b`; both endpoints get stripped
 /// afterward, since `occluded_fill` includes its seed and stopping square.
+#[must_use]
 pub const fn between(a: Square, b: Square) -> Bitboard {
     match ray_direction(a, b) {
         Some(dir) => {
@@ -123,11 +129,13 @@ pub const fn between(a: Square, b: Square) -> Bitboard {
     }
 }
 
-/// The full rank, file, or diagonal through both `a` and `b`. `Bitboard::EMPTY`
-/// under the same conditions as `between`. Fills from `a` with nothing
-/// blocking, in both the direction toward `b` and its `opposite()`, walking to
-/// the board edge both ways; no need to touch `b` directly, since it's
-/// already on the ray by construction.
+/// The full rank, file, or diagonal through both `a` and `b`.
+///
+/// `Bitboard::EMPTY` under the same conditions as `between`. Fills from `a` with nothing
+/// blocking, in both the direction toward `b` and its `opposite()`, walking to the board
+/// edge both ways; no need to touch `b` directly, since it's already on the ray by
+/// construction.
+#[must_use]
 pub const fn line(a: Square, b: Square) -> Bitboard {
     match ray_direction(a, b) {
         Some(dir) => {

@@ -38,12 +38,14 @@ pub struct Engine {
 
 impl Engine {
     /// A new engine on the default (empty) `Board`.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// The position the engine is currently tracking.
-    pub fn board(&self) -> &board::Board {
+    #[must_use]
+    pub const fn board(&self) -> &board::Board {
         &self.board
     }
 

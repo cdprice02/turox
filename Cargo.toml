@@ -19,6 +19,36 @@ missing_docs = "deny"
 # exception (via #[allow(unsafe_code)]) rather than a quiet one.
 unsafe_code = "deny"
 
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+
+# Deferred, not dropped: each of these needs a dedicated, per-call-site pass
+# over hot-path bitboard/search code (magic generation, board internals,
+# negamax) to resolve correctly, either a checked/wrapping rewrite or a
+# reviewed #[allow] with justification like the existing unsafe_code
+# exceptions, not a blanket decision made alongside the mechanical
+# pedantic/nursery cleanup that enabled everything above.
+# unwrap_used = "deny"
+# expect_used = "deny"
+# indexing_slicing = "deny"
+# arithmetic_side_effects = "deny"
+# unreachable = "deny"
+# string_slice = "deny"
+# as_conversions = "deny"
+# Also part of `pedantic`, allowed back individually for the same reason
+# (same-width/narrowing casts are exactly where this shows up in bitboard
+# index and square-delta arithmetic):
+cast_possible_wrap = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

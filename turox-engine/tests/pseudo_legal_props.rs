@@ -25,7 +25,7 @@ use turox_engine::move_gen::pseudo_legal::{
 };
 use turox_engine::{Color, Move, MoveFlags, Piece, Rank, Square};
 
-fn move_key(m: Move) -> (u8, u8, u8) {
+const fn move_key(m: Move) -> (u8, u8, u8) {
     (m.from().index(), m.to().index(), m.flags() as u8)
 }
 

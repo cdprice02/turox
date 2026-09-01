@@ -20,7 +20,7 @@ fn small_bitboard() -> impl Strategy<Value = Bitboard> {
     proptest::collection::vec(any_square(), 0..=12).prop_map(|squares| {
         squares
             .into_iter()
-            .fold(Bitboard::EMPTY, |bb, sq| bb.with(sq))
+            .fold(Bitboard::EMPTY, turox_engine::Bitboard::with)
     })
 }
 
@@ -197,7 +197,7 @@ proptest! {
         for sq in &collected {
             prop_assert!(a.contains(*sq));
         }
-        let rebuilt = collected.into_iter().fold(Bitboard::EMPTY, |bb, sq| bb.with(sq));
+        let rebuilt = collected.into_iter().fold(Bitboard::EMPTY, turox_engine::Bitboard::with);
         prop_assert_eq!(rebuilt, a);
     }
 

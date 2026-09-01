@@ -79,8 +79,8 @@ fn naive_pawn_attacks(color: Color, sq: Square) -> Bitboard {
 /// both fall out of the same "no such axis" check, rather than being
 /// special-cased separately.
 fn naive_between(a: Square, b: Square) -> Bitboard {
-    let (af, ar) = (a.file().index() as i32, a.rank().index() as i32);
-    let (bf, br) = (b.file().index() as i32, b.rank().index() as i32);
+    let (af, ar) = (i32::from(a.file().index()), i32::from(a.rank().index()));
+    let (bf, br) = (i32::from(b.file().index()), i32::from(b.rank().index()));
     let (df, dr) = (bf - af, br - ar);
     if (df == 0 && dr == 0) || (df != 0 && dr != 0 && df.abs() != dr.abs()) {
         return Bitboard::EMPTY;
@@ -105,15 +105,15 @@ fn naive_between(a: Square, b: Square) -> Bitboard {
 /// line through `a` and `b`), or `Bitboard::EMPTY` if `a` and `b` don't share a
 /// rank/file/diagonal in the first place.
 fn naive_line(a: Square, b: Square) -> Bitboard {
-    let (af, ar) = (a.file().index() as i32, a.rank().index() as i32);
-    let (bf, br) = (b.file().index() as i32, b.rank().index() as i32);
+    let (af, ar) = (i32::from(a.file().index()), i32::from(a.rank().index()));
+    let (bf, br) = (i32::from(b.file().index()), i32::from(b.rank().index()));
     let (df, dr) = (bf - af, br - ar);
     if (df == 0 && dr == 0) || (df != 0 && dr != 0 && df.abs() != dr.abs()) {
         return Bitboard::EMPTY;
     }
     let mut result = Bitboard::EMPTY;
     for sq in Square::ALL {
-        let (sf, sr) = (sq.file().index() as i32, sq.rank().index() as i32);
+        let (sf, sr) = (i32::from(sq.file().index()), i32::from(sq.rank().index()));
         let cross = (sf - af) * dr - (sr - ar) * df;
         if cross == 0 {
             result = result.with(sq);
