@@ -171,18 +171,20 @@ bounds.
 
 ```sh
 cd turox-fuzz
-cargo +nightly fuzz run fen
+cargo fuzz run fen
 ```
 
 Coverage-guided fuzzing of `Board::try_from_fen`, via
 [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) (`cargo install
-cargo-fuzz`; requires a nightly toolchain, so this isn't part of the stable
-CI job, and runs on demand instead). `try_from_fen` is the one place the
-engine takes untrusted input directly off the wire, since UCI's `position
-fen <...>` command resolves through it: `Err` is a correct outcome for a
-malformed string, a panic is not. `tests/fen_props.rs` already checks the
-same property over proptest-generated inputs; this is the coverage-guided
-version of it, for inputs a random regex won't reliably hit.
+cargo-fuzz`; needs a nightly toolchain for its sanitizer instrumentation,
+which `turox-fuzz/rust-toolchain.toml` selects automatically, so this isn't
+part of the stable CI job, and runs on demand instead). `try_from_fen` is
+the one place the engine takes untrusted input directly off the wire,
+since UCI's `position fen <...>` command resolves through it: `Err` is a
+correct outcome for a malformed string, a panic is not.
+`tests/fen_props.rs` already checks the same property over
+proptest-generated inputs; this is the coverage-guided version of it, for
+inputs a random regex won't reliably hit.
 
 ## Development loop
 

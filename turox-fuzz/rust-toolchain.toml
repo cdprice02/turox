@@ -1,0 +1,6 @@
+# cargo-fuzz's sanitizer instrumentation needs nightly-only flags; there is
+# no stable equivalent to fall back to. rustup reads this file and switches
+# automatically on `cd turox-fuzz`, so no `cargo +nightly` prefix is needed
+# even on a machine whose default toolchain is stable.
+[toolchain]
+channel = "nightly"

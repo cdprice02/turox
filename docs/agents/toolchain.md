@@ -18,7 +18,7 @@ why each of these exists; this file is the lookup.
 | bench             | `cargo bench -p turox-engine`                                         |
 | bench vs baseline | `cargo bench -p turox-engine -- --save-baseline before`, then `-- --baseline before` |
 | self-play A/B     | `tools/selfplay/sprt.sh --base main --test my-branch`                 |
-| fuzz              | `cd turox-fuzz && cargo +nightly fuzz run fen`                        |
+| fuzz              | `cd turox-fuzz && cargo fuzz run fen`                                  |
 | mutants           | `cargo mutants -p turox-engine`                                       |
 | coverage          | `cargo llvm-cov --workspace`                                          |
 
