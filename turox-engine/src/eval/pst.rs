@@ -19,7 +19,7 @@ use crate::types::{Color, Piece, Square};
 /// a-file to h-file). This is the *reverse* of `Square`'s own LERF indexing,
 /// where `Square::A1.index() == 0` and `Square::A8.index() == 56`: see
 /// `pst_value`'s doc for the reindexing this implies and the gotcha it
-/// creates. Indexed by `Piece as usize`, same convention `eval::PIECE_VALUES`
+/// creates. Indexed by `Piece::index`, same convention `eval::PIECE_VALUES`
 /// uses.
 #[rustfmt::skip]
 const VISUAL_PST: [[Score; 64]; 6] = [
@@ -135,5 +135,5 @@ pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
         Color::White => sq.flip_rank(),
         Color::Black => sq,
     };
-    VISUAL_PST[piece as usize][sq.index() as usize]
+    VISUAL_PST[piece.index()][sq.index()]
 }

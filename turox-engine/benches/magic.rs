@@ -50,7 +50,8 @@ fn sample_inputs() -> Vec<(Square, Bitboard)> {
     let mut rng = XorShift64(0x9E37_79B9_7F4A_7C15); // arbitrary nonzero seed
     (0..SAMPLE_COUNT)
         .map(|i| {
-            let sq = Square::from_index((i % 64) as u8).expect("i % 64 is in 0..64");
+            let sq = Square::from_u8(u8::try_from(i % 64).expect("i % 64 is in 0..64"))
+                .expect("i % 64 is in 0..64");
             let occupied = Bitboard::from_bits(rng.next());
             (sq, occupied)
         })
@@ -60,7 +61,9 @@ fn sample_inputs() -> Vec<(Square, Bitboard)> {
 fn bench_slider(c: &mut Criterion, name: &str, f: impl Fn(Square, Bitboard) -> Bitboard) {
     let samples = sample_inputs();
     let mut group = c.benchmark_group("magic");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).expect("fits u64"),
+    ));
     group.bench_function(name, |b| {
         b.iter(|| {
             for &(sq, occupied) in &samples {

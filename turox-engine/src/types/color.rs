@@ -1,20 +1,18 @@
 //! `Color`: which side a piece or move belongs to.
 
 use crate::{Direction, Rank};
+use turox_macros::Ordinal;
 
 /// Which side a piece or move belongs to.
 #[allow(missing_docs)] // variant names are the doc
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ordinal)]
 pub enum Color {
     White = 0,
     Black = 1,
 }
 
 impl Color {
-    /// Both colors, White first.
-    pub const ALL: [Self; 2] = [Self::White, Self::Black];
-
     /// The other color.
     #[must_use]
     pub const fn flip(self) -> Self {
@@ -63,6 +61,29 @@ impl Color {
         match self {
             Self::White => Direction::North,
             Self::Black => Direction::South,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// See `piece.rs`'s identical test for why: the runtime consequence of
+    /// `#[derive(Ordinal)]`'s discriminant-vs-position check ever being
+    /// weakened.
+    #[test]
+    fn from_u8_round_trips_with_to_u8() {
+        for color in Color::ALL {
+            assert_eq!(Color::from_u8(color.to_u8()), Some(color));
+        }
+        assert_eq!(Color::from_u8(2), None);
+    }
+
+    #[test]
+    fn flip_is_an_involution() {
+        for color in Color::ALL {
+            assert_eq!(color.flip().flip(), color);
         }
     }
 }

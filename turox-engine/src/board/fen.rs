@@ -88,34 +88,38 @@ impl Board {
             });
         }
 
-        for (i, row) in rows.iter().enumerate() {
-            // Rows read top (rank 8) to bottom (rank 1), per FEN.
-            let rank_number = 8 - i;
-            let rank = Rank::from_index((rank_number - 1) as u8).expect("rank_number in 1..=8");
+        // Rows read top (rank 8) to bottom (rank 1), per FEN: walking `Rank::ALL`
+        // in reverse pairs each row with its rank directly, rather than computing
+        // a row-index-to-rank-number mapping by hand, which is exactly the
+        // {axis}x{direction} arithmetic this codebase has gotten backwards before.
+        for (rank, row) in Rank::ALL.into_iter().rev().zip(rows) {
             let mut file = 0usize;
 
             for c in row.chars() {
                 if let '1'..='8' = c {
-                    let n = c.to_digit(10).expect("matched '1'..='8'") as usize;
-                    if file + n > 8 {
+                    let n = u8::try_from(c.to_digit(10).expect("matched '1'..='8'"))
+                        .expect("single digit");
+                    let new_file = file + usize::from(n);
+                    if new_file > 8 {
                         return Err(InvalidFenError::TooManyFilesInRank {
                             expected: 8,
-                            found: file + n,
-                            rank: rank_number,
+                            found: new_file,
+                            rank: usize::from(rank.to_u8() + 1),
                         });
                     }
-                    file += n;
+                    file = new_file;
                 } else {
                     if file >= 8 {
                         return Err(InvalidFenError::TooManyFilesInRank {
                             expected: 8,
                             found: file + 1,
-                            rank: rank_number,
+                            rank: usize::from(rank.to_u8() + 1),
                         });
                     }
                     let cp = ColoredPiece::try_from_fen(c)
                         .ok_or(InvalidFenError::UnexpectedCharacter(c))?;
-                    let file_enum = File::from_index(file as u8).expect("file < 8 checked above");
+                    let file_number = u8::try_from(file).expect("file < 8 checked above");
+                    let file_enum = File::from_u8(file_number).expect("file < 8 checked above");
                     board.place(Square::new(file_enum, rank), cp);
                     file += 1;
                 }
@@ -125,7 +129,7 @@ impl Board {
                 return Err(InvalidFenError::NotEnoughFilesInRank {
                     expected: 8,
                     found: file,
-                    rank: rank_number,
+                    rank: usize::from(rank.to_u8() + 1),
                 });
             }
         }
@@ -165,23 +169,16 @@ impl Board {
     /// Only reads the mailbox (`piece_at`), not the bitboards: the mailbox alone is
     /// already a complete, O(1)-per-square picture of what's on the board, so there's
     /// nothing the bitboards would add here.
-    ///
-    /// # Panics
-    ///
-    /// Never in practice: the internal `rank_idx`/`file_idx` loop bounds are hardcoded to
-    /// `0..8`, so the `Rank`/`File::from_index` calls they feed can't actually fail.
     #[must_use]
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
 
-        for rank_idx in (0..8).rev() {
-            if rank_idx != 7 {
+        for rank in Rank::ALL.into_iter().rev() {
+            if rank != Rank::R8 {
                 fen.push('/');
             }
-            let rank = Rank::from_index(rank_idx).expect("rank_idx in 0..8");
             let mut empty_run = 0u32;
-            for file_idx in 0..8 {
-                let file = File::from_index(file_idx).expect("file_idx in 0..8");
+            for file in File::ALL {
                 let sq = Square::new(file, rank);
                 match self.piece_at(sq) {
                     Some(cp) => {

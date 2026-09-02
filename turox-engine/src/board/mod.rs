@@ -162,9 +162,9 @@ impl Board {
     /// mailbox/bitboard consistency invariant (checked by the `board_consistency`
     /// property test) can't be broken by construction.
     pub const fn place(&mut self, sq: Square, cp: ColoredPiece) {
-        self.mailbox[sq.index() as usize] = Some(cp);
-        self.by_color[cp.color() as usize] = self.by_color[cp.color() as usize].or(sq.bitboard());
-        self.by_piece[cp.piece() as usize] = self.by_piece[cp.piece() as usize].or(sq.bitboard());
+        self.mailbox[sq.index()] = Some(cp);
+        self.by_color[cp.color().index()] = self.by_color[cp.color().index()].or(sq.bitboard());
+        self.by_piece[cp.piece().index()] = self.by_piece[cp.piece().index()].or(sq.bitboard());
         self.hash ^= zobrist::piece_square_hash(cp, sq);
     }
 
@@ -208,11 +208,11 @@ impl Board {
 
     /// Removes and returns whatever was on `sq`, or `None` if it was already empty.
     pub fn remove(&mut self, sq: Square) -> Option<ColoredPiece> {
-        let cp = self.mailbox[sq.index() as usize].take()?;
-        self.by_color[cp.color() as usize] =
-            self.by_color[cp.color() as usize].and_not(sq.bitboard());
-        self.by_piece[cp.piece() as usize] =
-            self.by_piece[cp.piece() as usize].and_not(sq.bitboard());
+        let cp = self.mailbox[sq.index()].take()?;
+        self.by_color[cp.color().index()] =
+            self.by_color[cp.color().index()].and_not(sq.bitboard());
+        self.by_piece[cp.piece().index()] =
+            self.by_piece[cp.piece().index()].and_not(sq.bitboard());
         self.hash ^= zobrist::piece_square_hash(cp, sq);
         Some(cp)
     }
@@ -220,7 +220,7 @@ impl Board {
     /// O(1) lookup of whatever is on `sq`, via the mailbox.
     #[must_use]
     pub const fn piece_at(&self, sq: Square) -> Option<ColoredPiece> {
-        self.mailbox[sq.index() as usize]
+        self.mailbox[sq.index()]
     }
 
     /// All pieces of a given color and kind.
@@ -228,13 +228,13 @@ impl Board {
     pub const fn pieces(&self, color: Color, piece: Piece) -> Bitboard {
         // Indexes `by_piece`/`by_color` directly rather than through `self[piece]`/
         // `self[color]`: the `Index` trait's `index` method isn't `const`.
-        self.by_piece[piece as usize].and(self.by_color[color as usize])
+        self.by_piece[piece.index()].and(self.by_color[color.index()])
     }
 
     /// Every occupied square, regardless of color or piece kind.
     #[must_use]
     pub const fn occupied(&self) -> Bitboard {
-        self.by_color[Color::White as usize].or(self.by_color[Color::Black as usize])
+        self.by_color[Color::White.index()].or(self.by_color[Color::Black.index()])
     }
 
     /// Every unoccupied square.
@@ -287,14 +287,14 @@ impl Board {
 impl Index<Color> for Board {
     type Output = Bitboard;
     fn index(&self, color: Color) -> &Bitboard {
-        &self.by_color[color as usize]
+        &self.by_color[color.index()]
     }
 }
 
 impl Index<Piece> for Board {
     type Output = Bitboard;
     fn index(&self, piece: Piece) -> &Bitboard {
-        &self.by_piece[piece as usize]
+        &self.by_piece[piece.index()]
     }
 }
 
@@ -367,13 +367,13 @@ mod tests {
         let mut counts = [0u32; 12];
         for sq in Square::ALL {
             if let Some(cp) = board.piece_at(sq) {
-                counts[cp as usize] += 1;
+                counts[cp.index()] += 1;
             }
         }
-        assert_eq!(counts[ColoredPiece::WhitePawn as usize], 8);
-        assert_eq!(counts[ColoredPiece::BlackPawn as usize], 8);
-        assert_eq!(counts[ColoredPiece::WhiteKing as usize], 1);
-        assert_eq!(counts[ColoredPiece::BlackKing as usize], 1);
+        assert_eq!(counts[ColoredPiece::WhitePawn.index()], 8);
+        assert_eq!(counts[ColoredPiece::BlackPawn.index()], 8);
+        assert_eq!(counts[ColoredPiece::WhiteKing.index()], 1);
+        assert_eq!(counts[ColoredPiece::BlackKing.index()], 1);
     }
 
     #[test]

@@ -43,10 +43,14 @@ why each of these exists; this file is the lookup.
 - **Clippy runs `pedantic` and `nursery`, but several individual lints are
   deliberately commented out in the root `Cargo.toml`** (`unwrap_used`,
   `expect_used`, `indexing_slicing`, `arithmetic_side_effects`,
-  `unreachable`, `string_slice`, `as_conversions`, plus `cast_possible_wrap`/
-  `cast_possible_truncation`/`cast_sign_loss` explicitly allowed back). Each
-  needs a per-call-site judgment call across hot-path bitboard/search code
-  (checked/wrapping rewrite vs. a reviewed `#[allow]`), not a blanket
-  decision, so they're deferred rather than silently dropped. See the
-  comment above them in `Cargo.toml` and the open issue tracking the
+  `unreachable`). Each needs a per-call-site judgment call across hot-path
+  bitboard/search code (checked/wrapping rewrite vs. a reviewed `#[allow]`),
+  not a blanket decision, so they're deferred rather than silently dropped.
+  See the comment above them in `Cargo.toml` and the open issue tracking the
   remainder before adding new code that would trip one of them.
+  `string_slice`/`as_conversions` (and the `cast_possible_wrap`/
+  `cast_possible_truncation`/`cast_sign_loss` allow-backs that used to cover
+  for `as_conversions` being off) are no longer on this deferred list: see
+  `#[derive(Ordinal)]` in `turox-macros` for how the ordinal enums
+  (`Color`/`Piece`/`ColoredPiece`/`File`/`Rank`/`Square`) got clean of `as`
+  without hand-writing six copies of the same accessor.

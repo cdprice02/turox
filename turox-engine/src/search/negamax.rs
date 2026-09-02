@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 /// The score magnitude of a certain checkmate.
 ///
 /// A node where the side to move has no legal moves and is in check scores
-/// `ply as Score - MATE`: very negative, and more negative the *smaller* `ply` is (a mate
+/// `Score::from(ply) - MATE`: very negative, and more negative the *smaller* `ply` is (a mate
 /// reached in fewer plies from the root is a faster, more forced mate against that side).
 /// One ply up, negamax's sign flip turns that into `MATE - ply` for the side that just
 /// delivered it, so a shorter forced mate always outscores a longer one. This exact ply
@@ -359,6 +359,11 @@ impl Search {
     /// [`MATE`]'s doc and for keeping `self.history` in step with the
     /// recursion.
     ///
+    /// `ply` is `u16`, not `u32` like `depth`, deliberately: it feeds
+    /// `Score::from(ply)` below, and `Score` is `i32`, so `u16` is the widest
+    /// type that conversion covers losslessly. Widening `ply` to `u32` to
+    /// match `depth` would need an `as` cast right back at that call site.
+    ///
     /// Returns `None` if `should_abort()` trips; callers must propagate a
     /// `None` up immediately rather than treating it as a real score.
     ///
@@ -372,7 +377,7 @@ impl Search {
         &mut self,
         board: &Board,
         depth: u32,
-        ply: u32,
+        ply: u16,
         mut alpha: Score,
         beta: Score,
     ) -> Option<Score> {
@@ -388,7 +393,7 @@ impl Search {
         let mut moves = legal_moves(board);
         if moves.is_empty() {
             return if in_check(board, board.side_to_move()) {
-                Some(ply as Score - MATE)
+                Some(Score::from(ply) - MATE)
             } else {
                 Some(0)
             };
@@ -526,7 +531,7 @@ fn order_moves(board: &Board, moves: &mut MoveList) {
                     .piece_at(m.to())
                     .expect("capture has a victim")
                     .piece();
-                PIECE_VALUES[attacker as usize] - PIECE_VALUES[victim as usize]
+                PIECE_VALUES[attacker.index()] - PIECE_VALUES[victim.index()]
             }
         } else {
             // non captures are considered less important (at this stage)

@@ -801,7 +801,12 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "turox-macros",
 ]
+
+[[package]]
+name = "turox-macros"
+version = "0.1.0"
 
 [[package]]
 name = "unarray"

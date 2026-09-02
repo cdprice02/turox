@@ -54,6 +54,12 @@ struct Magic {
 /// `occupied` to `m.mask`'s bits, multiply by `m.magic`, keep the top
 /// `64 - m.shift` bits. This is the one piece of this file that runs on
 /// every real move-generation lookup, not just at table-build time.
+#[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+// `m.shift` always leaves at most 12 significant bits (the widest rook/bishop
+// mask), which fits `usize` on every platform this engine targets; there is
+// no const-stable `TryFrom<u64> for usize` to reach for instead
+// (rust-lang/rust#143874), and this is the hottest line in the engine, so a
+// runtime-checked fallback doesn't belong here even once one exists.
 const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
     (((occupied.and(m.mask)).bits().wrapping_mul(m.magic)) >> m.shift) as usize
 }
@@ -98,7 +104,7 @@ static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] = decode(include_bytes!("bi
 /// Stops at, and includes, the first occupied square in each of the four directions.
 #[must_use]
 pub const fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    let m = &ROOK_MAGICS[sq.index() as usize];
+    let m = &ROOK_MAGICS[sq.index()];
     ROOK_ATTACKS[m.offset + magic_index(occupied, m)]
 }
 
@@ -106,7 +112,7 @@ pub const fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
 /// blocked-and-inclusive contract as `rook_attacks`.
 #[must_use]
 pub const fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    let m = &BISHOP_MAGICS[sq.index() as usize];
+    let m = &BISHOP_MAGICS[sq.index()];
     BISHOP_ATTACKS[m.offset + magic_index(occupied, m)]
 }
 
@@ -271,6 +277,25 @@ mod tests {
         let occupied = Bitboard::EMPTY.with(Square::E6).with(Square::F6);
         let expected = rook_attacks(Square::D4, occupied).or(bishop_attacks(Square::D4, occupied));
         assert_eq!(queen_attacks(Square::D4, occupied), expected);
+    }
+
+    /// `Square` alone (64 values, `Bitboard::ALL` fixed) is small and fully
+    /// enumerable: a plain loop, not `proptest`. The rest of this module's
+    /// coverage against arbitrary occupancy (`tests/magic_props.rs`) stays
+    /// proptest, since `occupied: Bitboard` is a genuinely unbounded 2^64
+    /// domain.
+    #[test]
+    fn rook_attacks_on_fully_occupied_board_has_at_most_four_squares() {
+        for sq in Square::ALL {
+            assert!(rook_attacks(sq, Bitboard::ALL).count() <= 4, "sq={sq:?}");
+        }
+    }
+
+    #[test]
+    fn bishop_attacks_on_fully_occupied_board_has_at_most_four_squares() {
+        for sq in Square::ALL {
+            assert!(bishop_attacks(sq, Bitboard::ALL).count() <= 4, "sq={sq:?}");
+        }
     }
 
     #[test]

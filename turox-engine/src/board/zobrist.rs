@@ -33,7 +33,7 @@ use crate::{
 /// directly, so the mapping from "fact" to "which key" has exactly one
 /// place to get right.
 struct Keys {
-    /// One key per `(ColoredPiece, Square)`, indexed by `ColoredPiece as usize`.
+    /// One key per `(ColoredPiece, Square)`, indexed by `ColoredPiece::index`.
     piece_square: [[u64; 64]; 12],
     /// Mixed in whenever it's Black to move; White-to-move positions don't
     /// touch this at all. That asymmetry is deliberate: it means
@@ -127,7 +127,7 @@ const KEYS: Keys = generate_keys();
 /// The hash contribution of a single `(ColoredPiece, Square)` fact. What
 /// `place`/`remove` XOR in and back out as pieces come and go.
 pub(crate) const fn piece_square_hash(cp: ColoredPiece, sq: Square) -> u64 {
-    KEYS.piece_square[cp as usize][sq.index() as usize]
+    KEYS.piece_square[cp.index()][sq.index()]
 }
 
 /// The hash contribution of `color` being to move: `0` for White, one
@@ -172,7 +172,7 @@ pub(crate) const fn castling_hash(rights: CastlingRights) -> u64 {
 /// `en_passant_hash(old) ^ en_passant_hash(new)` is exactly the delta.
 pub(crate) const fn en_passant_hash(ep: Option<Square>) -> u64 {
     match ep {
-        Some(sq) => KEYS.en_passant_file[sq.file().index() as usize],
+        Some(sq) => KEYS.en_passant_file[sq.file().index()],
         None => 0,
     }
 }

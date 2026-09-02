@@ -1,16 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["turox-cli", "turox-engine"]
+members = ["turox-cli", "turox-engine", "turox-macros"]
 
 [workspace.dependencies]
-anyhow = "1.0"
-clap = { version = "4.5.37", features = ["derive"] }
 proptest = "1.5"
 criterion = "0.8"
 
-# turox-engine takes zero runtime dependencies (see turox-engine/Cargo.toml). Keep
-# anyhow scoped to turox-cli: a library returning anyhow::Error denies callers the
-# ability to match on failure, so it belongs at the binary boundary, not in the engine.
+# anyhow/clap are turox-cli's own dependencies, not workspace ones (see its
+# Cargo.toml): turox-engine takes zero runtime dependencies, so there's
+# nothing else here that would share them.
 
 [workspace.lints.rust]
 missing_docs = "deny"
@@ -28,6 +26,8 @@ todo = "deny"
 panic_in_result_fn = "deny"
 panic = "deny"
 exit = "deny"
+string_slice = "deny"
+as_conversions = "deny"
 
 # Deferred, not dropped: each of these needs a dedicated, per-call-site pass
 # over hot-path bitboard/search code (magic generation, board internals,
@@ -40,14 +40,6 @@ exit = "deny"
 # indexing_slicing = "deny"
 # arithmetic_side_effects = "deny"
 # unreachable = "deny"
-# string_slice = "deny"
-# as_conversions = "deny"
-# Also part of `pedantic`, allowed back individually for the same reason
-# (same-width/narrowing casts are exactly where this shows up in bitboard
-# index and square-delta arithmetic):
-cast_possible_wrap = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
 
 [profile.release]
 lto = "fat"

@@ -43,7 +43,9 @@ fn sample_boards() -> Vec<Board> {
 fn eval_bench(c: &mut Criterion) {
     let boards = sample_boards();
     let mut group = c.benchmark_group("eval");
-    group.throughput(Throughput::Elements(boards.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(boards.len()).expect("fits u64"),
+    ));
     group.bench_function("evaluate", |b| {
         b.iter(|| {
             for board in &boards {

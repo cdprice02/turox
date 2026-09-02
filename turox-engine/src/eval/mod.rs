@@ -20,7 +20,7 @@ pub mod pst;
 /// relative to: White for `eval_white_pov`, the side to move for `evaluate`.
 pub type Score = i32;
 
-/// Standard piece values in centipawns, indexed by `Piece as usize`. Lives
+/// Standard piece values in centipawns, indexed by `Piece::index`. Lives
 /// here rather than as a `Piece::value()` method: what a knight is worth is
 /// an evaluation policy that will change as the engine gets tuned, not an
 /// intrinsic property of the type, and `types` shouldn't depend on `eval`'s
@@ -48,11 +48,11 @@ pub fn eval_white_pov(board: &Board) -> Score {
     let mut score = Score::default();
     for piece in Piece::ALL {
         for sq in board.pieces(Color::White, piece) {
-            score += PIECE_VALUES[piece as usize];
+            score += PIECE_VALUES[piece.index()];
             score += pst_value(Color::White, piece, sq);
         }
         for sq in board.pieces(Color::Black, piece) {
-            score -= PIECE_VALUES[piece as usize];
+            score -= PIECE_VALUES[piece.index()];
             score -= pst_value(Color::Black, piece, sq);
         }
     }

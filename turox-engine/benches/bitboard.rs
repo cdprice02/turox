@@ -48,7 +48,9 @@ fn sample_bitboards() -> Vec<Bitboard> {
 fn bench_transform(c: &mut Criterion, name: &str, f: impl Fn(Bitboard) -> Bitboard) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).expect("fits u64"),
+    ));
     group.bench_function(name, |b| {
         b.iter(|| {
             for &bb in &samples {
@@ -72,7 +74,9 @@ fn flips_and_rotations(c: &mut Criterion) {
 fn scanning(c: &mut Criterion) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).expect("fits u64"),
+    ));
 
     group.bench_function("count", |b| {
         b.iter(|| {
@@ -99,7 +103,9 @@ fn scanning(c: &mut Criterion) {
 fn shifts(c: &mut Criterion) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).expect("fits u64"),
+    ));
 
     for dir in Direction::ALL {
         group.bench_function(format!("shift_{dir:?}"), |b| {

@@ -163,14 +163,26 @@ impl Bitboard {
     #[inline]
     #[must_use]
     pub const fn lsb(self) -> Option<Square> {
-        Square::from_index(self.bits().trailing_zeros() as u8)
+        if self.is_empty() {
+            return None;
+        }
+        // Guarded above, so `trailing_zeros()` is < 64, and its low byte
+        // equals its value: a `u32 -> u8` narrowing without an `as` cast,
+        // since `TryFrom<u32> for u8` isn't const-callable yet
+        // (rust-lang/rust#143874).
+        Square::from_u8(self.bits().trailing_zeros().to_le_bytes()[0])
     }
 
     /// The highest-indexed set square, or `None` if empty.
     #[inline]
     #[must_use]
     pub const fn msb(self) -> Option<Square> {
-        Square::from_index(63u8.wrapping_sub(self.bits().leading_zeros() as u8))
+        if self.is_empty() {
+            return None;
+        }
+        // `ilog2()` is exactly "index of the highest set bit" for a nonzero
+        // value, which is guaranteed above; same low-byte narrowing as `lsb`.
+        Square::from_u8(self.bits().ilog2().to_le_bytes()[0])
     }
 
     /// Clears and returns the lowest-indexed set square, or `None` if already
@@ -527,5 +539,18 @@ mod tests {
             .with(Square::B1)
             .with(Square::B2);
         assert_eq!(Square::A1.bitboard().dilate(), expected);
+    }
+
+    /// The edge cases `lsb`/`msb`'s `is_empty()` guard exists for: an empty
+    /// board has neither, and a full board's lowest/highest bit is exactly
+    /// the LERF ordering's endpoints. `tests/bitboard_props.rs`'s
+    /// `lsb_msb_match_trailing_leading_zeros` covers the general case against
+    /// a naive reference; these pin the two boundary values concretely.
+    #[test]
+    fn lsb_msb_on_empty_and_full_boards() {
+        assert_eq!(Bitboard::EMPTY.lsb(), None);
+        assert_eq!(Bitboard::EMPTY.msb(), None);
+        assert_eq!(Bitboard::ALL.lsb(), Some(Square::A1));
+        assert_eq!(Bitboard::ALL.msb(), Some(Square::H8));
     }
 }

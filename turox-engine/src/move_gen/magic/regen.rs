@@ -201,7 +201,7 @@ fn find_all_magics(dirs: [Direction; 4], seed: u64) -> [Magic; 64] {
         state = next_state;
         magic.offset = offset;
         offset += 1 << magic.mask.count();
-        m[sq.index() as usize] = magic;
+        m[sq.index()] = magic;
     }
     m
 }
@@ -224,14 +224,14 @@ fn find_all_magics(dirs: [Direction; 4], seed: u64) -> [Magic; 64] {
 fn build_table<const N: usize>(dirs: [Direction; 4], magics: &[Magic; 64]) -> [Bitboard; N] {
     let mut table = [Bitboard::EMPTY; N];
     for sq in Square::ALL {
-        let m = &magics[sq.index() as usize];
+        let m = &magics[sq.index()];
         let bits = m.mask.bits();
         let mut sub = 0u64;
         loop {
             let occupied = Bitboard::from_bits(sub);
             let attacks = attacks_for_occupancy(sq, occupied, dirs);
             let idx = magic_index(occupied, m);
-            table[magics[sq.index() as usize].offset + idx] = attacks;
+            table[magics[sq.index()].offset + idx] = attacks;
             if sub == bits {
                 break;
             }
@@ -242,7 +242,7 @@ fn build_table<const N: usize>(dirs: [Direction; 4], magics: &[Magic; 64]) -> [B
 }
 
 fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
+    (0u8..64).prop_map(|i| Square::from_u8(i).expect("i in 0..64"))
 }
 
 fn any_bitboard() -> impl Strategy<Value = Bitboard> {
@@ -313,17 +313,35 @@ fn naive_attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
     result
 }
 
+// `Square` (64) x {ROOK_DIRS, BISHOP_DIRS} (2) is small and fully enumerable,
+// unlike the `occupied: Bitboard` (2^64) tests below it: exhaustive rather
+// than proptest, same reasoning as `relevant_mask_popcount_matches_known_bounds`.
+#[test]
+fn relevant_mask_matches_naive_walk() {
+    for sq in Square::ALL {
+        for dirs in [ROOK_DIRS, BISHOP_DIRS] {
+            assert_eq!(
+                relevant_mask(sq, dirs),
+                naive_mask(sq, dirs),
+                "sq={sq:?} dirs={dirs:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn relevant_mask_never_contains_its_own_square() {
+    for sq in Square::ALL {
+        for dirs in [ROOK_DIRS, BISHOP_DIRS] {
+            assert!(
+                !relevant_mask(sq, dirs).contains(sq),
+                "sq={sq:?} dirs={dirs:?}"
+            );
+        }
+    }
+}
+
 proptest! {
-    #[test]
-    fn relevant_mask_matches_naive_walk(sq in any_square(), dirs in any_dirs()) {
-        prop_assert_eq!(relevant_mask(sq, dirs), naive_mask(sq, dirs));
-    }
-
-    #[test]
-    fn relevant_mask_never_contains_its_own_square(sq in any_square(), dirs in any_dirs()) {
-        prop_assert!(!relevant_mask(sq, dirs).contains(sq));
-    }
-
     #[test]
     fn attacks_for_occupancy_matches_naive_walk(
         sq in any_square(),
@@ -391,7 +409,7 @@ fn find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts() {
         let magics = find_all_magics(dirs, SEED);
         let mut expected_offset = 0;
         for sq in Square::ALL {
-            let m = &magics[sq.index() as usize];
+            let m = &magics[sq.index()];
             assert_eq!(m.mask, relevant_mask(sq, dirs), "mask mismatch at {sq:?}");
             assert_eq!(m.offset, expected_offset, "offset mismatch at {sq:?}");
             expected_offset += 1 << m.mask.count();
@@ -469,7 +487,7 @@ fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
             _ => build_table::<BISHOP_TABLE_SIZE>(dirs, &magics).to_vec(),
         };
         for sq in Square::ALL {
-            let m = &magics[sq.index() as usize];
+            let m = &magics[sq.index()];
             let mask_bits = m.mask.bits();
             let mut sub = 0u64;
             loop {

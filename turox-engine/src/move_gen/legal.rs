@@ -40,6 +40,11 @@ pub fn legal_moves(board: &Board) -> MoveList {
 /// (`perft_zero_is_one_leaf`, and indirectly any depth-1 call's own base case), and
 /// without that branch `depth - 1` underflows `u32` before reaching the `depth == 1`
 /// check.
+///
+/// # Panics
+///
+/// Never in practice: a legal move count exceeding `u64::MAX` isn't a real chess
+/// position.
 #[must_use]
 pub fn perft(board: &Board, depth: u32) -> u64 {
     if depth == 0 {
@@ -47,7 +52,8 @@ pub fn perft(board: &Board, depth: u32) -> u64 {
     }
     let moves = legal_moves(board);
     if depth == 1 {
-        return moves.len() as u64;
+        return u64::try_from(moves.len())
+            .expect("move count fits u64 (MoveList::CAPACITY < u64::MAX)");
     }
     moves
         .as_slice()

@@ -7,7 +7,7 @@ use super::square::Square;
 /// for the four promotion variants.
 #[allow(missing_docs)] // variant names are the doc
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MoveFlags {
     Quiet = 0,
     DoublePawnPush = 1,
@@ -29,7 +29,7 @@ impl MoveFlags {
     /// True for any of the eight promotion variants (with or without capture).
     #[must_use]
     pub const fn is_promotion(self) -> bool {
-        (self as u8) & 0b1000 != 0
+        self.bits() & 0b1000 != 0
     }
 
     /// True for `Capture`, `EnPassant`, or any promotion-with-capture variant.
@@ -87,6 +87,17 @@ impl MoveFlags {
             _ => unreachable!(),
         }
     }
+
+    /// This variant's flag bits (its `#[repr(u8)]` discriminant).
+    #[allow(clippy::as_conversions)]
+    // Not `#[derive(Ordinal)]` like `Color`/`Piece`/`Square`: those discriminants
+    // are dense 0..N ordinals where the number is incidental to the type: this
+    // one's discriminants are sparse (0-5, then 8-15) and *are* the point, a bit
+    // pattern `Move` packs directly. `Ordinal::to_u8` would work here too, but
+    // would misdescribe what these values mean.
+    const fn bits(self) -> u8 {
+        self as u8
+    }
 }
 
 /// A move, packed into a `u16`: `from(6) | to(6) | flags(4)`.
@@ -100,15 +111,19 @@ pub struct Move(u16);
 impl Move {
     /// Packs a move from `from` to `to` with the given `flags`.
     #[must_use]
+    #[allow(clippy::as_conversions)]
+    // `from.to_u8()`/`to.to_u8()`/`flags.bits()` are all `u8`; widening each to
+    // `u16` before shifting needs `From`, and `From` isn't const-callable yet
+    // (rust-lang/rust#143874), so this stays `as` rather than `u16::from(...)`.
     pub const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
-        let bits = (from.index() as u16) | ((to.index() as u16) << 6) | ((flags as u16) << 12);
+        let bits = from.to_u8() as u16 | ((to.to_u8() as u16) << 6) | ((flags.bits() as u16) << 12);
         Self(bits)
     }
 
     /// The square this move starts from.
     #[must_use]
     pub const fn from(self) -> Square {
-        match Square::from_index((self.0 & 0x3F) as u8) {
+        match Square::from_u8(self.0.to_le_bytes()[0] & 0x3F) {
             Some(sq) => sq,
             None => unreachable!(),
         }
@@ -117,7 +132,7 @@ impl Move {
     /// The square this move lands on.
     #[must_use]
     pub const fn to(self) -> Square {
-        match Square::from_index(((self.0 >> 6) & 0x3F) as u8) {
+        match Square::from_u8((self.0 >> 6).to_le_bytes()[0] & 0x3F) {
             Some(sq) => sq,
             None => unreachable!(),
         }
@@ -126,7 +141,7 @@ impl Move {
     /// This move's kind.
     #[must_use]
     pub const fn flags(self) -> MoveFlags {
-        MoveFlags::from_bits((self.0 >> 12) as u8)
+        MoveFlags::from_bits((self.0 >> 12).to_le_bytes()[0])
     }
 
     /// Formats this move in UCI notation: `e2e4` for a quiet move or
@@ -186,8 +201,8 @@ impl Move {
             return None;
         }
 
-        let from = Square::try_from_algebraic(&s[..2])?;
-        let to = Square::try_from_algebraic(&s[2..4])?;
+        let from = Square::try_from_algebraic(s.get(..2)?)?;
+        let to = Square::try_from_algebraic(s.get(2..4)?)?;
         let promotion_piece = match s.as_bytes().get(4) {
             Some(b'n') => Some(Piece::Knight),
             Some(b'b') => Some(Piece::Bishop),
@@ -220,28 +235,43 @@ impl std::fmt::Debug for Move {
 mod tests {
     use super::*;
 
+    const ALL_FLAGS: [MoveFlags; 14] = [
+        MoveFlags::Quiet,
+        MoveFlags::DoublePawnPush,
+        MoveFlags::KingCastle,
+        MoveFlags::QueenCastle,
+        MoveFlags::Capture,
+        MoveFlags::EnPassant,
+        MoveFlags::PromoteKnight,
+        MoveFlags::PromoteBishop,
+        MoveFlags::PromoteRook,
+        MoveFlags::PromoteQueen,
+        MoveFlags::PromoteCaptureKnight,
+        MoveFlags::PromoteCaptureBishop,
+        MoveFlags::PromoteCaptureRook,
+        MoveFlags::PromoteCaptureQueen,
+    ];
+
+    /// The regression test for a real bug caught during the `as_conversions`
+    /// cleanup: `from`/`to`/`flags` read `to_be_bytes()[0]` (the *high* byte of
+    /// a `u16`) instead of `to_le_bytes()[0]`. That returned the right value
+    /// for exactly one combination by coincidence (`Quiet` at `E2`->`E4`, both
+    /// landing in the byte that was actually read as zero) and silently
+    /// reclassified every capture, castle, en passant, and promotion as
+    /// `Quiet` otherwise. `Square` (64) and `MoveFlags` (14) are both small,
+    /// fully enumerable domains, so this checks all 64*64*14 combinations
+    /// directly rather than sampling a subset via `proptest`.
     #[test]
     fn round_trips_from_to_and_flags() {
-        for &flags in &[
-            MoveFlags::Quiet,
-            MoveFlags::DoublePawnPush,
-            MoveFlags::KingCastle,
-            MoveFlags::QueenCastle,
-            MoveFlags::Capture,
-            MoveFlags::EnPassant,
-            MoveFlags::PromoteKnight,
-            MoveFlags::PromoteBishop,
-            MoveFlags::PromoteRook,
-            MoveFlags::PromoteQueen,
-            MoveFlags::PromoteCaptureKnight,
-            MoveFlags::PromoteCaptureBishop,
-            MoveFlags::PromoteCaptureRook,
-            MoveFlags::PromoteCaptureQueen,
-        ] {
-            let m = Move::new(Square::E2, Square::E4, flags);
-            assert_eq!(m.from(), Square::E2);
-            assert_eq!(m.to(), Square::E4);
-            assert_eq!(m.flags(), flags);
+        for from in Square::ALL {
+            for to in Square::ALL {
+                for flags in ALL_FLAGS {
+                    let m = Move::new(from, to, flags);
+                    assert_eq!(m.from(), from, "from={from:?} to={to:?} flags={flags:?}");
+                    assert_eq!(m.to(), to, "from={from:?} to={to:?} flags={flags:?}");
+                    assert_eq!(m.flags(), flags, "from={from:?} to={to:?} flags={flags:?}");
+                }
+            }
         }
     }
 
