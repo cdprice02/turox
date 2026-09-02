@@ -65,26 +65,27 @@ impl MoveFlags {
         }
     }
 
-    const fn from_bits(bits: u8) -> Self {
+    /// `None` for the two 4-bit values (6, 7) that are simply unused encoding
+    /// space: a total function over the full `u8` domain `Move::flags` can
+    /// `.expect()` against, rather than a partial one hiding an `unreachable!()`
+    /// behind an assumption about who's allowed to call it.
+    const fn from_bits(bits: u8) -> Option<Self> {
         match bits {
-            0 => Self::Quiet,
-            1 => Self::DoublePawnPush,
-            2 => Self::KingCastle,
-            3 => Self::QueenCastle,
-            4 => Self::Capture,
-            5 => Self::EnPassant,
-            8 => Self::PromoteKnight,
-            9 => Self::PromoteBishop,
-            10 => Self::PromoteRook,
-            11 => Self::PromoteQueen,
-            12 => Self::PromoteCaptureKnight,
-            13 => Self::PromoteCaptureBishop,
-            14 => Self::PromoteCaptureRook,
-            15 => Self::PromoteCaptureQueen,
-            // Every 4-bit value not covered above (6, 7) is simply unused encoding
-            // space; a `Move` is only ever constructed via `Move::new`, which is the
-            // sole place bits get packed, so this is unreachable in practice.
-            _ => unreachable!(),
+            0 => Some(Self::Quiet),
+            1 => Some(Self::DoublePawnPush),
+            2 => Some(Self::KingCastle),
+            3 => Some(Self::QueenCastle),
+            4 => Some(Self::Capture),
+            5 => Some(Self::EnPassant),
+            8 => Some(Self::PromoteKnight),
+            9 => Some(Self::PromoteBishop),
+            10 => Some(Self::PromoteRook),
+            11 => Some(Self::PromoteQueen),
+            12 => Some(Self::PromoteCaptureKnight),
+            13 => Some(Self::PromoteCaptureBishop),
+            14 => Some(Self::PromoteCaptureRook),
+            15 => Some(Self::PromoteCaptureQueen),
+            _ => None,
         }
     }
 
@@ -122,26 +123,27 @@ impl Move {
 
     /// The square this move starts from.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn from(self) -> Square {
-        match Square::from_u8(self.0.to_le_bytes()[0] & 0x3F) {
-            Some(sq) => sq,
-            None => unreachable!(),
-        }
+        Square::from_u8(self.0.to_le_bytes()[0] & 0x3F)
+            .expect("masked to 6 bits (& 0x3F), so always < 64")
     }
 
     /// The square this move lands on.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn to(self) -> Square {
-        match Square::from_u8((self.0 >> 6).to_le_bytes()[0] & 0x3F) {
-            Some(sq) => sq,
-            None => unreachable!(),
-        }
+        Square::from_u8((self.0 >> 6).to_le_bytes()[0] & 0x3F)
+            .expect("masked to 6 bits (& 0x3F), so always < 64")
     }
 
     /// This move's kind.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn flags(self) -> MoveFlags {
-        MoveFlags::from_bits((self.0 >> 12).to_le_bytes()[0])
+        MoveFlags::from_bits((self.0 >> 12).to_le_bytes()[0]).expect(
+            "Move is only ever built via Move::new, which packs one of the 14 valid patterns",
+        )
     }
 
     /// Formats this move in UCI notation: `e2e4` for a quiet move or
@@ -157,6 +159,10 @@ impl Move {
     /// faith, since "does castling need special-casing" is exactly the
     /// kind of thing that looks like it should from the UCI spec alone.
     #[must_use]
+    #[allow(clippy::unreachable)]
+    // Not an `.expect()` candidate like the rest of this pass: there's no
+    // `Option`/`Result` being unwrapped, just a `Piece`-exhaustiveness catch-all
+    // for the two variants `promotion_piece()` never returns here (Pawn, King).
     pub fn to_uci(self) -> String {
         let mut s = format!("{}{}", self.from(), self.to());
         if let Some(p) = self.flags().promotion_piece() {

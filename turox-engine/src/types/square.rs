@@ -129,23 +129,19 @@ impl Square {
 
     /// This square's file.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    // `to_u8() % 8`, not `index() % 8`: `%`/`from_u8` both work in `u8`, so this
+    // needs no widening conversion, which matters in a const fn (see `new`'s
+    // comment on why `usize::from`/`u8::try_from` aren't an option here).
     pub const fn file(self) -> File {
-        // `to_u8() % 8`, not `index() % 8`: `%`/`from_u8` both work in `u8`, so this
-        // needs no widening conversion, which matters in a const fn (see `new`'s
-        // comment on why `usize::from`/`u8::try_from` aren't an option here).
-        match File::from_u8(self.to_u8() % 8) {
-            Some(f) => f,
-            None => unreachable!(),
-        }
+        File::from_u8(self.to_u8() % 8).expect("% 8 is always < 8")
     }
 
     /// This square's rank.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn rank(self) -> Rank {
-        match Rank::from_u8(self.to_u8() / 8) {
-            Some(r) => r,
-            None => unreachable!(),
-        }
+        Rank::from_u8(self.to_u8() / 8).expect("a u8 < 64, divided by 8, is always < 8")
     }
 
     /// This square's single-bit mask within a `Bitboard`.
@@ -156,38 +152,33 @@ impl Square {
 
     /// Mirror across the horizontal midline (a1 <-> a8, e4 <-> e5).
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn flip_rank(self) -> Self {
-        match Self::from_u8(self.to_u8() ^ 0b11_1000) {
-            Some(sq) => sq,
-            None => unreachable!(),
-        }
+        Self::from_u8(self.to_u8() ^ 0b11_1000)
+            .expect("XOR with a 6-bit mask on a value < 64 stays < 64")
     }
 
     /// Mirror across the vertical midline (a1 <-> h1, d4 <-> e4).
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn flip_file(self) -> Self {
-        match Self::from_u8(self.to_u8() ^ 0b00_0111) {
-            Some(sq) => sq,
-            None => unreachable!(),
-        }
+        Self::from_u8(self.to_u8() ^ 0b00_0111)
+            .expect("XOR with a 3-bit mask on a value < 64 stays < 64")
     }
 
     /// The square offset by `df` files and `dr` ranks, or `None` if that would leave
     /// the board.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub const fn offset(self, df: i8, dr: i8) -> Option<Self> {
         let file = self.file().to_u8().cast_signed() + df;
         let rank = self.rank().to_u8().cast_signed() + dr;
         if file < 0 || file > 7 || rank < 0 || rank > 7 {
             return None;
         }
-        // Checked above: both are in 0..=7, so these conversions always succeed.
-        let Some(file) = File::from_u8(file.cast_unsigned()) else {
-            unreachable!()
-        };
-        let Some(rank) = Rank::from_u8(rank.cast_unsigned()) else {
-            unreachable!()
-        };
+        // Checked above: both are in 0..=7, so these always succeed.
+        let file = File::from_u8(file.cast_unsigned()).expect("checked in 0..=7 above");
+        let rank = Rank::from_u8(rank.cast_unsigned()).expect("checked in 0..=7 above");
         Some(Self::new(file, rank))
     }
 

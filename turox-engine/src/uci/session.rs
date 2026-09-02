@@ -71,7 +71,12 @@ where
             }
             Command::Go(options) => {
                 let stop = Arc::new(AtomicBool::new(false));
-                *active_stop.lock().unwrap() = Some(Arc::clone(&stop));
+                // A poisoned lock means another thread already panicked while
+                // holding it; propagating that panic here, rather than silently
+                // continuing with possibly-inconsistent shared state, is correct.
+                *active_stop
+                    .lock()
+                    .expect("active_stop mutex should not be poisoned") = Some(Arc::clone(&stop));
 
                 let (mut search, max_depth) = build_search(board, history.clone(), &options, stop);
                 // `search_with_info`, not plain `search`: streams an `info`
@@ -82,7 +87,9 @@ where
                     send(&mut writer, &info_response(partial));
                 });
 
-                *active_stop.lock().unwrap() = None;
+                *active_stop
+                    .lock()
+                    .expect("active_stop mutex should not be poisoned") = None;
 
                 // Zero iterations completed (max_depth == 0): the callback
                 // above never fired, so send the one info line here instead.
@@ -152,7 +159,11 @@ fn read_commands<R: BufRead>(
         };
 
         if matches!(command, Command::Stop | Command::Quit) {
-            if let Some(stop) = active_stop.lock().unwrap().as_ref() {
+            if let Some(stop) = active_stop
+                .lock()
+                .expect("active_stop mutex should not be poisoned")
+                .as_ref()
+            {
                 stop.store(true, Ordering::Relaxed);
             }
         }

@@ -6,10 +6,6 @@ members = ["turox-cli", "turox-engine", "turox-macros"]
 proptest = "1.5"
 criterion = "0.8"
 
-# anyhow/clap are turox-cli's own dependencies, not workspace ones (see its
-# Cargo.toml): turox-engine takes zero runtime dependencies, so there's
-# nothing else here that would share them.
-
 [workspace.lints.rust]
 missing_docs = "deny"
 # The crate has none today. Magic bitboards are exactly where `get_unchecked`
@@ -28,18 +24,19 @@ panic = "deny"
 exit = "deny"
 string_slice = "deny"
 as_conversions = "deny"
+unreachable = "deny"
+unwrap_used = "deny"
 
-# Deferred, not dropped: each of these needs a dedicated, per-call-site pass
+# `clippy.toml`'s allow-*-in-tests keys exempt #[cfg(test)]/tests/*.rs, so
+# these only fire on real production call sites, each needing its own
+# checked/wrapping rewrite or a reviewed #[allow] with justification like the
+# existing unsafe_code exceptions, not a blanket decision.
+#
+# Deferred, not dropped: each of these still needs its own per-call-site pass
 # over hot-path bitboard/search code (magic generation, board internals,
-# negamax) to resolve correctly, either a checked/wrapping rewrite or a
-# reviewed #[allow] with justification like the existing unsafe_code
-# exceptions, not a blanket decision made alongside the mechanical
-# pedantic/nursery cleanup that enabled everything above.
-# unwrap_used = "deny"
-# expect_used = "deny"
+# negamax).
 # indexing_slicing = "deny"
 # arithmetic_side_effects = "deny"
-# unreachable = "deny"
 
 [profile.release]
 lto = "fat"

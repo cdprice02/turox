@@ -204,6 +204,11 @@ fn generate(name: &str, variants: &[String]) -> TokenStream {
 
 /// A `compile_error!(message)` token stream, so a malformed derive target is
 /// reported at the derive site rather than panicking the macro itself.
+///
+/// The base case of `generate()`'s own fallback chain: `{message:?}` (`Debug`
+/// on `&str`) always produces a properly escaped, syntactically valid string
+/// literal, so this can't fail in practice, and there's no further fallback
+/// to reach for if it somehow did.
 fn compile_error(message: &str) -> TokenStream {
     format!("compile_error!({message:?});")
         .parse()
