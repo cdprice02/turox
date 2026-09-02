@@ -4,7 +4,7 @@ use crate::{Direction, Rank};
 use turox_macros::Ordinal;
 
 /// Which side a piece or move belongs to.
-#[allow(missing_docs)] // variant names are the doc
+#[allow(missing_docs, reason = "variant names are the doc")]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ordinal)]
 pub enum Color {

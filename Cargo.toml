@@ -26,17 +26,19 @@ string_slice = "deny"
 as_conversions = "deny"
 unreachable = "deny"
 unwrap_used = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+dbg_macro = "deny"
+missing_assert_message = "deny"
+wildcard_enum_match_arm = "deny"
+allow_attributes_without_reason = "deny"
 
-# `clippy.toml`'s allow-*-in-tests keys exempt #[cfg(test)]/tests/*.rs, so
-# these only fire on real production call sites, each needing its own
-# checked/wrapping rewrite or a reviewed #[allow] with justification like the
-# existing unsafe_code exceptions, not a blanket decision.
-#
-# Deferred, not dropped: each of these still needs its own per-call-site pass
-# over hot-path bitboard/search code (magic generation, board internals,
-# negamax).
-# indexing_slicing = "deny"
-# arithmetic_side_effects = "deny"
+# `indexing_slicing` and `arithmetic_side_effects` are deliberately not enabled:
+# this is bitboard/table-driven engine code, so indexing and arithmetic are the
+# normal way to write it, not the exception. Denying them would mean an
+# `#[allow]` (or an unwanted checked/wrapping rewrite) on most lines that touch
+# a board, not a reviewed exception on a few, which defeats the point of a
+# restriction lint.
 
 [profile.release]
 lto = "fat"

@@ -37,11 +37,10 @@ const BISHOP_TABLE_SIZE: usize = 5_248;
 /// where its slice starts in the flat `ROOK_ATTACKS`/`BISHOP_ATTACKS` array
 /// (`offset`). One array of 64 of these per piece type.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-// `magic` is the actual chess-programming term for this field (the
-// multiplier that makes the hash collision-free); renaming it to something
-// generic like `multiplier` would read worse to anyone who already knows
-// magic bitboards, which is the entire audience for this module.
-#[allow(clippy::struct_field_names)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "`magic` is the actual chess-programming term for this field; a generic name like `multiplier` would read worse to this module's audience"
+)]
 struct Magic {
     mask: Bitboard,
     magic: u64,
@@ -54,12 +53,16 @@ struct Magic {
 /// `occupied` to `m.mask`'s bits, multiply by `m.magic`, keep the top
 /// `64 - m.shift` bits. This is the one piece of this file that runs on
 /// every real move-generation lookup, not just at table-build time.
-#[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
 // `m.shift` always leaves at most 12 significant bits (the widest rook/bishop
 // mask), which fits `usize` on every platform this engine targets; there is
 // no const-stable `TryFrom<u64> for usize` to reach for instead
 // (rust-lang/rust#143874), and this is the hottest line in the engine, so a
 // runtime-checked fallback doesn't belong here even once one exists.
+#[allow(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "m.shift always leaves <= 12 significant bits, which fits usize; no const-stable TryFrom<u64> for usize exists yet (rust-lang/rust#143874)"
+)]
 const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
     (((occupied.and(m.mask)).bits().wrapping_mul(m.magic)) >> m.shift) as usize
 }

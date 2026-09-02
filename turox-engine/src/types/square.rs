@@ -12,9 +12,10 @@ use turox_macros::Ordinal;
 macro_rules! declare_axis {
     ($(#[$meta:meta])* $name:ident, { $($variant:ident),* $(,)? }) => {
         $(#[$meta])*
-        // Each variant just names its own square/file/rank (`A1`, `A`, `R1`,
-        // ...); a per-variant doc would only restate that name.
-        #[allow(missing_docs)]
+        #[allow(
+            missing_docs,
+            reason = "each variant just names its own square/file/rank (A1, A, R1, ...); a per-variant doc would only restate that name"
+        )]
         #[repr(u8)]
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Ordinal)]
         pub enum $name {

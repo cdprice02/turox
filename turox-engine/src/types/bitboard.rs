@@ -407,7 +407,7 @@ impl Not for Bitboard {
 
 /// A compass direction on the board, used with `Bitboard::shift`. Each variant
 /// just names its own direction; the compass points are self-explanatory.
-#[allow(missing_docs)]
+#[allow(missing_docs, reason = "variant names are the doc")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     North,

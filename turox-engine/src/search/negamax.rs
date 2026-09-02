@@ -195,11 +195,10 @@ impl Search {
     /// is amortized to roughly nothing per node rather than paid on every
     /// single one. Call this immediately after incrementing `self.nodes` at
     /// the top of `negamax`/`quiescence`.
-    // The mask form is the point, not an oversight: it's the standard
-    // periodic-check idiom, and this doc's own parenthetical names it
-    // directly, so rewriting to `trailing_zeros() >= 11` would desync the
-    // comment from the code for no clarity gain.
-    #[allow(clippy::verbose_bit_mask)]
+    #[allow(
+        clippy::verbose_bit_mask,
+        reason = "the mask form is the standard periodic-check idiom, not an oversight; `trailing_zeros() >= 11` would desync from this fn's own doc comment for no clarity gain"
+    )]
     fn should_abort(&self) -> bool {
         self.nodes & 2047 == 0
             && (self.stop.load(Ordering::Relaxed)

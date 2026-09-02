@@ -5,7 +5,7 @@ use super::color::Color;
 use turox_macros::Ordinal;
 
 /// A piece kind, independent of color.
-#[allow(missing_docs)] // variant names are the doc
+#[allow(missing_docs, reason = "variant names are the doc")]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ordinal)]
 pub enum Piece {
@@ -23,7 +23,7 @@ pub enum Piece {
 /// The struct form is 2 bytes with no niche, so `[Option<ColoredPiece>; 64]` (the
 /// board's mailbox) would cost 128 bytes. This enum form gives `Option<ColoredPiece>`
 /// a 1-byte niche, halving the mailbox to 64 bytes.
-#[allow(missing_docs)] // variant names are the doc
+#[allow(missing_docs, reason = "variant names are the doc")]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ordinal)]
 pub enum ColoredPiece {

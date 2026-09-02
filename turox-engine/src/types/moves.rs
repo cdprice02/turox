@@ -5,7 +5,7 @@ use super::square::Square;
 
 /// The kind of a move, packed into 4 bits. Doubles as the promotion piece selector
 /// for the four promotion variants.
-#[allow(missing_docs)] // variant names are the doc
+#[allow(missing_docs, reason = "variant names are the doc")]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MoveFlags {
@@ -61,7 +61,12 @@ impl MoveFlags {
             Self::PromoteBishop | Self::PromoteCaptureBishop => Some(Piece::Bishop),
             Self::PromoteRook | Self::PromoteCaptureRook => Some(Piece::Rook),
             Self::PromoteQueen | Self::PromoteCaptureQueen => Some(Piece::Queen),
-            _ => None,
+            Self::Quiet
+            | Self::DoublePawnPush
+            | Self::KingCastle
+            | Self::QueenCastle
+            | Self::Capture
+            | Self::EnPassant => None,
         }
     }
 
@@ -90,12 +95,15 @@ impl MoveFlags {
     }
 
     /// This variant's flag bits (its `#[repr(u8)]` discriminant).
-    #[allow(clippy::as_conversions)]
     // Not `#[derive(Ordinal)]` like `Color`/`Piece`/`Square`: those discriminants
     // are dense 0..N ordinals where the number is incidental to the type: this
     // one's discriminants are sparse (0-5, then 8-15) and *are* the point, a bit
     // pattern `Move` packs directly. `Ordinal::to_u8` would work here too, but
     // would misdescribe what these values mean.
+    #[allow(
+        clippy::as_conversions,
+        reason = "sparse bit-pattern discriminants, not an Ordinal; this is the intended way to read them"
+    )]
     const fn bits(self) -> u8 {
         self as u8
     }
@@ -112,10 +120,10 @@ pub struct Move(u16);
 impl Move {
     /// Packs a move from `from` to `to` with the given `flags`.
     #[must_use]
-    #[allow(clippy::as_conversions)]
-    // `from.to_u8()`/`to.to_u8()`/`flags.bits()` are all `u8`; widening each to
-    // `u16` before shifting needs `From`, and `From` isn't const-callable yet
-    // (rust-lang/rust#143874), so this stays `as` rather than `u16::from(...)`.
+    #[allow(
+        clippy::as_conversions,
+        reason = "from.to_u8()/to.to_u8()/flags.bits() are u8; From isn't const-callable yet (rust-lang/rust#143874), so widening to u16 stays `as`"
+    )]
     pub const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
         let bits = from.to_u8() as u16 | ((to.to_u8() as u16) << 6) | ((flags.bits() as u16) << 12);
         Self(bits)
@@ -169,10 +177,10 @@ impl Move {
     /// faith, since "does castling need special-casing" is exactly the
     /// kind of thing that looks like it should from the UCI spec alone.
     #[must_use]
-    #[allow(clippy::unreachable)]
-    // Not an `.expect()` candidate like the rest of this pass: there's no
-    // `Option`/`Result` being unwrapped, just a `Piece`-exhaustiveness catch-all
-    // for the two variants `promotion_piece()` never returns here (Pawn, King).
+    #[allow(
+        clippy::unreachable,
+        reason = "not an .expect() candidate like the rest of this pass: no Option/Result being unwrapped, just a Piece-exhaustiveness catch-all for the two variants promotion_piece() never returns here"
+    )]
     pub fn to_uci(self) -> String {
         let mut s = format!("{}{}", self.from(), self.to());
         if let Some(p) = self.flags().promotion_piece() {
@@ -181,7 +189,9 @@ impl Move {
                 Piece::Bishop => 'b',
                 Piece::Rook => 'r',
                 Piece::Queen => 'q',
-                _ => unreachable!("promotion_piece() only ever returns one of these four"),
+                Piece::Pawn | Piece::King => {
+                    unreachable!("promotion_piece() only ever returns one of the four above")
+                }
             });
         }
         s

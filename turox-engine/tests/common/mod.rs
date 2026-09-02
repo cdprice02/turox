@@ -14,7 +14,10 @@
 //! `any_square`, `attacks_props.rs` only wants `any_board`/`any_bitboard`/
 //! `any_square`, ...), so `dead_code` fires per-binary for whatever that
 //! binary didn't happen to call. That's expected here, not a real problem.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "compiled fresh into every binary that does `mod common;`; no single binary uses the whole surface"
+)]
 
 use proptest::prelude::*;
 use turox_engine::board::Board;

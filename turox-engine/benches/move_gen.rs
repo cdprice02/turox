@@ -18,7 +18,7 @@
 // Not part of the crate's public API, so `missing_docs` doesn't apply here:
 // criterion's own `criterion_group!`/`criterion_main!` macros generate an
 // undocumented `fn main`.
-#![allow(missing_docs)]
+#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;

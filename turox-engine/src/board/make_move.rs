@@ -18,12 +18,10 @@ impl Board {
     /// rights say there should be one, ...) trips an internal invariant and panics rather
     /// than silently producing a wrong position.
     #[must_use]
-    // One `match` over every `MoveFlags` variant, applying each rule's full
-    // consequence inline (rook hop on castle, capture removal, promotion
-    // piece swap, en passant target bookkeeping); splitting it into several
-    // correlated helper functions would trade this length for indirection
-    // between them without actually shrinking the logic.
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one match over every MoveFlags variant, applying each rule's full consequence inline (rook hop, capture removal, promotion swap, en passant bookkeeping); splitting it into helper functions would trade length for indirection, not shrink the logic"
+    )]
     pub fn make_move(&self, m: Move) -> Self {
         let mut board = *self;
         let color = board.side_to_move();
