@@ -128,8 +128,11 @@ impl Square {
     }
 
     /// This square's file.
+    ///
+    /// # Panics
+    ///
+    /// Never: `% 8` is always < 8.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     // `to_u8() % 8`, not `index() % 8`: `%`/`from_u8` both work in `u8`, so this
     // needs no widening conversion, which matters in a const fn (see `new`'s
     // comment on why `usize::from`/`u8::try_from` aren't an option here).
@@ -138,8 +141,11 @@ impl Square {
     }
 
     /// This square's rank.
+    ///
+    /// # Panics
+    ///
+    /// Never: a `u8` < 64, divided by 8, is always < 8.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn rank(self) -> Rank {
         Rank::from_u8(self.to_u8() / 8).expect("a u8 < 64, divided by 8, is always < 8")
     }
@@ -151,16 +157,22 @@ impl Square {
     }
 
     /// Mirror across the horizontal midline (a1 <-> a8, e4 <-> e5).
+    ///
+    /// # Panics
+    ///
+    /// Never: `XOR`ing a value < 64 with a 6-bit mask stays < 64.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn flip_rank(self) -> Self {
         Self::from_u8(self.to_u8() ^ 0b11_1000)
             .expect("XOR with a 6-bit mask on a value < 64 stays < 64")
     }
 
     /// Mirror across the vertical midline (a1 <-> h1, d4 <-> e4).
+    ///
+    /// # Panics
+    ///
+    /// Never: `XOR`ing a value < 64 with a 3-bit mask stays < 64.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn flip_file(self) -> Self {
         Self::from_u8(self.to_u8() ^ 0b00_0111)
             .expect("XOR with a 3-bit mask on a value < 64 stays < 64")
@@ -168,8 +180,12 @@ impl Square {
 
     /// The square offset by `df` files and `dr` ranks, or `None` if that would leave
     /// the board.
+    ///
+    /// # Panics
+    ///
+    /// Never: the `file`/`rank` conversions below only run once both are
+    /// already checked to be in `0..=7`.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn offset(self, df: i8, dr: i8) -> Option<Self> {
         let file = self.file().to_u8().cast_signed() + df;
         let rank = self.rank().to_u8().cast_signed() + dr;

@@ -122,24 +122,34 @@ impl Move {
     }
 
     /// The square this move starts from.
+    ///
+    /// # Panics
+    ///
+    /// Never: the stored bits are masked to 6 bits (`& 0x3F`), always < 64.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn from(self) -> Square {
         Square::from_u8(self.0.to_le_bytes()[0] & 0x3F)
             .expect("masked to 6 bits (& 0x3F), so always < 64")
     }
 
     /// The square this move lands on.
+    ///
+    /// # Panics
+    ///
+    /// Never: the stored bits are masked to 6 bits (`& 0x3F`), always < 64.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn to(self) -> Square {
         Square::from_u8((self.0 >> 6).to_le_bytes()[0] & 0x3F)
             .expect("masked to 6 bits (& 0x3F), so always < 64")
     }
 
     /// This move's kind.
+    ///
+    /// # Panics
+    ///
+    /// Never: `Move` is only ever built via `Move::new`, which packs one of
+    /// the 14 valid flag patterns `MoveFlags::from_bits` recognizes.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn flags(self) -> MoveFlags {
         MoveFlags::from_bits((self.0 >> 12).to_le_bytes()[0]).expect(
             "Move is only ever built via Move::new, which packs one of the 14 valid patterns",
