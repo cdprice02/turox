@@ -78,7 +78,7 @@ enum ScoreKind {
 /// (UCI's unit, not this engine's own). Get the rounding direction right,
 /// worth checking against a concrete case rather than trusting it by
 /// inspection: `tests/uci_response.rs` pins specific mate scores
-/// already confirmed correct by `search`'s own mate-puzzle tests in #19
+/// already confirmed correct by `search`'s own mate-puzzle tests
 /// (`MATE - 1`, `MATE - 3`, ...) to their expected `mate N` output.
 const fn classify_score(score: Score) -> ScoreKind {
     if score.abs() > MATE / 2 {
@@ -147,8 +147,7 @@ mod tests {
     /// per case, so the *mapping* from ply to UCI's move count is what's
     /// under test, not just a handful of disconnected magic numbers.
     /// `(1, 1)`/`(3, 2)` are `search`'s own already-verified mate-in-1 and
-    /// Philidor's Legacy mate-in-2 scores from #19's puzzle tests, not
-    /// invented here.
+    /// Philidor's Legacy mate-in-2 scores, not invented here.
     #[test]
     fn mate_scores_convert_ply_distance_to_uci_move_count() {
         let ply_to_moves = [
@@ -210,12 +209,11 @@ mod tests {
         assert_eq!(Response::BestMove(Some(m)).to_string(), "bestmove e7e8q");
     }
 
-    /// Castling is a `{Color}x{side}` mapping, this project's own recurring
-    /// bug shape, so all four corners get their own check rather than
-    /// trusting symmetry. `to()` already being the king's real destination
-    /// (not the rook's square) was confirmed directly against
-    /// `legal_moves` back in #33; these only need to confirm `bestmove`
-    /// doesn't reintroduce a special case that undoes that.
+    /// All four corners get their own check rather than trusting symmetry.
+    /// `to()` already being the king's real destination (not the rook's
+    /// square) is confirmed directly against `legal_moves` elsewhere; these
+    /// only need to confirm `bestmove`'s formatting doesn't reintroduce a
+    /// special case that undoes that.
     #[test]
     fn bestmove_with_castling_all_four_corners() {
         let cases = [
@@ -290,7 +288,7 @@ mod tests {
     }
 
     /// Same mate-in-1 score `search`'s own `white_delivers_mate_in_one`
-    /// test (#19) produces, formatted the way UCI expects: `mate 1`, not
+    /// test produces, formatted the way UCI expects: `mate 1`, not
     /// `cp 29999` or some other leftover of the internal `MATE`-relative
     /// representation leaking into the wire format.
     #[test]
@@ -320,7 +318,7 @@ mod tests {
     }
 
     /// Same mate-in-2 score `search`'s own `philidors_legacy_smothered_mate`
-    /// test (#19) produces.
+    /// test produces.
     #[test]
     fn info_with_a_deeper_mate_score() {
         let response = Response::Info {

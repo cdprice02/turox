@@ -4,55 +4,119 @@ use super::bitboard::Bitboard;
 use std::fmt;
 use turox_macros::Ordinal;
 
-/// Declares a small `repr(u8)` axis enum, from a single list of variant names.
-///
-/// `#[derive(Ordinal)]` supplies `ALL`, `to_u8`/`from_u8`, and `index`; this macro's
-/// own job is just naming the variants. Used for `File`, `Rank`, and `Square` below:
-/// the variant list is the only thing that differs between them.
-macro_rules! declare_axis {
-    ($(#[$meta:meta])* $name:ident, { $($variant:ident),* $(,)? }) => {
-        $(#[$meta])*
-        #[allow(
-            missing_docs,
-            reason = "each variant just names its own square/file/rank (A1, A, R1, ...); a per-variant doc would only restate that name"
-        )]
-        #[repr(u8)]
-        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Ordinal)]
-        pub enum $name {
-            $($variant),*
-        }
-    };
+/// A file (column), A through H.
+#[allow(
+    missing_docs,
+    reason = "each variant just names its own file; a per-variant doc would only restate that name"
+)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Ordinal)]
+pub enum File {
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
 }
 
-declare_axis!(
-    /// A file (column), A through H.
-    #[derive(Debug)]
-    File, { A, B, C, D, E, F, G, H }
-);
+/// A rank (row), 1 through 8.
+#[allow(
+    missing_docs,
+    reason = "each variant just names its own rank; a per-variant doc would only restate that name"
+)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Ordinal)]
+pub enum Rank {
+    R1,
+    R2,
+    R3,
+    R4,
+    R5,
+    R6,
+    R7,
+    R8,
+}
 
-declare_axis!(
-    /// A rank (row), 1 through 8.
-    #[derive(Debug)]
-    Rank, { R1, R2, R3, R4, R5, R6, R7, R8 }
-);
-
-declare_axis!(
-    /// A single board square, stored as a LERF (Little-Endian Rank-File) index.
-    ///
-    /// a1 = 0, b1 = 1, ..., h1 = 7, a2 = 8, ..., h8 = 63. This ordering is what the
-    /// `Bitboard` transform constants (see `bitboard.rs`) assume. `Debug` is implemented
-    /// manually below (algebraic notation) rather than derived.
-    Square, {
-        A1, B1, C1, D1, E1, F1, G1, H1,
-        A2, B2, C2, D2, E2, F2, G2, H2,
-        A3, B3, C3, D3, E3, F3, G3, H3,
-        A4, B4, C4, D4, E4, F4, G4, H4,
-        A5, B5, C5, D5, E5, F5, G5, H5,
-        A6, B6, C6, D6, E6, F6, G6, H6,
-        A7, B7, C7, D7, E7, F7, G7, H7,
-        A8, B8, C8, D8, E8, F8, G8, H8,
-    }
-);
+/// A single board square, stored as a LERF (Little-Endian Rank-File) index.
+///
+/// a1 = 0, b1 = 1, ..., h1 = 7, a2 = 8, ..., h8 = 63. This ordering is what the
+/// `Bitboard` transform constants (see `bitboard.rs`) assume. `Debug` is implemented
+/// manually below (algebraic notation) rather than derived.
+#[allow(
+    missing_docs,
+    reason = "each variant just names its own square (A1, B1, ...); a per-variant doc would only restate that name"
+)]
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Ordinal)]
+pub enum Square {
+    A1,
+    B1,
+    C1,
+    D1,
+    E1,
+    F1,
+    G1,
+    H1,
+    A2,
+    B2,
+    C2,
+    D2,
+    E2,
+    F2,
+    G2,
+    H2,
+    A3,
+    B3,
+    C3,
+    D3,
+    E3,
+    F3,
+    G3,
+    H3,
+    A4,
+    B4,
+    C4,
+    D4,
+    E4,
+    F4,
+    G4,
+    H4,
+    A5,
+    B5,
+    C5,
+    D5,
+    E5,
+    F5,
+    G5,
+    H5,
+    A6,
+    B6,
+    C6,
+    D6,
+    E6,
+    F6,
+    G6,
+    H6,
+    A7,
+    B7,
+    C7,
+    D7,
+    E7,
+    F7,
+    G7,
+    H7,
+    A8,
+    B8,
+    C8,
+    D8,
+    E8,
+    F8,
+    G8,
+    H8,
+}
 
 impl File {
     /// Every square on this file, as a `Bitboard`.
@@ -94,11 +158,6 @@ impl Square {
     /// The square at the intersection of `file` and `rank`.
     #[must_use]
     pub const fn new(file: File, rank: Rank) -> Self {
-        // ALL is laid out rank-major (LERF), so this is the inverse of file()/rank().
-        // Both operands are already `usize` (`index()`, not `to_u8()`), so this needs
-        // no widening conversion, which matters in a const fn: `From`/`TryFrom` aren't
-        // const-callable yet (rust-lang/rust#143874), only `as` is, and this sidesteps
-        // needing either.
         Self::ALL[rank.index() * 8 + file.index()]
     }
 
@@ -134,9 +193,6 @@ impl Square {
     ///
     /// Never: `% 8` is always < 8.
     #[must_use]
-    // `to_u8() % 8`, not `index() % 8`: `%`/`from_u8` both work in `u8`, so this
-    // needs no widening conversion, which matters in a const fn (see `new`'s
-    // comment on why `usize::from`/`u8::try_from` aren't an option here).
     pub const fn file(self) -> File {
         File::from_u8(self.to_u8() % 8).expect("% 8 is always < 8")
     }
@@ -181,22 +237,17 @@ impl Square {
 
     /// The square offset by `df` files and `dr` ranks, or `None` if that would leave
     /// the board.
-    ///
-    /// # Panics
-    ///
-    /// Never: the `file`/`rank` conversions below only run once both are
-    /// already checked to be in `0..=7`.
     #[must_use]
     pub const fn offset(self, df: i8, dr: i8) -> Option<Self> {
         let file = self.file().to_u8().cast_signed() + df;
         let rank = self.rank().to_u8().cast_signed() + dr;
-        if file < 0 || file > 7 || rank < 0 || rank > 7 {
-            return None;
+        match (
+            File::from_u8(file.cast_unsigned()),
+            Rank::from_u8(rank.cast_unsigned()),
+        ) {
+            (Some(file), Some(rank)) => Some(Self::new(file, rank)),
+            (None, _) | (_, None) => None,
         }
-        // Checked above: both are in 0..=7, so these always succeed.
-        let file = File::from_u8(file.cast_unsigned()).expect("checked in 0..=7 above");
-        let rank = Rank::from_u8(rank.cast_unsigned()).expect("checked in 0..=7 above");
-        Some(Self::new(file, rank))
     }
 
     /// Chebyshev (king-move) distance between two squares.
@@ -264,8 +315,7 @@ mod tests {
         assert_eq!(Square::from_u8(64), None);
     }
 
-    /// `File`/`Rank` are declared by the same `declare_axis!` macro as
-    /// `Square` above, and share its `#[derive(Ordinal)]`; this is the same
+    /// `File`/`Rank` share `Square`'s `#[derive(Ordinal)]`; this is the same
     /// property, checked for the other two so a bug isn't only ever caught
     /// on the one of the three that happens to have 64 variants.
     #[test]
@@ -349,11 +399,6 @@ mod tests {
         assert_eq!(Square::E4.offset(1, 1), Some(Square::F5));
     }
 
-    /// Exhaustive over every square and every delta in -20..=20 (well past
-    /// the board edge in both directions), not just the four corner cases a
-    /// hand-picked example would cover: both axes checked independently and
-    /// together, so a bug that only trips when file and rank are *both*
-    /// out of range wouldn't hide behind two separately-in-range checks.
     #[test]
     fn offset_out_of_range_is_none() {
         for sq in Square::ALL {

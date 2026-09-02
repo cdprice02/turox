@@ -66,7 +66,7 @@ fn bench_generator(c: &mut Criterion, name: &str, f: impl Fn(&Board, &mut MoveLi
     let boards = sample_boards();
     let mut group = c.benchmark_group("move_gen");
     group.throughput(Throughput::Elements(
-        u64::try_from(boards.len()).expect("fits u64"),
+        u64::try_from(boards.len()).unwrap_or(u64::MAX),
     ));
     group.bench_function(name, |b| {
         b.iter(|| {
@@ -96,7 +96,7 @@ fn legal(c: &mut Criterion) {
     let boards = sample_boards();
     let mut group = c.benchmark_group("move_gen");
     group.throughput(Throughput::Elements(
-        u64::try_from(boards.len()).expect("fits u64"),
+        u64::try_from(boards.len()).unwrap_or(u64::MAX),
     ));
     group.bench_function("legal_moves", |b| {
         b.iter(|| {

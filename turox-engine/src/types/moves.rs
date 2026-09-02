@@ -176,21 +176,29 @@ impl Move {
     /// reconstruct. Worth confirming for yourself rather than taking on
     /// faith, since "does castling need special-casing" is exactly the
     /// kind of thing that looks like it should from the UCI spec alone.
+    ///
+    /// # Panics
+    ///
+    /// Never: `is_promotion()` true implies `promotion_piece()` returns `Some`.
     #[must_use]
-    #[allow(
-        clippy::unreachable,
-        reason = "not an .expect() candidate like the rest of this pass: no Option/Result being unwrapped, just a Piece-exhaustiveness catch-all for the two variants promotion_piece() never returns here"
-    )]
     pub fn to_uci(self) -> String {
         let mut s = format!("{}{}", self.from(), self.to());
-        if let Some(p) = self.flags().promotion_piece() {
+        if self.flags().is_promotion() {
+            let p = self
+                .flags()
+                .promotion_piece()
+                .expect("is_promotion() is true, so promotion_piece() always returns Some");
             s.push(match p {
                 Piece::Knight => 'n',
                 Piece::Bishop => 'b',
                 Piece::Rook => 'r',
                 Piece::Queen => 'q',
+                #[allow(
+                    clippy::unreachable,
+                    reason = "is_promotion() gates this on the flag's own promotion bit, which promotion_piece() never maps to Pawn/King"
+                )]
                 Piece::Pawn | Piece::King => {
-                    unreachable!("promotion_piece() only ever returns one of the four above")
+                    unreachable!("promotion_piece() never returns Pawn/King when is_promotion() is true")
                 }
             });
         }
@@ -278,15 +286,6 @@ mod tests {
         MoveFlags::PromoteCaptureQueen,
     ];
 
-    /// The regression test for a real bug caught during the `as_conversions`
-    /// cleanup: `from`/`to`/`flags` read `to_be_bytes()[0]` (the *high* byte of
-    /// a `u16`) instead of `to_le_bytes()[0]`. That returned the right value
-    /// for exactly one combination by coincidence (`Quiet` at `E2`->`E4`, both
-    /// landing in the byte that was actually read as zero) and silently
-    /// reclassified every capture, castle, en passant, and promotion as
-    /// `Quiet` otherwise. `Square` (64) and `MoveFlags` (14) are both small,
-    /// fully enumerable domains, so this checks all 64*64*14 combinations
-    /// directly rather than sampling a subset via `proptest`.
     #[test]
     fn round_trips_from_to_and_flags() {
         for from in Square::ALL {

@@ -44,9 +44,7 @@ fn white_up_a_rook_scores_exactly_rook_value() {
 
 // Material is unchanged (one White pawn, relocated); the score changes by
 // exactly the pawn's own PST delta, d2 (-20) to d4 (+20) = 40, isolating
-// the positional term from the material term the way #21's now-deleted
-// permutation-invariance test used to when there was no positional term to
-// isolate it from.
+// the positional term from the material term.
 #[test]
 fn a_central_pawn_push_changes_pst_but_not_material() {
     let before = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");

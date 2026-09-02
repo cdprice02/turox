@@ -1,9 +1,9 @@
 //! Piece-square tables: per-square, per-piece positional bonuses summed
 //! alongside material in `eval::eval_white_pov`.
 //!
-//! Values are Tomasz Michniewski's "Simplified Evaluation Function"
-//! (public, widely republished, e.g. on chessprogramming.org), midgame
-//! variants only. Single-phase, not tapered: one table per piece, no
+//! Values are Tomasz Michniewski's "Simplified Evaluation Function" (see
+//! the README's "References" section), midgame variants only. Single-phase,
+//! not tapered: one table per piece, no
 //! midgame/endgame interpolation. Known limitation accepted here: with a
 //! midgame king table and no phase blending, the engine will keep its king
 //! cornered in endgames where it should centralize instead. Tapered eval is
@@ -124,8 +124,7 @@ const VISUAL_PST: [[Score; 64]; 6] = [
 /// engine that plays measurably worse (develops backwards, centralizes the
 /// wrong king) while looking entirely reasonable on a read-through.
 /// `tests/eval_props.rs`'s orientation-anchor tests exist specifically to
-/// catch this, the same `{Color}x{direction}` shape that's bitten this
-/// crate before.
+/// catch this.
 #[must_use]
 pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
     let sq = match color {

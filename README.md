@@ -121,11 +121,23 @@ cargo nextest run --workspace --release --run-ignored all
 `perft` (performance test) is the project's end-to-end correctness gate: a
 standard recursive node count over a legal-move search tree, checked against
 the published results for six standard test positions
-(`turox-engine/tests/perft.rs`) from
-[chessprogramming.org](https://www.chessprogramming.org/Perft_Results). A
-wrong count at low depth on any of them localizes to a specific rule; matching
-all six, including the deep depths, is the bar for "move generation is
-actually correct."
+(`turox-engine/tests/perft.rs`; see "References" below). A wrong count at low
+depth on any of them localizes to a specific rule; matching all six, including
+the deep depths, is the bar for "move generation is actually correct."
+
+## References
+
+The techniques behind `move_gen` and `eval` are standard chess-programming
+material rather than invented here, primarily from
+[chessprogramming.org](https://www.chessprogramming.org/Main_Page): magic
+bitboards for sliding-piece attacks (`move_gen::magic`), the knight-attack
+shift-and-mask pattern (`move_gen::tables::knight_attacks`), and bitboard
+flips/mirrors/rotations (`types::Bitboard`) all follow the standard
+formulations documented there. `perft`'s six standard test positions are its
+[Perft Results](https://www.chessprogramming.org/Perft_Results) page.
+Piece-square table values (`eval::pst`) are Tomasz Michniewski's "Simplified
+Evaluation Function," a public set republished in several places including
+chessprogramming.org.
 
 ## Benchmarking
 

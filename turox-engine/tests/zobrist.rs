@@ -1,8 +1,7 @@
 //! Concrete tests for `board::zobrist`.
 //!
 //! `tests/zobrist_props.rs` has the property coverage over arbitrary boards;
-//! these are the `{Color}x{state}`-shaped facts this project's own history
-//! says are worth pinning down concretely rather than trusting by
+//! these are facts worth pinning down concretely rather than trusting by
 //! inspection (side to move, each castling right, en passant file), plus the
 //! full perft-tree walk: `board.hash()` (incremental) matches `compute_hash`
 //! (from-scratch) at every node reachable within `depth` plies, exercising

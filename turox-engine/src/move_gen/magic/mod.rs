@@ -282,11 +282,6 @@ mod tests {
         assert_eq!(queen_attacks(Square::D4, occupied), expected);
     }
 
-    /// `Square` alone (64 values, `Bitboard::ALL` fixed) is small and fully
-    /// enumerable: a plain loop, not `proptest`. The rest of this module's
-    /// coverage against arbitrary occupancy (`tests/magic_props.rs`) stays
-    /// proptest, since `occupied: Bitboard` is a genuinely unbounded 2^64
-    /// domain.
     #[test]
     fn rook_attacks_on_fully_occupied_board_has_at_most_four_squares() {
         for sq in Square::ALL {

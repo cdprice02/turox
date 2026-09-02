@@ -5,8 +5,8 @@
 //! `slider_moves`; these are hand-picked positions for the cases a naive
 //! reference (built the same way, with the same offset-stepping technique)
 //! wouldn't independently catch a mistake in: pawn double-push blocking, en
-//! passant, promotion, and `castling_moves`'s {Color}x{kingside,queenside}
-//! mapping specifically, which hinges on `move_gen::attacks` (already
+//! passant, promotion, and `castling_moves`'s per-corner mapping
+//! specifically, which hinges on `move_gen::attacks` (already
 //! independently tested elsewhere) rather than on move-stepping at all.
 
 use turox_engine::board::Board;
@@ -205,7 +205,7 @@ fn black_capturing_promotion_generates_all_four_pieces_alongside_quiet() {
 //
 // Concrete FEN tests, not a proptest: legality here hinges on
 // `move_gen::attacks` (already independently tested), so what's worth pinning
-// down is the {Color}x{kingside,queenside} mapping specifically.
+// down is the per-corner rook mapping specifically.
 
 const CASTLE_BASE_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const CASTLE_BASE_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";

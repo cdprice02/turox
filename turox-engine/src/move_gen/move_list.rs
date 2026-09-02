@@ -211,8 +211,7 @@ mod tests {
     fn fills_to_capacity_without_panicking() {
         let mut list = MoveList::new();
         for i in 0..MoveList::CAPACITY {
-            let sq =
-                Square::from_u8(u8::try_from(i % 64).expect("i % 64 < 64")).expect("i % 64 < 64");
+            let sq = Square::ALL[i % 64];
             list.push(m(Square::A1, sq));
         }
         assert_eq!(list.len(), MoveList::CAPACITY);
@@ -223,8 +222,7 @@ mod tests {
     fn pushing_past_capacity_panics() {
         let mut list = MoveList::new();
         for i in 0..MoveList::CAPACITY {
-            let sq =
-                Square::from_u8(u8::try_from(i % 64).expect("i % 64 < 64")).expect("i % 64 < 64");
+            let sq = Square::ALL[i % 64];
             list.push(m(Square::A1, sq));
         }
         list.push(m(Square::A1, Square::A1));

@@ -79,8 +79,7 @@ const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 /// about which edge a ray dies on: `occluded_fill(sq.bitboard(), ALL,
 /// dir).shift(dir).shift(dir.opposite())`. A rook standing on `FILE_A` has its
 /// entire north/south mask living on `FILE_A`, so subtracting that edge
-/// outright would wipe out real blocker squares, not just the terminus: the
-/// same {axis}×{sign} shape that's bitten `Board::make_move` twice.
+/// outright would wipe out real blocker squares, not just the terminus.
 const fn relevant_mask(sq: Square, dirs: [Direction; 4]) -> Bitboard {
     let mut mask = Bitboard::EMPTY;
     let mut i = 0;
@@ -313,9 +312,6 @@ fn naive_attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
     result
 }
 
-// `Square` (64) x {ROOK_DIRS, BISHOP_DIRS} (2) is small and fully enumerable,
-// unlike the `occupied: Bitboard` (2^64) tests below it: exhaustive rather
-// than proptest, same reasoning as `relevant_mask_popcount_matches_known_bounds`.
 #[test]
 fn relevant_mask_matches_naive_walk() {
     for sq in Square::ALL {

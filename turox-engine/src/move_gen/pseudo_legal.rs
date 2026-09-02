@@ -155,9 +155,8 @@ fn nonpawn_moves(board: &Board, list: &mut MoveList, piece: Piece) {
 /// Legal only where the relevant `CastlingRights` bit is set, the squares between king
 /// and rook are empty, and the king's start/transit/landing squares are all unattacked.
 ///
-/// The {Color}x{kingside,queenside} four-way mapping is a shape that has repeatedly
-/// produced scrambled bugs in this crate: `valid_castle` derives every square that
-/// matters (`tables::between(king_sq, rook_sq)`) from where the king and rook actually
+/// `valid_castle` derives every square that matters
+/// (`tables::between(king_sq, rook_sq)`) from where the king and rook actually
 /// stand, so Black isn't a separate case: it falls out of `king_sq`/`rook_sq` already
 /// being Black's squares. The rook lookup below filters by `color.back_rank()` as well as
 /// file, not file alone: "the piece of `color`/`Rook` on file A/H" is wrong the moment a

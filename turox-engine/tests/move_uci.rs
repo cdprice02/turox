@@ -16,9 +16,8 @@ use turox_engine::{Move, Square};
 
 // ---- Concrete castling: all four corners ----
 //
-// A `{Color}x{side}` mapping, this project's own recurring bug shape, so
-// all four get checked explicitly rather than trusting symmetry. Confirmed
-// via `legal_moves` directly (not assumed) that this FEN produces exactly
+// All four corners get checked explicitly rather than trusting symmetry.
+// Confirmed via `legal_moves` directly (not assumed) that this FEN produces exactly
 // `Ra1-c1`/`Rh1-g1`-shaped castles for whichever color is to move, spelled
 // by the king's own destination per UCI (`e1g1`, not `e1h1`).
 

@@ -1,6 +1,5 @@
-//! Static position evaluation: material (below), piece-square tables
-//! (`pst`), and pawn structure (#23), returned from the side-to-move's
-//! perspective via `evaluate`.
+//! Static position evaluation: material (below) and piece-square tables
+//! (`pst`), returned from the side-to-move's perspective via `evaluate`.
 //!
 //! `eval_white_pov` is the absolute (White-relative) sum of terms;
 //! `evaluate` is the side-to-move-relative wrapper negamax search wants.

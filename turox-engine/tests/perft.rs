@@ -1,6 +1,6 @@
-//! `perft` against the six standard test positions (chessprogramming.org's
-//! "Perft Results"), the end-to-end correctness gate for move generation: it
-//! exercises `legal_moves`, `pseudo_legal`, `attacks`, `MoveList`,
+//! `perft` against the six standard test positions (see the README's
+//! "References" section), the end-to-end correctness gate for move
+//! generation: it exercises `legal_moves`, `pseudo_legal`, `attacks`, `MoveList`,
 //! `Board::make_move`, `tables`, and `magic` together. A wrong count at low
 //! depth on any position localizes to a specific rule; matching all six
 //! (including the deep, `#[ignore]`d depths) is the point at which move

@@ -52,9 +52,7 @@ struct Keys {
 
 /// The four individual castling rights, in the order `Keys::castling`
 /// indexes them. Shared between `castling_hash` and anything else that
-/// needs to walk "each right, in a fixed order" (matches the discipline
-/// `CastlingRights::rook_squares`'s own tests already use: every
-/// `{Color}x{side}` combination checked explicitly, not just one).
+/// needs to walk "each right, in a fixed order".
 const CASTLING_BITS: [CastlingRights; 4] = [
     CastlingRights::WHITE_KINGSIDE,
     CastlingRights::WHITE_QUEENSIDE,

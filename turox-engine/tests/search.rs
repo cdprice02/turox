@@ -23,10 +23,9 @@ use turox_engine::{Move, Square};
 // the back-rank mate (below, in both colors) and Philidor's Legacy, the
 // classic smothered mate (further down).
 //
-// Side to move on the back-rank puzzles is deliberately the
-// `{Color}x{state}`-shaped fact this project's own history says is worth
-// pinning down concretely: one puzzle for each color delivering mate, not
-// just trusting the formula symmetric by inspection.
+// Side to move on the back-rank puzzles is deliberately pinned down
+// concretely: one puzzle for each color delivering mate, not just trusting
+// the formula symmetric by inspection.
 
 /// The back-rank mate: one of the most famous elementary mating patterns in
 /// chess, a king boxed in by its own pawns with nowhere to run from a rook
@@ -93,7 +92,7 @@ fn checkmate_scores_exactly_negative_mate_for_white() {
     assert_eq!(result.score, -MATE);
 }
 
-/// Mirror of the above for Black being mated: same `{Color}x{state}` shape.
+/// Mirror of the above for Black being mated.
 #[test]
 fn checkmate_scores_exactly_negative_mate_for_black() {
     let board = Board::try_from_fen("R5k1/5ppp/8/8/8/8/8/4K3 b - - 1 1").expect("valid FEN");

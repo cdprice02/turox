@@ -44,7 +44,7 @@ fn eval_bench(c: &mut Criterion) {
     let boards = sample_boards();
     let mut group = c.benchmark_group("eval");
     group.throughput(Throughput::Elements(
-        u64::try_from(boards.len()).expect("fits u64"),
+        u64::try_from(boards.len()).unwrap_or(u64::MAX),
     ));
     group.bench_function("evaluate", |b| {
         b.iter(|| {

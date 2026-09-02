@@ -49,7 +49,7 @@ fn bench_transform(c: &mut Criterion, name: &str, f: impl Fn(Bitboard) -> Bitboa
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
     group.throughput(Throughput::Elements(
-        u64::try_from(samples.len()).expect("fits u64"),
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
     ));
     group.bench_function(name, |b| {
         b.iter(|| {
@@ -75,7 +75,7 @@ fn scanning(c: &mut Criterion) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
     group.throughput(Throughput::Elements(
-        u64::try_from(samples.len()).expect("fits u64"),
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
     ));
 
     group.bench_function("count", |b| {
@@ -104,7 +104,7 @@ fn shifts(c: &mut Criterion) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
     group.throughput(Throughput::Elements(
-        u64::try_from(samples.len()).expect("fits u64"),
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
     ));
 
     for dir in Direction::ALL {

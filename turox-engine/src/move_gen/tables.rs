@@ -25,9 +25,9 @@ use crate::types::square::Square;
 /// Every square a knight standing on `sq` attacks.
 ///
 /// Not a `shift`/fill composition: knight moves are a discontinuous jump, not a smear or
-/// single step, but they have their own compound shift-with-masking formula (CPW's
-/// "Knight Pattern"), same technique family as `Bitboard::shift`'s diagonals, just wider
-/// file-edge masks since a knight can cross two files in one move.
+/// single step, but they have their own compound shift-with-masking formula, same
+/// technique family as `Bitboard::shift`'s diagonals, just wider file-edge masks since a
+/// knight can cross two files in one move.
 #[must_use]
 pub const fn knight_attacks(sq: Square) -> Bitboard {
     let x = sq.bitboard().bits();
@@ -75,9 +75,7 @@ pub const fn pawn_attacks(color: Color, sq: Square) -> Bitboard {
 /// "same file", "same diagonal" (`|Δfile| == |Δrank|`, both nonzero), or
 /// "unrelated". `None` if `a == b` (which falls through to "unrelated" rather
 /// than satisfying the diagonal check's `abs` equality by accident) or they
-/// share no such line. This sign-to-direction mapping is the same
-/// {axis}×{sign} shape that has produced scrambled bugs twice already in
-/// `Board::make_move`.
+/// share no such line.
 const fn ray_direction(a: Square, b: Square) -> Option<Direction> {
     let df = b.file().to_u8().cast_signed() - a.file().to_u8().cast_signed();
     let dr = b.rank().to_u8().cast_signed() - a.rank().to_u8().cast_signed();
@@ -281,9 +279,7 @@ mod tests {
     // `Square::offset`/file-rank arithmetic, not from whatever `Bitboard`
     // primitive (`dilate`, `occluded_fill`, ...) the real implementation
     // uses, over every one of `Square`'s 64 values (or 64*64 pairs, for the
-    // two-square functions). That domain is small and fully enumerable, so
-    // this is a plain loop, not `proptest`: random sampling wouldn't cover
-    // anything a loop doesn't already cover completely.
+    // two-square functions).
     use crate::types::square::{File, Rank};
 
     /// Reference definition of `knight_attacks`: every one of the 8 (df, dr) knight

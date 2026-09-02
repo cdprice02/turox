@@ -88,10 +88,6 @@ impl Board {
             });
         }
 
-        // Rows read top (rank 8) to bottom (rank 1), per FEN: walking `Rank::ALL`
-        // in reverse pairs each row with its rank directly, rather than computing
-        // a row-index-to-rank-number mapping by hand, which is exactly the
-        // {axis}x{direction} arithmetic this codebase has gotten backwards before.
         for (rank, row) in Rank::ALL.into_iter().rev().zip(rows) {
             let mut file = 0usize;
 

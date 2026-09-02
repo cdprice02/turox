@@ -217,7 +217,6 @@ impl Bitboard {
     }
 
     // ---- Flips and rotations ----
-    // https://www.chessprogramming.org/Flipping_Mirroring_and_Rotating
 
     /// Mirror across the vertical midline (file a <-> h). Each rank's byte is
     /// bit-reversed.

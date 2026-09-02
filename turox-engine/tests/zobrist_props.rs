@@ -1,9 +1,9 @@
 //! Property tests for `board::zobrist`: does the incrementally-maintained
 //! `Board::hash()` agree with `zobrist::compute_hash`'s from-scratch fold.
 //!
-//! `tests/zobrist.rs` has the concrete `{Color}x{state}` tests (side to
-//! move, each castling right alone, en passant) and the perft-grade
-//! ground-truth tree walk; this file is proptest only.
+//! `tests/zobrist.rs` has the concrete tests (side to move, each castling
+//! right alone, en passant) and the perft-grade ground-truth tree walk;
+//! this file is proptest only.
 //!
 //! `any_board()` builds positions through `place`/`from_parts` only, never
 //! through `make_move`, so the plain property tests below (matching the

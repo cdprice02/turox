@@ -81,9 +81,7 @@ impl CastlingRights {
     /// The castling rook's home square and where it lands, for `color`'s
     /// kingside (`kingside`) or queenside corner. The single place these four
     /// squares are spelled out: `Board::make_move` looks them up here rather
-    /// than hardcoding its own copy of the same `{Color}x{kingside,queenside}`
-    /// table, the shape that's produced scrambled bugs elsewhere in this
-    /// crate before.
+    /// than hardcoding its own copy of the same table.
     #[must_use]
     pub const fn rook_squares(color: Color, kingside: bool) -> (Square, Square) {
         match (color, kingside) {
@@ -127,9 +125,8 @@ mod tests {
     }
 
     // `rook_squares` is checked against all four `(Color, kingside)` combinations
-    // explicitly, not just White's: a {Color}x{kingside,queenside} mapping that
-    // only gets checked on one color/side passes just as easily scrambled as
-    // correct.
+    // explicitly, not just White's: a mapping only checked on one color/side
+    // passes just as easily scrambled as correct.
     #[test]
     fn rook_squares_covers_all_four_corners() {
         assert_eq!(

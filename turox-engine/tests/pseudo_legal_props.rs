@@ -10,8 +10,8 @@
 //!
 //! `castling_moves` has no proptest here: legality hinges on
 //! `move_gen::attacks` (already independently tested), so what's worth
-//! pinning down is the specific {Color}x{kingside,queenside} mapping, which
-//! is a concrete-test job. All concrete tests (double-push blocking, en
+//! pinning down is the specific per-corner rook mapping, which is a
+//! concrete-test job. All concrete tests (double-push blocking, en
 //! passant, promotion, castling, the full aggregate) live in
 //! `tests/pseudo_legal.rs`; this file is proptest only.
 
