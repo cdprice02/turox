@@ -5,6 +5,14 @@
 //! implementation built directly from `Square::offset` stepped one square at a
 //! time, not from `Bitboard::occluded_fill` or whatever magic-hashing technique
 //! the real implementation ends up using.
+//!
+//! Every property here pairs a `Square` with an arbitrary `occupied: Bitboard`
+//! (2^64 values), a genuinely unbounded domain, which is what `proptest`'s
+//! random sampling is for. The `Square`-only checks (fixed `Bitboard::ALL`)
+//! live as plain exhaustive `#[test]`s in `move_gen/magic/mod.rs`'s own test
+//! module instead: no unbounded domain there for `proptest` to be worth its
+//! overhead over a loop, and it's a unit-level check of that module's own
+//! functions, not a cross-module integration property.
 
 mod common;
 
@@ -55,11 +63,6 @@ proptest! {
         prop_assert!(!rook_attacks(sq, occupied).contains(sq));
     }
 
-    #[test]
-    fn rook_attacks_on_fully_occupied_board_has_at_most_four_squares(sq in any_square()) {
-        prop_assert!(rook_attacks(sq, Bitboard::ALL).count() <= 4);
-    }
-
     // ---- Bishop ----
 
     #[test]
@@ -70,11 +73,6 @@ proptest! {
     #[test]
     fn bishop_attacks_never_contains_its_own_square(sq in any_square(), occupied in any_bitboard()) {
         prop_assert!(!bishop_attacks(sq, occupied).contains(sq));
-    }
-
-    #[test]
-    fn bishop_attacks_on_fully_occupied_board_has_at_most_four_squares(sq in any_square()) {
-        prop_assert!(bishop_attacks(sq, Bitboard::ALL).count() <= 4);
     }
 
     // ---- Queen ----

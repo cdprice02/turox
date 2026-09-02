@@ -12,8 +12,9 @@
 //! transcribing a table that size invites a copy-paste error that would fail
 //! this test for a reason that has nothing to do with `eval_white_pov`'s own
 //! correctness. Independence for PST is enforced instead by the orientation
-//! anchors below, which pin specific squares to specific values without
-//! depending on the shape of the whole table.
+//! anchors in `tests/eval.rs`, which pin specific squares to specific values
+//! without depending on the shape of the whole table; that file also has the
+//! rest of this module's concrete scenario tests. This one is proptest only.
 
 mod common;
 
@@ -35,7 +36,7 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let mut score: Score = 0;
     for sq in Square::ALL {
         if let Some(cp) = board.piece_at(sq) {
-            let material = NAIVE_PIECE_VALUES[cp.piece() as usize];
+            let material = NAIVE_PIECE_VALUES[cp.piece().index()];
             let positional = pst_value(cp.color(), cp.piece(), sq);
             score += match cp.color() {
                 Color::White => material + positional,
@@ -110,69 +111,4 @@ proptest! {
         reduced.remove(sq);
         prop_assert!(eval_white_pov(&reduced) > eval_white_pov(&board));
     }
-}
-
-// ---- Concrete scenarios ----
-
-// Not just an empirical check: `eval_white_pov_is_mirror_antisymmetric`
-// guarantees `eval_white_pov(b) == -eval_white_pov(mirrored(b))` for any
-// board, and the start position is its own mirror (White's setup is exactly
-// Black's, rank-flipped and color-swapped). So eval_white_pov(start) ==
-// -eval_white_pov(mirrored(start)) == -eval_white_pov(start), which forces
-// eval_white_pov(start) == 0 regardless of what's in PST: true for any
-// self-mirror-symmetric position, not a coincidence about these particular
-// table values.
-#[test]
-fn start_position_is_exactly_zero() {
-    let board = Board::start_pos();
-    assert_eq!(eval_white_pov(&board), 0);
-    assert_eq!(evaluate(&board), 0);
-}
-
-// Stays exact rather than approximate with PST folded in: a1 (rook), e1
-// (king), and e8 (king, read via flip_rank as e1) all carry a PST value of
-// 0 in the tables above, so this position's PST term is 0 - 0 = 0 and the
-// score is still pure material.
-#[test]
-fn white_up_a_rook_scores_exactly_rook_value() {
-    let board = Board::try_from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&board), 500);
-
-    let swapped = mirrored(&board);
-    assert_eq!(eval_white_pov(&swapped), -500);
-}
-
-// Material is unchanged (one White pawn, relocated); the score changes by
-// exactly the pawn's own PST delta, d2 (-20) to d4 (+20) = 40, isolating
-// the positional term from the material term the way #21's now-deleted
-// permutation-invariance test used to when there was no positional term to
-// isolate it from.
-#[test]
-fn a_central_pawn_push_changes_pst_but_not_material() {
-    let before = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&before), 80); // 100 material + (0 + -20) PST
-
-    let after = Board::try_from_fen("4k3/8/8/8/3P4/8/8/4K3 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&after), 120); // 100 material + (0 + 20) PST
-}
-
-// ---- PST orientation anchors ----
-//
-// The one thing the symmetric-position tests above can't catch on their
-// own: a swapped-but-still-internally-consistent table (or a reindexing
-// that reverses the wrong axis) can still pass every property above while
-// producing an engine that develops backwards. -20 appears exactly once in
-// the pawn table (d2/e2, the "stop blocking your own center pawns" penalty)
-// so it's an unambiguous anchor: getting the visual-to-LERF reindex or the
-// Black flip_rank backwards lands on a distinctly different number, not a
-// coincidentally-equal one.
-
-#[test]
-fn white_pawn_second_rank_penalty_lands_on_the_documented_square() {
-    assert_eq!(pst_value(Color::White, Piece::Pawn, Square::D2), -20);
-}
-
-#[test]
-fn black_pawn_reads_the_same_penalty_on_its_own_mirrored_square() {
-    assert_eq!(pst_value(Color::Black, Piece::Pawn, Square::D7), -20);
 }

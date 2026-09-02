@@ -18,13 +18,14 @@
 
 use proptest::prelude::*;
 use turox_engine::board::Board;
-use turox_engine::{Bitboard, CastlingRights, Color, ColoredPiece, Piece, Rank, Square};
+use turox_engine::move_gen::legal::legal_moves;
+use turox_engine::{Bitboard, CastlingRights, Color, ColoredPiece, Move, Piece, Rank, Square};
 
 /// Shared with every other test file that needs an arbitrary square/bitboard
 /// (`square_props.rs`, `bitboard_props.rs`, `magic_props.rs`, `tables_props.rs`,
 /// `attacks_props.rs`, ...), so the strategy itself isn't duplicated five times.
 pub fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"))
+    (0u8..64).prop_map(|i| Square::from_u8(i).expect("i in 0..64"))
 }
 
 /// See `any_square`'s doc.
@@ -32,14 +33,17 @@ pub fn any_bitboard() -> impl Strategy<Value = Bitboard> {
     any::<u64>().prop_map(Bitboard::from_bits)
 }
 
-fn any_color() -> impl Strategy<Value = Color> {
+pub fn any_color() -> impl Strategy<Value = Color> {
     prop_oneof![Just(Color::White), Just(Color::Black)]
 }
 
 // Pawns never legally sit on rank 1 or 8 (they'd have already promoted / never
 // have been able to reach it as a start square), so they're excluded here and
-// kept off both when placing extra pieces below.
-fn any_piece() -> impl Strategy<Value = Piece> {
+// kept off both when placing extra pieces below. No `King` either: `any_board`
+// places both kings itself, deliberately (exactly one per side, on distinct
+// squares), so a second source of kings here would fight that invariant
+// instead of complementing it.
+pub fn any_piece() -> impl Strategy<Value = Piece> {
     prop_oneof![
         3 => prop_oneof![
             Just(Piece::Knight),
@@ -51,8 +55,24 @@ fn any_piece() -> impl Strategy<Value = Piece> {
     ]
 }
 
+/// Every `Piece` variant, `King` included, uniformly. For strategies that
+/// don't separately guarantee king placement the way `any_board` does
+/// (`attacks_props.rs`'s king-adjacent checks, `fen_props.rs`'s round-trip
+/// coverage of boards with zero or doubled kings), so `Piece::ALL` isn't
+/// silently narrowed to `any_piece`'s pawn-heavy, king-free distribution.
+pub fn any_piece_with_king() -> impl Strategy<Value = Piece> {
+    prop_oneof![
+        Just(Piece::Pawn),
+        Just(Piece::Knight),
+        Just(Piece::Bishop),
+        Just(Piece::Rook),
+        Just(Piece::Queen),
+        Just(Piece::King),
+    ]
+}
+
 fn pawn_rank() -> impl Strategy<Value = Rank> {
-    (1u8..7).prop_map(|i| Rank::from_index(i).expect("i in 1..7"))
+    (1u8..7).prop_map(|i| Rank::from_u8(i).expect("i in 1..7"))
 }
 
 /// A `Board` strategy for move-generation tests: always exactly one king per
@@ -77,7 +97,7 @@ pub fn any_board() -> impl Strategy<Value = Board> {
                 // to a different square deterministically rather than
                 // discarding the case (proptest's `prop_filter` would work
                 // too, but this keeps every draw a valid test case).
-                let black_king = Square::from_index((black_king.index() + 1) % 64).expect("mod 64");
+                let black_king = Square::from_u8((black_king.to_u8() + 1) % 64).expect("mod 64");
                 board.place(white_king, ColoredPiece::WhiteKing);
                 board.place(black_king, ColoredPiece::BlackKing);
             } else {
@@ -120,6 +140,28 @@ pub fn any_board() -> impl Strategy<Value = Board> {
 
             Board::from_parts(board, side_to_move, rights, None, 0, 1)
         })
+}
+
+/// `any_board()`, filtered to positions that actually have a legal move.
+/// Shared by every test file that needs to drive a real move from a random
+/// position (`move_uci_props.rs`, `search_props.rs`, `uci_command_props.rs`,
+/// ...) rather than risk generating a checkmate/stalemate with nothing to
+/// play.
+pub fn any_board_with_legal_move() -> impl Strategy<Value = Board> {
+    any_board().prop_filter("must have at least one legal move", |board| {
+        !legal_moves(board).is_empty()
+    })
+}
+
+/// `any_board_with_legal_move`, paired with one specific legal move from that
+/// position (uniformly chosen, not always the first): for tests that need to
+/// actually play the move, not just confirm one exists
+/// (`legal_props.rs`, `zobrist_props.rs`).
+pub fn any_board_and_legal_move() -> impl Strategy<Value = (Board, Move)> {
+    any_board_with_legal_move().prop_flat_map(|board| {
+        let moves: Vec<Move> = legal_moves(&board).iter().copied().collect();
+        (Just(board), prop::sample::select(moves))
+    })
 }
 
 /// The color-swapped mirror of `board`: every White piece becomes the same
