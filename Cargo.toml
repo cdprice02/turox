@@ -33,13 +33,6 @@ missing_assert_message = "deny"
 wildcard_enum_match_arm = "deny"
 allow_attributes_without_reason = "deny"
 
-# `indexing_slicing` and `arithmetic_side_effects` are deliberately not enabled:
-# this is bitboard/table-driven engine code, so indexing and arithmetic are the
-# normal way to write it, not the exception. Denying them would mean an
-# `#[allow]` (or an unwanted checked/wrapping rewrite) on most lines that touch
-# a board, not a reviewed exception on a few, which defeats the point of a
-# restriction lint.
-
 [profile.release]
 lto = "fat"
 codegen-units = 1

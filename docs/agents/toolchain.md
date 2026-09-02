@@ -40,17 +40,18 @@ why each of these exists; this file is the lookup.
   runs them for real, informationally, alongside mutants and coverage.
 - **`turox-fuzz` is outside the workspace** and needs nightly, so
   `--workspace` commands don't touch it.
-- **Clippy runs `pedantic` and `nursery`, but several individual lints are
-  deliberately commented out in the root `Cargo.toml`** (`unwrap_used`,
-  `expect_used`, `indexing_slicing`, `arithmetic_side_effects`,
-  `unreachable`). Each needs a per-call-site judgment call across hot-path
-  bitboard/search code (checked/wrapping rewrite vs. a reviewed `#[allow]`),
-  not a blanket decision, so they're deferred rather than silently dropped.
-  See the comment above them in `Cargo.toml` and the open issue tracking the
-  remainder before adding new code that would trip one of them.
-  `string_slice`/`as_conversions` (and the `cast_possible_wrap`/
-  `cast_possible_truncation`/`cast_sign_loss` allow-backs that used to cover
-  for `as_conversions` being off) are no longer on this deferred list: see
-  `#[derive(Ordinal)]` in `turox-macros` for how the ordinal enums
-  (`Color`/`Piece`/`ColoredPiece`/`File`/`Rank`/`Square`) got clean of `as`
-  without hand-writing six copies of the same accessor.
+- **Clippy runs `pedantic` and `nursery`, plus a hand-picked set of
+  restriction lints** (`unwrap_used`, `unreachable`, `wildcard_enum_match_arm`,
+  `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `dbg_macro`,
+  `missing_assert_message`, `allow_attributes_without_reason`,
+  `string_slice`/`as_conversions`, and more; see `[workspace.lints.clippy]`
+  in the root `Cargo.toml` for the live list). `indexing_slicing` and
+  `arithmetic_side_effects` are the two intentional exceptions, not deferred
+  ones: this is bitboard/table-driven engine code, so indexing and
+  arithmetic are the normal way to write it, not the exception a
+  restriction lint is meant to catch. Every `#[allow(...)]` in the codebase
+  carries a `reason = "..."` explaining the specific call site; that's what
+  to read (or add to) rather than reaching for a blanket lint change.
+  `#[derive(Ordinal)]` in `turox-macros` is how the ordinal enums
+  (`Color`/`Piece`/`ColoredPiece`/`File`/`Rank`/`Square`) stayed clean of
+  `as` without hand-writing six copies of the same accessor.
