@@ -255,10 +255,12 @@ impl Search {
     /// `on_iteration_complete` only fires for iterations that actually ran
     /// to completion. If depth 1 itself aborts, `result` falls back to
     /// whatever best move `search_root` had already resolved before the
-    /// abort (see [`RootOutcome::Aborted`]) instead of the zeroed-out
-    /// initial value, since a position with legal moves must never report
-    /// `best_move: None`; that fallback is reported at `depth: 0`, since
-    /// depth 1 didn't actually finish, and does not reach the callback.
+    /// abort (see `RootOutcome::Aborted`, a private implementation detail
+    /// of `search_root` rather than a linkable public item) instead of the
+    /// zeroed-out initial value, since a position with legal moves must
+    /// never report `best_move: None`; that fallback is reported at
+    /// `depth: 0`, since depth 1 didn't actually finish, and does not
+    /// reach the callback.
     pub fn search_with_info<F: FnMut(&SearchResult)>(
         &mut self,
         board: &Board,
