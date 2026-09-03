@@ -9,10 +9,19 @@ use crate::types::{CastlingRights, Color, ColoredPiece, File, Rank, Square};
 impl Board {
     /// Parses a full FEN string into a `Board`.
     ///
-    /// Only the piece placement field is required; a missing side-to-move,
-    /// castling, en passant, halfmove clock, or fullmove number field falls back to
-    /// its usual default (`w`, `-`, `-`, `0`, `1` respectively) rather than erroring,
-    /// so a bare placement string is still accepted.
+    /// Only the piece placement field is required; a missing side-to-move, castling, en
+    /// passant, halfmove clock, or fullmove number field falls back to its usual default
+    /// (`w`, `-`, `-`, `0`, `1` respectively) rather than erroring, so a bare placement
+    /// string is still accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the specific [`InvalidFenError`] variant for what's wrong: `MissingField`
+    /// if placement itself is absent, one of the placement-shape variants (unexpected
+    /// character, a rank with the wrong file count, or the wrong number of ranks) if it's
+    /// malformed, or `InvalidField` if a later field is present but doesn't parse. Only
+    /// an *absent* later field falls back to its default rather than erroring, per above;
+    /// a present but malformed one still errors.
     pub fn try_from_fen(fen: &str) -> Result<Self, InvalidFenError> {
         let mut fields = fen.split_whitespace();
 
@@ -58,7 +67,7 @@ impl Board {
             })?,
         };
 
-        Ok(Board::from_parts(
+        Ok(Self::from_parts(
             board,
             side_to_move,
             castling,
@@ -69,8 +78,8 @@ impl Board {
     }
 
     /// Parses just the piece-placement field (the part before the first space).
-    fn parse_placement(placement: &str) -> Result<Board, InvalidFenError> {
-        let mut board = Board::default();
+    fn parse_placement(placement: &str) -> Result<Self, InvalidFenError> {
+        let mut board = Self::default();
         let rows: Vec<&str> = placement.split('/').collect();
         if rows.len() != 8 {
             return Err(InvalidFenError::WrongRankCount {
@@ -79,40 +88,36 @@ impl Board {
             });
         }
 
-        for (i, row) in rows.iter().enumerate() {
-            // Rows read top (rank 8) to bottom (rank 1), per FEN.
-            let rank_number = 8 - i;
-            let rank = Rank::from_index((rank_number - 1) as u8).expect("rank_number in 1..=8");
+        for (rank, row) in Rank::ALL.into_iter().rev().zip(rows) {
             let mut file = 0usize;
 
             for c in row.chars() {
-                match c {
-                    '1'..='8' => {
-                        let n = c.to_digit(10).expect("matched '1'..='8'") as usize;
-                        if file + n > 8 {
-                            return Err(InvalidFenError::TooManyFilesInRank {
-                                expected: 8,
-                                found: file + n,
-                                rank: rank_number,
-                            });
-                        }
-                        file += n;
+                if let '1'..='8' = c {
+                    let n = u8::try_from(c.to_digit(10).expect("matched '1'..='8'"))
+                        .expect("single digit");
+                    let new_file = file + usize::from(n);
+                    if new_file > 8 {
+                        return Err(InvalidFenError::TooManyFilesInRank {
+                            expected: 8,
+                            found: new_file,
+                            rank: usize::from(rank.to_u8() + 1),
+                        });
                     }
-                    _ => {
-                        if file >= 8 {
-                            return Err(InvalidFenError::TooManyFilesInRank {
-                                expected: 8,
-                                found: file + 1,
-                                rank: rank_number,
-                            });
-                        }
-                        let cp = ColoredPiece::try_from_fen(c)
-                            .ok_or(InvalidFenError::UnexpectedCharacter(c))?;
-                        let file_enum =
-                            File::from_index(file as u8).expect("file < 8 checked above");
-                        board.place(Square::new(file_enum, rank), cp);
-                        file += 1;
+                    file = new_file;
+                } else {
+                    if file >= 8 {
+                        return Err(InvalidFenError::TooManyFilesInRank {
+                            expected: 8,
+                            found: file + 1,
+                            rank: usize::from(rank.to_u8() + 1),
+                        });
                     }
+                    let cp = ColoredPiece::try_from_fen(c)
+                        .ok_or(InvalidFenError::UnexpectedCharacter(c))?;
+                    let file_number = u8::try_from(file).expect("file < 8 checked above");
+                    let file_enum = File::from_u8(file_number).expect("file < 8 checked above");
+                    board.place(Square::new(file_enum, rank), cp);
+                    file += 1;
                 }
             }
 
@@ -120,7 +125,7 @@ impl Board {
                 return Err(InvalidFenError::NotEnoughFilesInRank {
                     expected: 8,
                     found: file,
-                    rank: rank_number,
+                    rank: usize::from(rank.to_u8() + 1),
                 });
             }
         }
@@ -157,20 +162,19 @@ impl Board {
 
     /// Formats this position as a full 6-field FEN string.
     ///
-    /// Only reads the mailbox (`piece_at`), not the bitboards: the mailbox
-    /// alone is already a complete, O(1)-per-square picture of what's on the
-    /// board, so there's nothing the bitboards would add here.
+    /// Only reads the mailbox (`piece_at`), not the bitboards: the mailbox alone is
+    /// already a complete, O(1)-per-square picture of what's on the board, so there's
+    /// nothing the bitboards would add here.
+    #[must_use]
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
 
-        for rank_idx in (0..8).rev() {
-            if rank_idx != 7 {
+        for rank in Rank::ALL.into_iter().rev() {
+            if rank != Rank::R8 {
                 fen.push('/');
             }
-            let rank = Rank::from_index(rank_idx).expect("rank_idx in 0..8");
             let mut empty_run = 0u32;
-            for file_idx in 0..8 {
-                let file = File::from_index(file_idx).expect("file_idx in 0..8");
+            for file in File::ALL {
                 let sq = Square::new(file, rank);
                 match self.piece_at(sq) {
                     Some(cp) => {

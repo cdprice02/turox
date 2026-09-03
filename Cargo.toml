@@ -1,16 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["turox-cli", "turox-engine"]
+members = ["turox-cli", "turox-engine", "turox-macros"]
 
 [workspace.dependencies]
-anyhow = "1.0"
-clap = { version = "4.5.37", features = ["derive"] }
 proptest = "1.5"
 criterion = "0.8"
-
-# turox-engine takes zero runtime dependencies (see turox-engine/Cargo.toml). Keep
-# anyhow scoped to turox-cli: a library returning anyhow::Error denies callers the
-# ability to match on failure, so it belongs at the binary boundary, not in the engine.
 
 [workspace.lints.rust]
 missing_docs = "deny"
@@ -18,6 +12,26 @@ missing_docs = "deny"
 # creeps in during a perf pass; this makes that a deliberate, reviewed
 # exception (via #[allow(unsafe_code)]) rather than a quiet one.
 unsafe_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+string_slice = "deny"
+as_conversions = "deny"
+unreachable = "deny"
+unwrap_used = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+dbg_macro = "deny"
+missing_assert_message = "deny"
+wildcard_enum_match_arm = "deny"
+allow_attributes_without_reason = "deny"
 
 [profile.release]
 lto = "fat"

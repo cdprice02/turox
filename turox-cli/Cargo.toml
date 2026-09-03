@@ -9,6 +9,11 @@ rust-version = "1.87"
 workspace = true
 
 [dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true }
+# Not `workspace.dependencies`: turox-engine takes zero runtime dependencies
+# (see its Cargo.toml), so these are turox-cli's alone, not shared with
+# anything else in the workspace. A library returning `anyhow::Error` also
+# denies callers the ability to match on failure, so `anyhow` belongs at this
+# binary boundary specifically, not any lower in the dependency graph.
+anyhow = "1.0"
+clap = { version = "4.5.37", features = ["derive"] }
 turox-engine = { path = "../turox-engine" }

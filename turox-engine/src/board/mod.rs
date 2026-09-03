@@ -96,11 +96,12 @@ impl Board {
     /// The standard chess starting position, computed once at compile time
     /// (see `Self::START_POS`) rather than by 32 `place` calls run fresh on
     /// every call.
+    #[must_use]
     pub const fn start_pos() -> Self {
         Self::START_POS
     }
 
-    const START_POS: Board = Self::build_start_pos();
+    const START_POS: Self = Self::build_start_pos();
 
     /// The actual placement loop backing `Self::START_POS`. A `while` loop
     /// over an index rather than `File::ALL.iter().zip(..)`: `for`/`.zip()`
@@ -161,9 +162,9 @@ impl Board {
     /// mailbox/bitboard consistency invariant (checked by the `board_consistency`
     /// property test) can't be broken by construction.
     pub const fn place(&mut self, sq: Square, cp: ColoredPiece) {
-        self.mailbox[sq.index() as usize] = Some(cp);
-        self.by_color[cp.color() as usize] = self.by_color[cp.color() as usize].or(sq.bitboard());
-        self.by_piece[cp.piece() as usize] = self.by_piece[cp.piece() as usize].or(sq.bitboard());
+        self.mailbox[sq.index()] = Some(cp);
+        self.by_color[cp.color().index()] = self.by_color[cp.color().index()].or(sq.bitboard());
+        self.by_piece[cp.piece().index()] = self.by_piece[cp.piece().index()].or(sq.bitboard());
         self.hash ^= zobrist::piece_square_hash(cp, sq);
     }
 
@@ -173,14 +174,15 @@ impl Board {
     /// `try_from_fen` builds its result this way, and so can anything else that
     /// wants a specific side-to-move/castling/en-passant/clock combination
     /// without hand-assembling a FEN string first (test helpers, in particular).
+    #[must_use]
     pub const fn from_parts(
-        placement: Board,
+        placement: Self,
         side_to_move: Color,
         castling: CastlingRights,
         en_passant: Option<Square>,
         halfmove_clock: u8,
         fullmove_number: u16,
-    ) -> Board {
+    ) -> Self {
         // `placement.hash` only ever carries the piece-square contribution
         // (that's all `place`/`remove` touch), regardless of whatever
         // side_to_move/castling/en_passant `placement` itself happened to
@@ -193,7 +195,7 @@ impl Board {
             ^ zobrist::side_to_move_hash(side_to_move)
             ^ zobrist::castling_hash(castling)
             ^ zobrist::en_passant_hash(en_passant);
-        Board {
+        Self {
             side_to_move,
             castling,
             en_passant,
@@ -206,33 +208,37 @@ impl Board {
 
     /// Removes and returns whatever was on `sq`, or `None` if it was already empty.
     pub fn remove(&mut self, sq: Square) -> Option<ColoredPiece> {
-        let cp = self.mailbox[sq.index() as usize].take()?;
-        self.by_color[cp.color() as usize] =
-            self.by_color[cp.color() as usize].and_not(sq.bitboard());
-        self.by_piece[cp.piece() as usize] =
-            self.by_piece[cp.piece() as usize].and_not(sq.bitboard());
+        let cp = self.mailbox[sq.index()].take()?;
+        self.by_color[cp.color().index()] =
+            self.by_color[cp.color().index()].and_not(sq.bitboard());
+        self.by_piece[cp.piece().index()] =
+            self.by_piece[cp.piece().index()].and_not(sq.bitboard());
         self.hash ^= zobrist::piece_square_hash(cp, sq);
         Some(cp)
     }
 
     /// O(1) lookup of whatever is on `sq`, via the mailbox.
+    #[must_use]
     pub const fn piece_at(&self, sq: Square) -> Option<ColoredPiece> {
-        self.mailbox[sq.index() as usize]
+        self.mailbox[sq.index()]
     }
 
     /// All pieces of a given color and kind.
+    #[must_use]
     pub const fn pieces(&self, color: Color, piece: Piece) -> Bitboard {
         // Indexes `by_piece`/`by_color` directly rather than through `self[piece]`/
         // `self[color]`: the `Index` trait's `index` method isn't `const`.
-        self.by_piece[piece as usize].and(self.by_color[color as usize])
+        self.by_piece[piece.index()].and(self.by_color[color.index()])
     }
 
     /// Every occupied square, regardless of color or piece kind.
+    #[must_use]
     pub const fn occupied(&self) -> Bitboard {
-        self.by_color[Color::White as usize].or(self.by_color[Color::Black as usize])
+        self.by_color[Color::White.index()].or(self.by_color[Color::Black.index()])
     }
 
     /// Every unoccupied square.
+    #[must_use]
     pub const fn empty(&self) -> Bitboard {
         // `self.occupied().not()`, not `!self.occupied()`: the `Not` trait's
         // `not` method isn't `const`, only `Bitboard`'s own inherent `not` is.
@@ -240,26 +246,31 @@ impl Board {
     }
 
     /// Which color is to move.
+    #[must_use]
     pub const fn side_to_move(&self) -> Color {
         self.side_to_move
     }
 
     /// The castling rights still available to either side.
+    #[must_use]
     pub const fn castling_rights(&self) -> CastlingRights {
         self.castling
     }
 
     /// The square a pawn could capture en passant onto, if any.
+    #[must_use]
     pub const fn en_passant(&self) -> Option<Square> {
         self.en_passant
     }
 
     /// Plies since the last pawn move or capture (the fifty-move-rule counter).
+    #[must_use]
     pub const fn halfmove_clock(&self) -> u8 {
         self.halfmove_clock
     }
 
     /// The full-move number, incrementing after each Black move.
+    #[must_use]
     pub const fn fullmove_number(&self) -> u16 {
         self.fullmove_number
     }
@@ -267,6 +278,7 @@ impl Board {
     /// This position's Zobrist hash. Read this, not `zobrist::compute_hash`
     /// (that exists purely as this field's incremental-maintenance test
     /// oracle, checked against it in `tests/zobrist_props.rs`).
+    #[must_use]
     pub const fn hash(&self) -> u64 {
         self.hash
     }
@@ -275,14 +287,14 @@ impl Board {
 impl Index<Color> for Board {
     type Output = Bitboard;
     fn index(&self, color: Color) -> &Bitboard {
-        &self.by_color[color as usize]
+        &self.by_color[color.index()]
     }
 }
 
 impl Index<Piece> for Board {
     type Output = Bitboard;
     fn index(&self, piece: Piece) -> &Bitboard {
-        &self.by_piece[piece as usize]
+        &self.by_piece[piece.index()]
     }
 }
 
@@ -355,13 +367,13 @@ mod tests {
         let mut counts = [0u32; 12];
         for sq in Square::ALL {
             if let Some(cp) = board.piece_at(sq) {
-                counts[cp as usize] += 1;
+                counts[cp.index()] += 1;
             }
         }
-        assert_eq!(counts[ColoredPiece::WhitePawn as usize], 8);
-        assert_eq!(counts[ColoredPiece::BlackPawn as usize], 8);
-        assert_eq!(counts[ColoredPiece::WhiteKing as usize], 1);
-        assert_eq!(counts[ColoredPiece::BlackKing as usize], 1);
+        assert_eq!(counts[ColoredPiece::WhitePawn.index()], 8);
+        assert_eq!(counts[ColoredPiece::BlackPawn.index()], 8);
+        assert_eq!(counts[ColoredPiece::WhiteKing.index()], 1);
+        assert_eq!(counts[ColoredPiece::BlackKing.index()], 1);
     }
 
     #[test]

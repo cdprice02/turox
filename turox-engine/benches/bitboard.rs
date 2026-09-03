@@ -11,7 +11,7 @@
 // Not part of the crate's public API, so `missing_docs` doesn't apply here:
 // criterion's own `criterion_group!`/`criterion_main!` macros generate an
 // undocumented `fn main`.
-#![allow(missing_docs)]
+#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -26,7 +26,7 @@ const SAMPLE_COUNT: usize = 1024;
 struct XorShift64(u64);
 
 impl XorShift64 {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -48,7 +48,9 @@ fn sample_bitboards() -> Vec<Bitboard> {
 fn bench_transform(c: &mut Criterion, name: &str, f: impl Fn(Bitboard) -> Bitboard) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
+    ));
     group.bench_function(name, |b| {
         b.iter(|| {
             for &bb in &samples {
@@ -72,7 +74,9 @@ fn flips_and_rotations(c: &mut Criterion) {
 fn scanning(c: &mut Criterion) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
+    ));
 
     group.bench_function("count", |b| {
         b.iter(|| {
@@ -99,7 +103,9 @@ fn scanning(c: &mut Criterion) {
 fn shifts(c: &mut Criterion) {
     let samples = sample_bitboards();
     let mut group = c.benchmark_group("bitboard");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
+    ));
 
     for dir in Direction::ALL {
         group.bench_function(format!("shift_{dir:?}"), |b| {

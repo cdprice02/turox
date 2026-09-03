@@ -1,15 +1,18 @@
-//! Draw detection: the fifty-move rule and threefold repetition, both
-//! checked before search recurses into a position, so a search line that
-//! finds a draw stops there instead of searching arbitrarily deep into an
-//! already-decided position.
+//! Draw detection: the fifty-move rule and threefold repetition.
+//!
+//! Both checked before search recurses into a position, so a search line that finds a
+//! draw stops there instead of searching arbitrarily deep into an already-decided
+//! position.
 
 use crate::board::Board;
 
-/// Whether the fifty-move rule already applies to `board`: fifty full moves
-/// (100 half-moves) since the last pawn move or capture, per FIDE Article
-/// 9.3, without either side having to actually claim it. Reads
-/// `Board::halfmove_clock()` directly; no separate state to track.
-pub fn is_fifty_move_draw(board: &Board) -> bool {
+/// Whether the fifty-move rule already applies to `board`: fifty full moves (100
+/// half-moves) since the last pawn move or capture, per FIDE Article 9.3, without either
+/// side having to actually claim it.
+///
+/// Reads `Board::halfmove_clock()` directly; no separate state to track.
+#[must_use]
+pub const fn is_fifty_move_draw(board: &Board) -> bool {
     board.halfmove_clock() >= 100
 }
 
@@ -28,6 +31,7 @@ pub fn is_fifty_move_draw(board: &Board) -> bool {
 /// Called at every search node, so this stops scanning as soon as a second
 /// match is found (`filter(...).nth(1)`) rather than walking the whole
 /// slice the way `filter(...).count() >= 2` would.
+#[must_use]
 pub fn is_threefold_repetition(history: &[u64], current_hash: u64) -> bool {
     history
         .iter()
@@ -36,10 +40,12 @@ pub fn is_threefold_repetition(history: &[u64], current_hash: u64) -> bool {
         .is_some()
 }
 
-/// Either draw condition at once: the single check a search node makes
-/// before recursing further. `current_hash` is `board.hash()`; taken
-/// separately rather than recomputed here since a caller tracking `history`
-/// already has it on hand.
+/// Either draw condition at once: the single check a search node makes before recursing
+/// further.
+///
+/// `current_hash` is `board.hash()`; taken separately rather than recomputed here since a
+/// caller tracking `history` already has it on hand.
+#[must_use]
 pub fn is_draw(board: &Board, history: &[u64], current_hash: u64) -> bool {
     is_fifty_move_draw(board) || is_threefold_repetition(history, current_hash)
 }

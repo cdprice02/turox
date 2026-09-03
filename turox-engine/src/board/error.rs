@@ -53,10 +53,10 @@ pub enum InvalidFenError {
 impl fmt::Display for InvalidFenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            InvalidFenError::UnexpectedCharacter(c) => {
+            Self::UnexpectedCharacter(c) => {
                 write!(f, "unexpected character: {c:?}")
             }
-            InvalidFenError::NotEnoughFilesInRank {
+            Self::NotEnoughFilesInRank {
                 expected,
                 found,
                 rank,
@@ -64,7 +64,7 @@ impl fmt::Display for InvalidFenError {
                 f,
                 "not enough files in rank {rank}: expected {expected}, found {found}"
             ),
-            InvalidFenError::TooManyFilesInRank {
+            Self::TooManyFilesInRank {
                 expected,
                 found,
                 rank,
@@ -72,16 +72,16 @@ impl fmt::Display for InvalidFenError {
                 f,
                 "too many files in rank {rank}: expected {expected}, found {found}"
             ),
-            InvalidFenError::WrongRankCount { expected, found } => {
+            Self::WrongRankCount { expected, found } => {
                 write!(
                     f,
                     "wrong number of ranks: expected {expected}, found {found}"
                 )
             }
-            InvalidFenError::MissingField { field } => {
+            Self::MissingField { field } => {
                 write!(f, "missing FEN field: {field}")
             }
-            InvalidFenError::InvalidField { field, value } => {
+            Self::InvalidField { field, value } => {
                 write!(f, "invalid value for FEN field {field}: {value:?}")
             }
         }

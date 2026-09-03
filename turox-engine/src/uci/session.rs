@@ -12,7 +12,7 @@
 //! each move in that list passed through, so there's currently no finer
 //! granularity to work with. A GUI that resends the full move list on every
 //! `position` command (the normal case) means this only sees one sample
-//! point per command rather than the true position graph — good enough to
+//! point per command rather than the true position graph: good enough to
 //! catch a repetition a GUI's own successive `position` commands span, not
 //! guaranteed to catch every repetition within a single command's move
 //! list. Fixing this properly means threading the per-move hash trail
@@ -52,18 +52,18 @@ where
     let active_stop: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
 
     let reader_stop = Arc::clone(&active_stop);
-    let reader_handle = thread::spawn(move || read_commands(reader, tx, reader_stop));
+    let reader_handle = thread::spawn(move || read_commands(reader, &tx, &reader_stop));
 
     let mut history: Vec<u64> = Vec::new();
 
     for command in rx {
         match command {
             Command::Uci => {
-                send(&mut writer, Response::IdName);
-                send(&mut writer, Response::IdAuthor);
-                send(&mut writer, Response::UciOk);
+                send(&mut writer, &Response::IdName);
+                send(&mut writer, &Response::IdAuthor);
+                send(&mut writer, &Response::UciOk);
             }
-            Command::IsReady => send(&mut writer, Response::ReadyOk),
+            Command::IsReady => send(&mut writer, &Response::ReadyOk),
             Command::NewGame => history.clear(),
             Command::Position(new_board) => {
                 history.push(board.hash());
@@ -71,7 +71,12 @@ where
             }
             Command::Go(options) => {
                 let stop = Arc::new(AtomicBool::new(false));
-                *active_stop.lock().unwrap() = Some(Arc::clone(&stop));
+                // A poisoned lock means another thread already panicked while
+                // holding it; propagating that panic here, rather than silently
+                // continuing with possibly-inconsistent shared state, is correct.
+                *active_stop
+                    .lock()
+                    .expect("active_stop mutex should not be poisoned") = Some(Arc::clone(&stop));
 
                 let (mut search, max_depth) = build_search(board, history.clone(), &options, stop);
                 // `search_with_info`, not plain `search`: streams an `info`
@@ -79,17 +84,19 @@ where
                 // long search sees progress instead of silence until
                 // `bestmove`.
                 let result = search.search_with_info(board, max_depth, |partial| {
-                    send(&mut writer, info_response(partial));
+                    send(&mut writer, &info_response(partial));
                 });
 
-                *active_stop.lock().unwrap() = None;
+                *active_stop
+                    .lock()
+                    .expect("active_stop mutex should not be poisoned") = None;
 
                 // Zero iterations completed (max_depth == 0): the callback
                 // above never fired, so send the one info line here instead.
                 if result.depth == 0 {
-                    send(&mut writer, info_response(&result));
+                    send(&mut writer, &info_response(&result));
                 }
-                send(&mut writer, Response::BestMove(result.best_move));
+                send(&mut writer, &Response::BestMove(result.best_move));
             }
             // Already handled by `read_commands` setting `active_stop`
             // directly: that's the only way to reach a search still
@@ -119,7 +126,7 @@ fn info_response(result: &SearchResult) -> Response {
     }
 }
 
-fn send(writer: &mut impl Write, response: Response) {
+fn send(writer: &mut impl Write, response: &Response) {
     // A GUI is actively waiting on most of these (`uciok`, `readyok`,
     // `bestmove`); an unflushed line sitting in a buffer never reaching it
     // would look identical to the engine having hung. Errors here mean the
@@ -136,8 +143,8 @@ fn send(writer: &mut impl Write, response: Response) {
 /// running.
 fn read_commands<R: BufRead>(
     mut reader: R,
-    tx: mpsc::Sender<Command>,
-    active_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    tx: &mpsc::Sender<Command>,
+    active_stop: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
 ) {
     let mut line = String::new();
     loop {
@@ -152,7 +159,11 @@ fn read_commands<R: BufRead>(
         };
 
         if matches!(command, Command::Stop | Command::Quit) {
-            if let Some(stop) = active_stop.lock().unwrap().as_ref() {
+            if let Some(stop) = active_stop
+                .lock()
+                .expect("active_stop mutex should not be poisoned")
+                .as_ref()
+            {
                 stop.store(true, Ordering::Relaxed);
             }
         }

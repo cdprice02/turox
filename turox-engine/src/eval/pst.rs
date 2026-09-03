@@ -1,9 +1,9 @@
 //! Piece-square tables: per-square, per-piece positional bonuses summed
 //! alongside material in `eval::eval_white_pov`.
 //!
-//! Values are Tomasz Michniewski's "Simplified Evaluation Function"
-//! (public, widely republished, e.g. on chessprogramming.org), midgame
-//! variants only. Single-phase, not tapered: one table per piece, no
+//! Values are Tomasz Michniewski's "Simplified Evaluation Function" (see
+//! the README's "References" section), midgame variants only. Single-phase,
+//! not tapered: one table per piece, no
 //! midgame/endgame interpolation. Known limitation accepted here: with a
 //! midgame king table and no phase blending, the engine will keep its king
 //! cornered in endgames where it should centralize instead. Tapered eval is
@@ -19,7 +19,7 @@ use crate::types::{Color, Piece, Square};
 /// a-file to h-file). This is the *reverse* of `Square`'s own LERF indexing,
 /// where `Square::A1.index() == 0` and `Square::A8.index() == 56`: see
 /// `pst_value`'s doc for the reindexing this implies and the gotcha it
-/// creates. Indexed by `Piece as usize`, same convention `eval::PIECE_VALUES`
+/// creates. Indexed by `Piece::index`, same convention `eval::PIECE_VALUES`
 /// uses.
 #[rustfmt::skip]
 const VISUAL_PST: [[Score; 64]; 6] = [
@@ -91,8 +91,9 @@ const VISUAL_PST: [[Score; 64]; 6] = [
     ],
 ];
 
-/// `piece`'s positional bonus for a piece of `color` sitting on `sq`, from
-/// that piece's own side's perspective (positive is good for `color`,
+/// `piece`'s positional bonus for a piece of `color` sitting on `sq`.
+///
+/// From that piece's own side's perspective (positive is good for `color`,
 /// regardless of whether `color` is actually to move): the same
 /// White-relative-but-per-side convention `eval::eval_white_pov` sums this
 /// into.
@@ -123,9 +124,9 @@ const VISUAL_PST: [[Score; 64]; 6] = [
 /// engine that plays measurably worse (develops backwards, centralizes the
 /// wrong king) while looking entirely reasonable on a read-through.
 /// `tests/eval_props.rs`'s orientation-anchor tests exist specifically to
-/// catch this, the same `{Color}x{direction}` shape that's bitten this
-/// crate before.
-pub fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
+/// catch this.
+#[must_use]
+pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
     let sq = match color {
         // The composed reindex-then-Black-flip cancels to nothing for
         // Black (see this function's own doc); White is left holding the
@@ -133,5 +134,5 @@ pub fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
         Color::White => sq.flip_rank(),
         Color::Black => sq,
     };
-    VISUAL_PST[piece as usize][sq.index() as usize]
+    VISUAL_PST[piece.index()][sq.index()]
 }

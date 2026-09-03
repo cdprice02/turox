@@ -16,7 +16,7 @@
 // Not part of the crate's public API, so `missing_docs` doesn't apply here:
 // criterion's own `criterion_group!`/`criterion_main!` macros generate an
 // undocumented `fn main`.
-#![allow(missing_docs)]
+#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -32,7 +32,7 @@ const SAMPLE_COUNT: usize = 1024;
 struct XorShift64(u64);
 
 impl XorShift64 {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -50,7 +50,7 @@ fn sample_inputs() -> Vec<(Square, Bitboard)> {
     let mut rng = XorShift64(0x9E37_79B9_7F4A_7C15); // arbitrary nonzero seed
     (0..SAMPLE_COUNT)
         .map(|i| {
-            let sq = Square::from_index((i % 64) as u8).expect("i % 64 is in 0..64");
+            let sq = Square::ALL[i % 64];
             let occupied = Bitboard::from_bits(rng.next());
             (sq, occupied)
         })
@@ -60,7 +60,9 @@ fn sample_inputs() -> Vec<(Square, Bitboard)> {
 fn bench_slider(c: &mut Criterion, name: &str, f: impl Fn(Square, Bitboard) -> Bitboard) {
     let samples = sample_inputs();
     let mut group = c.benchmark_group("magic");
-    group.throughput(Throughput::Elements(samples.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(samples.len()).unwrap_or(u64::MAX),
+    ));
     group.bench_function(name, |b| {
         b.iter(|| {
             for &(sq, occupied) in &samples {

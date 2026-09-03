@@ -28,6 +28,7 @@ impl CastlingRights {
     pub const ALL: Self = Self(0b1111);
 
     /// `color`'s kingside right, in isolation.
+    #[must_use]
     pub const fn kingside(color: Color) -> Self {
         match color {
             Color::White => Self::WHITE_KINGSIDE,
@@ -36,6 +37,7 @@ impl CastlingRights {
     }
 
     /// `color`'s queenside right, in isolation.
+    #[must_use]
     pub const fn queenside(color: Color) -> Self {
         match color {
             Color::White => Self::WHITE_QUEENSIDE,
@@ -44,21 +46,25 @@ impl CastlingRights {
     }
 
     /// Whether every right set in `other` is also set in `self`.
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 
     /// `self` with every right in `other` also set.
+    #[must_use]
     pub const fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
     /// `self` with every right in `other` cleared.
+    #[must_use]
     pub const fn without(self, other: Self) -> Self {
         Self(self.0 & !other.0)
     }
 
     /// Clear both castling rights for a color, e.g. after its king moves.
+    #[must_use]
     pub const fn without_color(self, color: Color) -> Self {
         match color {
             Color::White => self.without(Self::WHITE_KINGSIDE.with(Self::WHITE_QUEENSIDE)),
@@ -67,6 +73,7 @@ impl CastlingRights {
     }
 
     /// Whether no rights remain.
+    #[must_use]
     pub const fn is_none(self) -> bool {
         self.0 == 0
     }
@@ -74,9 +81,8 @@ impl CastlingRights {
     /// The castling rook's home square and where it lands, for `color`'s
     /// kingside (`kingside`) or queenside corner. The single place these four
     /// squares are spelled out: `Board::make_move` looks them up here rather
-    /// than hardcoding its own copy of the same `{Color}x{kingside,queenside}`
-    /// table, the shape that's produced scrambled bugs elsewhere in this
-    /// crate before.
+    /// than hardcoding its own copy of the same table.
+    #[must_use]
     pub const fn rook_squares(color: Color, kingside: bool) -> (Square, Square) {
         match (color, kingside) {
             (Color::White, true) => (Square::H1, Square::F1),
@@ -119,9 +125,8 @@ mod tests {
     }
 
     // `rook_squares` is checked against all four `(Color, kingside)` combinations
-    // explicitly, not just White's: a {Color}x{kingside,queenside} mapping that
-    // only gets checked on one color/side passes just as easily scrambled as
-    // correct.
+    // explicitly, not just White's: a mapping only checked on one color/side
+    // passes just as easily scrambled as correct.
     #[test]
     fn rook_squares_covers_all_four_corners() {
         assert_eq!(

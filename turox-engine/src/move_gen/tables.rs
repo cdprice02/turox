@@ -22,17 +22,19 @@ use crate::types::bitboard::{Bitboard, Direction};
 use crate::types::color::Color;
 use crate::types::square::Square;
 
-/// Every square a knight standing on `sq` attacks. Not a `shift`/fill
-/// composition: knight moves are a discontinuous jump, not a smear or single
-/// step, but they have their own compound shift-with-masking formula (CPW's
-/// "Knight Pattern"), same technique family as `Bitboard::shift`'s diagonals,
-/// just wider file-edge masks since a knight can cross two files in one move.
+/// Every square a knight standing on `sq` attacks.
+///
+/// Not a `shift`/fill composition: knight moves are a discontinuous jump, not a smear or
+/// single step, but they have their own compound shift-with-masking formula, same
+/// technique family as `Bitboard::shift`'s diagonals, just wider file-edge masks since a
+/// knight can cross two files in one move.
+#[must_use]
 pub const fn knight_attacks(sq: Square) -> Bitboard {
     let x = sq.bitboard().bits();
-    let l1 = (x >> 1) & 0x7F7F7F7F7F7F7F7F;
-    let l2 = (x >> 2) & 0x3F3F3F3F3F3F3F3F;
-    let r1 = (x << 1) & 0xFEFEFEFEFEFEFEFE;
-    let r2 = (x << 2) & 0xFCFCFCFCFCFCFCFC;
+    let l1 = (x >> 1) & 0x7F7F_7F7F_7F7F_7F7F;
+    let l2 = (x >> 2) & 0x3F3F_3F3F_3F3F_3F3F;
+    let r1 = (x << 1) & 0xFEFE_FEFE_FEFE_FEFE;
+    let r2 = (x << 2) & 0xFCFC_FCFC_FCFC_FCFC;
     let h1 = l1 | r1;
     let h2 = l2 | r2;
     Bitboard::from_bits((h1 << 16) | (h1 >> 16) | (h2 << 8) | (h2 >> 8))
@@ -40,6 +42,7 @@ pub const fn knight_attacks(sq: Square) -> Bitboard {
 
 /// Every square a king standing on `sq` attacks (the 8 neighbors; unlike
 /// `Bitboard::dilate`, this does not include `sq` itself).
+#[must_use]
 pub const fn king_attacks(sq: Square) -> Bitboard {
     sq.bitboard().dilate().without(sq)
 }
@@ -61,6 +64,7 @@ const fn pawn_attacks_west(bb: Bitboard, color: Color) -> Bitboard {
 }
 
 /// Both capture squares for a pawn of `color` standing on `sq`.
+#[must_use]
 pub const fn pawn_attacks(color: Color, sq: Square) -> Bitboard {
     let bb = sq.bitboard();
     pawn_attacks_east(bb, color).or(pawn_attacks_west(bb, color))
@@ -71,12 +75,10 @@ pub const fn pawn_attacks(color: Color, sq: Square) -> Bitboard {
 /// "same file", "same diagonal" (`|Δfile| == |Δrank|`, both nonzero), or
 /// "unrelated". `None` if `a == b` (which falls through to "unrelated" rather
 /// than satisfying the diagonal check's `abs` equality by accident) or they
-/// share no such line. This sign-to-direction mapping is the same
-/// {axis}×{sign} shape that has produced scrambled bugs twice already in
-/// `Board::make_move`.
+/// share no such line.
 const fn ray_direction(a: Square, b: Square) -> Option<Direction> {
-    let df = b.file().index() as i8 - a.file().index() as i8;
-    let dr = b.rank().index() as i8 - a.rank().index() as i8;
+    let df = b.file().to_u8().cast_signed() - a.file().to_u8().cast_signed();
+    let dr = b.rank().to_u8().cast_signed() - a.rank().to_u8().cast_signed();
     if df == 0 && dr == 0 {
         None
     } else if dr == 0 {
@@ -109,10 +111,12 @@ const fn ray_direction(a: Square, b: Square) -> Option<Direction> {
 }
 
 /// Squares strictly between `a` and `b` on a shared rank, file, or diagonal.
+///
 /// `Bitboard::EMPTY` if they don't share one, including when `a == b`. Fills
 /// from `a` toward `b` via `occluded_fill`, treating every square but `b` as
 /// passable so the fill stops exactly at `b`; both endpoints get stripped
 /// afterward, since `occluded_fill` includes its seed and stopping square.
+#[must_use]
 pub const fn between(a: Square, b: Square) -> Bitboard {
     match ray_direction(a, b) {
         Some(dir) => {
@@ -123,11 +127,13 @@ pub const fn between(a: Square, b: Square) -> Bitboard {
     }
 }
 
-/// The full rank, file, or diagonal through both `a` and `b`. `Bitboard::EMPTY`
-/// under the same conditions as `between`. Fills from `a` with nothing
-/// blocking, in both the direction toward `b` and its `opposite()`, walking to
-/// the board edge both ways; no need to touch `b` directly, since it's
-/// already on the ray by construction.
+/// The full rank, file, or diagonal through both `a` and `b`.
+///
+/// `Bitboard::EMPTY` under the same conditions as `between`. Fills from `a` with nothing
+/// blocking, in both the direction toward `b` and its `opposite()`, walking to the board
+/// edge both ways; no need to touch `b` directly, since it's already on the ray by
+/// construction.
+#[must_use]
 pub const fn line(a: Square, b: Square) -> Bitboard {
     match ray_direction(a, b) {
         Some(dir) => {
@@ -264,5 +270,287 @@ mod tests {
     #[test]
     fn line_unaligned_squares_is_empty() {
         assert_eq!(line(Square::B1, Square::C3), Bitboard::EMPTY);
+    }
+
+    // ---- Exhaustive checks against an independent reference ----
+    //
+    // The concrete examples above are readable, pinned anchors; these check
+    // every function against a definition built directly from
+    // `Square::offset`/file-rank arithmetic, not from whatever `Bitboard`
+    // primitive (`dilate`, `occluded_fill`, ...) the real implementation
+    // uses, over every one of `Square`'s 64 values (or 64*64 pairs, for the
+    // two-square functions).
+    use crate::types::square::{File, Rank};
+
+    /// Reference definition of `knight_attacks`: every one of the 8 (df, dr) knight
+    /// deltas that stays on the board.
+    fn naive_knight_attacks(sq: Square) -> Bitboard {
+        const DELTAS: [(i8, i8); 8] = [
+            (1, 2),
+            (2, 1),
+            (2, -1),
+            (1, -2),
+            (-1, -2),
+            (-2, -1),
+            (-2, 1),
+            (-1, 2),
+        ];
+        let mut result = Bitboard::EMPTY;
+        for (df, dr) in DELTAS {
+            if let Some(target) = sq.offset(df, dr) {
+                result = result.with(target);
+            }
+        }
+        result
+    }
+
+    /// Reference definition of `king_attacks`: every one of the 8 unit deltas that
+    /// stays on the board. Deliberately excludes (0, 0), unlike `Bitboard::dilate`,
+    /// a king does not attack its own square.
+    fn naive_king_attacks(sq: Square) -> Bitboard {
+        let mut result = Bitboard::EMPTY;
+        for df in -1i8..=1 {
+            for dr in -1i8..=1 {
+                if df == 0 && dr == 0 {
+                    continue;
+                }
+                if let Some(target) = sq.offset(df, dr) {
+                    result = result.with(target);
+                }
+            }
+        }
+        result
+    }
+
+    /// Reference definition of `pawn_attacks`: the two diagonal-forward deltas for
+    /// `color`, dropping whichever fall off the board.
+    fn naive_pawn_attacks(color: Color, sq: Square) -> Bitboard {
+        let dr: i8 = match color {
+            Color::White => 1,
+            Color::Black => -1,
+        };
+        let mut result = Bitboard::EMPTY;
+        for df in [-1i8, 1i8] {
+            if let Some(target) = sq.offset(df, dr) {
+                result = result.with(target);
+            }
+        }
+        result
+    }
+
+    /// Reference definition of `between`: walk from `a` toward `b` one square at a
+    /// time along whichever shared rank/file/diagonal they lie on (if any),
+    /// collecting every square strictly in between. `a == b` and unaligned pairs
+    /// both fall out of the same "no such axis" check, rather than being
+    /// special-cased separately.
+    fn naive_between(a: Square, b: Square) -> Bitboard {
+        let (af, ar) = (i32::from(a.file().to_u8()), i32::from(a.rank().to_u8()));
+        let (bf, br) = (i32::from(b.file().to_u8()), i32::from(b.rank().to_u8()));
+        let (df, dr) = (bf - af, br - ar);
+        if (df == 0 && dr == 0) || (df != 0 && dr != 0 && df.abs() != dr.abs()) {
+            return Bitboard::EMPTY;
+        }
+        let (step_f, step_r) = (df.signum(), dr.signum());
+        let mut result = Bitboard::EMPTY;
+        let (mut f, mut r) = (af + step_f, ar + step_r);
+        while (f, r) != (bf, br) {
+            let sq = Square::new(
+                File::from_u8(u8::try_from(f).expect("on the shared line, so in bounds"))
+                    .expect("on the shared line, so in bounds"),
+                Rank::from_u8(u8::try_from(r).expect("on the shared line, so in bounds"))
+                    .expect("on the shared line, so in bounds"),
+            );
+            result = result.with(sq);
+            f += step_f;
+            r += step_r;
+        }
+        result
+    }
+
+    /// Reference definition of `line`: every square on the board collinear with `a`
+    /// and `b` (via the 2D cross product, which is zero exactly for points on the
+    /// line through `a` and `b`), or `Bitboard::EMPTY` if `a` and `b` don't share a
+    /// rank/file/diagonal in the first place.
+    fn naive_line(a: Square, b: Square) -> Bitboard {
+        let (af, ar) = (
+            a.file().to_u8().cast_signed(),
+            a.rank().to_u8().cast_signed(),
+        );
+        let (bf, br) = (
+            b.file().to_u8().cast_signed(),
+            b.rank().to_u8().cast_signed(),
+        );
+        let (df, dr) = (bf - af, br - ar);
+        if (df == 0 && dr == 0) || (df != 0 && dr != 0 && df.abs() != dr.abs()) {
+            return Bitboard::EMPTY;
+        }
+        let mut result = Bitboard::EMPTY;
+        for sq in Square::ALL {
+            let (sf, sr) = (
+                sq.file().to_u8().cast_signed(),
+                sq.rank().to_u8().cast_signed(),
+            );
+            let cross = (sf - af) * dr - (sr - ar) * df;
+            if cross == 0 {
+                result = result.with(sq);
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn knight_attacks_matches_naive_deltas() {
+        for sq in Square::ALL {
+            assert_eq!(knight_attacks(sq), naive_knight_attacks(sq), "sq={sq:?}");
+        }
+    }
+
+    #[test]
+    fn king_attacks_matches_naive_deltas() {
+        for sq in Square::ALL {
+            assert_eq!(king_attacks(sq), naive_king_attacks(sq), "sq={sq:?}");
+        }
+    }
+
+    #[test]
+    fn king_attacks_never_contains_its_own_square() {
+        for sq in Square::ALL {
+            assert!(!king_attacks(sq).contains(sq), "sq={sq:?}");
+        }
+    }
+
+    #[test]
+    fn king_attacks_matches_dilate_minus_self() {
+        for sq in Square::ALL {
+            assert_eq!(
+                king_attacks(sq),
+                sq.bitboard().dilate().without(sq),
+                "sq={sq:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pawn_attacks_matches_naive_deltas() {
+        for sq in Square::ALL {
+            for color in Color::ALL {
+                assert_eq!(
+                    pawn_attacks(color, sq),
+                    naive_pawn_attacks(color, sq),
+                    "sq={sq:?} color={color:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pawn_attacks_never_contains_its_own_square() {
+        for sq in Square::ALL {
+            for color in Color::ALL {
+                assert!(
+                    !pawn_attacks(color, sq).contains(sq),
+                    "sq={sq:?} color={color:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pawn_attacks_has_at_most_two_squares() {
+        for sq in Square::ALL {
+            for color in Color::ALL {
+                assert!(
+                    pawn_attacks(color, sq).count() <= 2,
+                    "sq={sq:?} color={color:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn between_matches_naive_walk() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                assert_eq!(between(a, b), naive_between(a, b), "a={a:?} b={b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn between_is_symmetric() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                assert_eq!(between(a, b), between(b, a), "a={a:?} b={b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn between_never_contains_its_endpoints() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                let bb = between(a, b);
+                assert!(!bb.contains(a), "a={a:?} b={b:?}");
+                assert!(!bb.contains(b), "a={a:?} b={b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn between_own_square_is_empty() {
+        for a in Square::ALL {
+            assert_eq!(between(a, a), Bitboard::EMPTY, "a={a:?}");
+        }
+    }
+
+    #[test]
+    fn between_is_a_subset_of_line() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                assert_eq!(
+                    between(a, b).and_not(line(a, b)),
+                    Bitboard::EMPTY,
+                    "a={a:?} b={b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn line_matches_naive_collinearity_scan() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                assert_eq!(line(a, b), naive_line(a, b), "a={a:?} b={b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn line_is_symmetric() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                assert_eq!(line(a, b), line(b, a), "a={a:?} b={b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn line_own_square_is_empty() {
+        for a in Square::ALL {
+            assert_eq!(line(a, a), Bitboard::EMPTY, "a={a:?}");
+        }
+    }
+
+    #[test]
+    fn line_contains_both_endpoints_when_aligned() {
+        for a in Square::ALL {
+            for b in Square::ALL {
+                let bb = line(a, b);
+                if !bb.is_empty() {
+                    assert!(bb.contains(a), "a={a:?} b={b:?}");
+                    assert!(bb.contains(b), "a={a:?} b={b:?}");
+                }
+            }
+        }
     }
 }

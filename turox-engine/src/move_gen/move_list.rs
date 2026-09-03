@@ -26,6 +26,7 @@ impl MoveList {
     const SENTINEL: Move = Move::new(Square::A1, Square::A1, MoveFlags::Quiet);
 
     /// An empty list.
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             moves: [Self::SENTINEL; Self::CAPACITY],
@@ -33,15 +34,16 @@ impl MoveList {
         }
     }
 
-    /// Appends `m`. Panics if the list is already at `CAPACITY` - legal move
-    /// generation should never produce more moves than that from a reachable
-    /// position, so this is a bug check, not a runtime condition to handle.
-    /// The panic message can't include the actual length: `const fn` panics
-    /// only accept a literal string, not `format!`-style arguments.
+    /// Appends `m`.
+    ///
+    /// # Panics
+    ///
+    /// If the list is already at `CAPACITY`: legal move generation should never produce
+    /// more moves than that from a reachable position, so this is a bug check, not a
+    /// runtime condition to handle. The panic message can't include the actual length:
+    /// `const fn` panics only accept a literal string, not `format!`-style arguments.
     pub const fn push(&mut self, m: Move) {
-        if self.len >= Self::CAPACITY {
-            panic!("MoveList already at capacity; a valid chess position should never reach this many moves");
-        }
+        assert!(self.len < Self::CAPACITY, "MoveList already at capacity; a valid chess position should never reach this many moves");
         self.moves[self.len] = m;
         self.len += 1;
     }
@@ -62,16 +64,19 @@ impl MoveList {
     }
 
     /// The number of moves pushed so far.
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Whether no moves have been pushed.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// The pushed moves, in push order.
+    #[must_use]
     pub const fn as_slice(&self) -> &[Move] {
         // `&self.moves[..self.len]` would be more idiomatic, but range
         // indexing isn't const-callable yet (`Index` isn't a const trait on
@@ -83,7 +88,7 @@ impl MoveList {
     /// MVV-LVA capture ordering) sorts in place. Same `split_at`-based
     /// approach as `as_slice`, so it's just as incapable of touching the
     /// unused tail past `len`: the returned slice never includes it.
-    pub fn as_mut_slice(&mut self) -> &mut [Move] {
+    pub const fn as_mut_slice(&mut self) -> &mut [Move] {
         self.moves.split_at_mut(self.len).0
     }
 }
@@ -145,7 +150,7 @@ mod tests {
         let list = MoveList::new();
         assert_eq!(list.len(), 0);
         assert!(list.is_empty());
-        assert!(list.as_slice().is_empty());
+        assert_eq!(list.as_slice(), []);
     }
 
     #[test]
@@ -206,18 +211,18 @@ mod tests {
     fn fills_to_capacity_without_panicking() {
         let mut list = MoveList::new();
         for i in 0..MoveList::CAPACITY {
-            let sq = Square::from_index((i % 64) as u8).expect("i % 64 < 64");
+            let sq = Square::ALL[i % 64];
             list.push(m(Square::A1, sq));
         }
         assert_eq!(list.len(), MoveList::CAPACITY);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "MoveList already at capacity; a valid chess position should never reach this many moves"]
     fn pushing_past_capacity_panics() {
         let mut list = MoveList::new();
         for i in 0..MoveList::CAPACITY {
-            let sq = Square::from_index((i % 64) as u8).expect("i % 64 < 64");
+            let sq = Square::ALL[i % 64];
             list.push(m(Square::A1, sq));
         }
         list.push(m(Square::A1, Square::A1));

@@ -20,7 +20,7 @@ fn small_bitboard() -> impl Strategy<Value = Bitboard> {
     proptest::collection::vec(any_square(), 0..=12).prop_map(|squares| {
         squares
             .into_iter()
-            .fold(Bitboard::EMPTY, |bb, sq| bb.with(sq))
+            .fold(Bitboard::EMPTY, turox_engine::Bitboard::with)
     })
 }
 
@@ -165,12 +165,12 @@ proptest! {
         let expected_lsb = if a.bits() == 0 {
             None
         } else {
-            Square::from_index(a.bits().trailing_zeros() as u8)
+            Square::from_u8(u8::try_from(a.bits().trailing_zeros()).expect("< 64"))
         };
         let expected_msb = if a.bits() == 0 {
             None
         } else {
-            Square::from_index(63 - a.bits().leading_zeros() as u8)
+            Square::from_u8(63 - u8::try_from(a.bits().leading_zeros()).expect("< 64"))
         };
         prop_assert_eq!(a.lsb(), expected_lsb);
         prop_assert_eq!(a.msb(), expected_msb);
@@ -183,7 +183,7 @@ proptest! {
         while let Some(sq) = bb.pop_lsb() {
             popped.push(sq);
         }
-        prop_assert_eq!(popped.len() as u32, a.count());
+        prop_assert_eq!(u32::try_from(popped.len()).expect("fits u32"), a.count());
         prop_assert!(popped.windows(2).all(|w| w[0].index() < w[1].index()));
         prop_assert_eq!(bb, Bitboard::EMPTY);
     }
@@ -193,11 +193,11 @@ proptest! {
     #[test]
     fn iteration_yields_exactly_the_contained_squares(a in any_bitboard()) {
         let collected: Vec<Square> = a.into_iter().collect();
-        prop_assert_eq!(collected.len() as u32, a.count());
+        prop_assert_eq!(u32::try_from(collected.len()).expect("fits u32"), a.count());
         for sq in &collected {
             prop_assert!(a.contains(*sq));
         }
-        let rebuilt = collected.into_iter().fold(Bitboard::EMPTY, |bb, sq| bb.with(sq));
+        let rebuilt = collected.into_iter().fold(Bitboard::EMPTY, turox_engine::Bitboard::with);
         prop_assert_eq!(rebuilt, a);
     }
 
@@ -253,8 +253,8 @@ proptest! {
         let flipped = a.flip_diagonal_a1h8();
         for sq in Square::ALL {
             let transposed = Square::new(
-                File::from_index(sq.rank().index()).unwrap(),
-                Rank::from_index(sq.file().index()).unwrap(),
+                File::from_u8(sq.rank().to_u8()).unwrap(),
+                Rank::from_u8(sq.file().to_u8()).unwrap(),
             );
             prop_assert_eq!(flipped.contains(transposed), a.contains(sq));
         }
@@ -325,7 +325,7 @@ proptest! {
     #[test]
     fn subsets_yields_exactly_two_to_the_count_distinct_subsets(a in small_bitboard()) {
         let subsets: Vec<Bitboard> = a.subsets().collect();
-        prop_assert_eq!(subsets.len() as u32, 1u32 << a.count());
+        prop_assert_eq!(u32::try_from(subsets.len()).expect("fits u32"), 1u32 << a.count());
         for &s in &subsets {
             prop_assert_eq!(s.and(!a), Bitboard::EMPTY, "subset must be a subset of the mask");
         }

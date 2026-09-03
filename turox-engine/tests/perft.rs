@@ -1,6 +1,6 @@
-//! `perft` against the six standard test positions (chessprogramming.org's
-//! "Perft Results"), the end-to-end correctness gate for move generation: it
-//! exercises `legal_moves`, `pseudo_legal`, `attacks`, `MoveList`,
+//! `perft` against the six standard test positions (see the README's
+//! "References" section), the end-to-end correctness gate for move
+//! generation: it exercises `legal_moves`, `pseudo_legal`, `attacks`, `MoveList`,
 //! `Board::make_move`, `tables`, and `magic` together. A wrong count at low
 //! depth on any position localizes to a specific rule; matching all six
 //! (including the deep, `#[ignore]`d depths) is the point at which move
@@ -183,9 +183,11 @@ fn perft_zero_is_one_leaf() {
 // Per-root-move node counts. Not called by any test above; it earns its
 // place the moment one of the counts above is ever wrong and needs
 // localizing to a specific root move, which is exactly what a raw total
-// can't tell you. `#[allow(dead_code)]` keeps it compiling and ready for
-// that moment without warning noise while unused.
-#[allow(dead_code)]
+// can't tell you.
+#[allow(
+    dead_code,
+    reason = "kept compiling and ready for the moment a perft count is wrong and needs localizing to a root move"
+)]
 fn perft_divide(board: &Board, depth: u32) -> Vec<(String, u64)> {
     legal_moves(board)
         .iter()

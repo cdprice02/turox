@@ -1,5 +1,8 @@
 //! Property tests for FEN parsing/formatting (`Board::try_from_fen`/`to_fen`).
 
+mod common;
+
+use common::{any_color, any_piece_with_king, any_square};
 use proptest::prelude::*;
 use turox_engine::board::Board;
 
@@ -7,21 +10,13 @@ use turox_engine::board::Board;
 /// triples, skipping squares already taken. Not guaranteed "legal" chess-wise
 /// (may have no king, doubled kings, pawns on rank 1, etc.); that's fine, FEN
 /// round-tripping doesn't care, and legality is `move_gen`'s job, not `board`'s.
+/// `any_piece_with_king`, not `common::any_piece`: this file's whole point is
+/// exercising the no-king/doubled-king cases `common::any_piece`'s king-free
+/// distribution would silently stop generating.
 fn any_board() -> impl Strategy<Value = Board> {
-    use turox_engine::{Color, ColoredPiece, Piece, Square};
+    use turox_engine::ColoredPiece;
 
-    let piece_strategy = prop_oneof![
-        Just(Piece::Pawn),
-        Just(Piece::Knight),
-        Just(Piece::Bishop),
-        Just(Piece::Rook),
-        Just(Piece::Queen),
-        Just(Piece::King),
-    ];
-    let color_strategy = prop_oneof![Just(Color::White), Just(Color::Black)];
-    let square_strategy = (0u8..64).prop_map(|i| Square::from_index(i).expect("i in 0..64"));
-
-    proptest::collection::vec((color_strategy, piece_strategy, square_strategy), 2..24).prop_map(
+    proptest::collection::vec((any_color(), any_piece_with_king(), any_square()), 2..24).prop_map(
         |placements| {
             let mut board = Board::default();
             for (color, piece, sq) in placements {

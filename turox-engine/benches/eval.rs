@@ -6,7 +6,7 @@
 //! precomputed corpus and `black_box`es both the input and the returned
 //! score.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -43,7 +43,9 @@ fn sample_boards() -> Vec<Board> {
 fn eval_bench(c: &mut Criterion) {
     let boards = sample_boards();
     let mut group = c.benchmark_group("eval");
-    group.throughput(Throughput::Elements(boards.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(boards.len()).unwrap_or(u64::MAX),
+    ));
     group.bench_function("evaluate", |b| {
         b.iter(|| {
             for board in &boards {

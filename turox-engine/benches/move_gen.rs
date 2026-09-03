@@ -18,7 +18,7 @@
 // Not part of the crate's public API, so `missing_docs` doesn't apply here:
 // criterion's own `criterion_group!`/`criterion_main!` macros generate an
 // undocumented `fn main`.
-#![allow(missing_docs)]
+#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -65,7 +65,9 @@ fn sample_boards() -> Vec<Board> {
 fn bench_generator(c: &mut Criterion, name: &str, f: impl Fn(&Board, &mut MoveList)) {
     let boards = sample_boards();
     let mut group = c.benchmark_group("move_gen");
-    group.throughput(Throughput::Elements(boards.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(boards.len()).unwrap_or(u64::MAX),
+    ));
     group.bench_function(name, |b| {
         b.iter(|| {
             for board in &boards {
@@ -93,7 +95,9 @@ fn combined_pseudo_legal(c: &mut Criterion) {
 fn legal(c: &mut Criterion) {
     let boards = sample_boards();
     let mut group = c.benchmark_group("move_gen");
-    group.throughput(Throughput::Elements(boards.len() as u64));
+    group.throughput(Throughput::Elements(
+        u64::try_from(boards.len()).unwrap_or(u64::MAX),
+    ));
     group.bench_function("legal_moves", |b| {
         b.iter(|| {
             for board in &boards {

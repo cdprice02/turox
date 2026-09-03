@@ -40,9 +40,18 @@ why each of these exists; this file is the lookup.
   runs them for real, informationally, alongside mutants and coverage.
 - **`turox-fuzz` is outside the workspace** and needs nightly, so
   `--workspace` commands don't touch it.
-- **Clippy is not in pedantic or nursery mode here.** The workspace
-  currently denies only `missing_docs` and `unsafe_code`. Turning on
-  pedantic/nursery across an established codebase surfaces a wall of
-  unrelated lint errors at once, so it is planned as its own deliberate
-  pass (with its own PR to fix what it flags), not folded into an
-  unrelated change.
+- **Clippy runs `pedantic` and `nursery`, plus a hand-picked set of
+  restriction lints** (`unwrap_used`, `unreachable`, `wildcard_enum_match_arm`,
+  `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `dbg_macro`,
+  `missing_assert_message`, `allow_attributes_without_reason`,
+  `string_slice`/`as_conversions`, and more; see `[workspace.lints.clippy]`
+  in the root `Cargo.toml` for the live list). `indexing_slicing` and
+  `arithmetic_side_effects` are the two intentional exceptions, not deferred
+  ones: this is bitboard/table-driven engine code, so indexing and
+  arithmetic are the normal way to write it, not the exception a
+  restriction lint is meant to catch. Every `#[allow(...)]` in the codebase
+  carries a `reason = "..."` explaining the specific call site; that's what
+  to read (or add to) rather than reaching for a blanket lint change.
+  `#[derive(Ordinal)]` in `turox-macros` is how the ordinal enums
+  (`Color`/`Piece`/`ColoredPiece`/`File`/`Rank`/`Square`) stayed clean of
+  `as` without hand-writing six copies of the same accessor.

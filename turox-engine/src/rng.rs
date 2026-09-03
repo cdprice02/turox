@@ -39,7 +39,7 @@
 /// `board::zobrist::generate_keys` (not gated at all: it runs at compile
 /// time to build every real build's Zobrist key table), so unlike most of
 /// this module, a plain non-test build does exercise this function.
-pub(crate) const fn xorshift64star(state: u64) -> u64 {
+pub const fn xorshift64star(state: u64) -> u64 {
     let mut x = state;
     x ^= x >> 12;
     x ^= x << 25;

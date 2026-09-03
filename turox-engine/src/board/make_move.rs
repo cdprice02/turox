@@ -7,9 +7,22 @@ use crate::{
 };
 
 impl Board {
-    /// Applies `m` to a copy of this position and returns the result (copy-make;
-    /// see the struct docs).
-    pub fn make_move(&self, m: Move) -> Board {
+    /// Applies `m` to a copy of this position and returns the result (copy-make; see the
+    /// struct docs).
+    ///
+    /// # Panics
+    ///
+    /// `m` must be a legal move for `self` (as `move_gen::legal` would generate it): a
+    /// `from`/`to`/`flags` combination that doesn't actually match a piece and rule on
+    /// this board (a promotion flag on a non-pawn, a castle flag with no rook where the
+    /// rights say there should be one, ...) trips an internal invariant and panics rather
+    /// than silently producing a wrong position.
+    #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one match over every MoveFlags variant, applying each rule's full consequence inline (rook hop, capture removal, promotion swap, en passant bookkeeping); splitting it into helper functions would trade length for indirection, not shrink the logic"
+    )]
+    pub fn make_move(&self, m: Move) -> Self {
         let mut board = *self;
         let color = board.side_to_move();
         let castling = board.castling_rights();
@@ -68,7 +81,7 @@ impl Board {
         }
 
         match m.flags() {
-            MoveFlags::Quiet => {
+            MoveFlags::Quiet | MoveFlags::DoublePawnPush => {
                 board.place(m.to(), moved_piece);
             }
             MoveFlags::Capture => {
@@ -99,9 +112,6 @@ impl Board {
                         m.flags().promotion_piece().expect("matched on promote"),
                     ),
                 );
-            }
-            MoveFlags::DoublePawnPush => {
-                board.place(m.to(), moved_piece);
             }
             MoveFlags::KingCastle => {
                 board.place(m.to(), moved_piece);

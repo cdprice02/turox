@@ -1,7 +1,8 @@
-//! Time allocation for a real game clock: how long to budget for the
-//! current move given the clock state UCI's `go` command reports
-//! (`wtime`/`btime`/`winc`/`binc`/`movestogo`). Pure and stateless; the
-//! caller combines the result with `Instant::now()` and hands it to
+//! Time allocation for a real game clock.
+//!
+//! How long to budget for the current move given the clock state UCI's `go` command
+//! reports (`wtime`/`btime`/`winc`/`binc`/`movestogo`). Pure and stateless; the caller
+//! combines the result with `Instant::now()` and hands it to
 //! [`super::Search::with_deadline`].
 
 use std::time::Duration;
@@ -16,22 +17,22 @@ use std::time::Duration;
 /// actually happens.
 const DEFAULT_MOVES_TO_GO: u32 = 30;
 
-/// The floor on a single move's budget, so search always gets *some* time
-/// to complete at least a shallow iteration and return a legal move even
-/// with very little left on the clock. Small enough to matter only when
-/// `time_left` itself is already tiny; `allocate_time`'s final clamp still
-/// keeps the result at or under `time_left`, so this floor can't budget
+/// The floor on a single move's budget, so search always gets *some* time to complete at
+/// least a shallow iteration and return a legal move even with very little left on the
+/// clock.
+///
+/// Small enough to matter only when `time_left` itself is already tiny; `allocate_time`'s
+/// final clamp still keeps the result at or under `time_left`, so this floor can't budget
 /// more time than actually exists.
 const MIN_BUDGET: Duration = Duration::from_millis(30);
 
-/// Budgets a [`Duration`] for the current move from the time left on the
-/// clock (`time_left`), the per-move increment (`increment`), and how many
-/// moves remain until the next time control (`moves_to_go`, `None` if UCI
-/// didn't say).
+/// Budgets a [`Duration`] for the current move.
 ///
-/// The raw estimate is `time_left / moves_to_go + increment`
-/// (`DEFAULT_MOVES_TO_GO` standing in when `moves_to_go` is unknown), then
-/// clamped three ways in order:
+/// From the time left on the clock (`time_left`), the per-move increment (`increment`),
+/// and how many moves remain until the next time control (`moves_to_go`, `None` if UCI
+/// didn't say). The raw estimate is `time_left / moves_to_go + increment`
+/// (`DEFAULT_MOVES_TO_GO` standing in when `moves_to_go` is unknown), then clamped three
+/// ways in order:
 /// 1. Capped at half of `time_left`: a low or defaulted `moves_to_go` (most
 ///    of all, `Some(1)`) could otherwise budget the *entire* remaining
 ///    clock for one move, and GUI/network overhead or an optimistic
@@ -43,6 +44,7 @@ const MIN_BUDGET: Duration = Duration::from_millis(30);
 ///    result back above `time_left` when the clock is already down to only
 ///    a few milliseconds; there's never more time to give than what's
 ///    actually left.
+#[must_use]
 pub fn allocate_time(
     time_left: Duration,
     increment: Duration,

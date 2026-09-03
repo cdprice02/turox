@@ -17,32 +17,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The score magnitude of a certain checkmate. A node where the side to
-/// move has no legal moves and is in check scores `ply as Score - MATE`:
-/// very negative, and more negative the *smaller* `ply` is (a mate reached
-/// in fewer plies from the root is a faster, more forced mate against that
-/// side). One ply up, negamax's sign flip turns that into `MATE - ply` for
-/// the side that just delivered it, so a shorter forced mate always
-/// outscores a longer one. This exact ply direction is a classic place for
-/// an off-by-one to hide silently and look plausible; `tests/search_props.rs`'s
-/// mate puzzles are what actually pin the formula down, not this comment.
+/// The score magnitude of a certain checkmate.
+///
+/// A node where the side to move has no legal moves and is in check scores
+/// `Score::from(ply) - MATE`: very negative, and more negative the *smaller* `ply` is (a mate
+/// reached in fewer plies from the root is a faster, more forced mate against that side).
+/// One ply up, negamax's sign flip turns that into `MATE - ply` for the side that just
+/// delivered it, so a shorter forced mate always outscores a longer one. This exact ply
+/// direction is a classic place for an off-by-one to hide silently and look plausible;
+/// `tests/search_props.rs`'s mate puzzles are what actually pin the formula down, not
+/// this comment.
 pub const MATE: Score = 30_000;
 
-/// How many plies past `negamax`'s horizon `quiescence` is allowed to keep
-/// resolving captures before it gives up and falls back to stand pat, same
-/// as if no more captures were available. Without a cap, a sufficiently
-/// tangled position (many mutually-en-prise pieces) can make the *breadth*
-/// of the capture tree blow up long before it naturally bottoms out on
-/// material alone: `tests/search_props.rs`'s `alpha_beta_agrees_with_unpruned_negamax`
-/// property test hit exactly this on an `any_board()`-generated position,
-/// burning minutes of CPU on a single case. A handful of plies is typical;
-/// too low and captures get cut off mid-exchange again, just one horizon
-/// further out, defeating quiescence's own purpose.
+/// How many plies past `negamax`'s horizon `quiescence` is allowed to keep resolving
+/// captures before it gives up and falls back to stand pat, same as if no more captures
+/// were available.
 ///
-/// `pub`, not private: `tests/search_props.rs`'s own `naive_quiescence`
-/// oracle needs the identical cap, not a hand-copied literal that could
-/// drift out of sync and silently turn the property test into a comparison
-/// between two different search depths.
+/// Without a cap, a sufficiently tangled position (many mutually-en-prise pieces) can
+/// make the *breadth* of the capture tree blow up long before it naturally bottoms out on
+/// material alone: `tests/search_props.rs`'s `alpha_beta_agrees_with_unpruned_negamax`
+/// property test hit exactly this on an `any_board()`-generated position, burning minutes
+/// of CPU on a single case. A handful of plies is typical; too low and captures get cut
+/// off mid-exchange again, just one horizon further out, defeating quiescence's own
+/// purpose.
+///
+/// `pub`, not private: `tests/search_props.rs`'s own `naive_quiescence` oracle needs the
+/// identical cap, not a hand-copied literal that could drift out of sync and silently
+/// turn the property test into a comparison between two different search depths.
 pub const MAX_QUIESCENCE_DEPTH: u32 = 8;
 
 /// The safety-margin multiplier `search`'s soft time limit applies to the
@@ -61,12 +62,13 @@ pub const MAX_QUIESCENCE_DEPTH: u32 = 8;
 /// that would need less than half the typical growth factor to fit.
 const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
-/// One completed call to [`Search::search`]: the best move and score found,
-/// and the depth actually reached. `depth` can be less than the requested
-/// `max_depth` if the search was aborted (deadline, node budget, or
-/// `request_stop`) before a deeper iteration finished; see `Search::search`'s
-/// doc for why a partial iteration's own result is discarded rather than
-/// returned.
+/// One completed call to [`Search::search`]: the best move and score found, and the depth
+/// actually reached.
+///
+/// `depth` can be less than the requested `max_depth` if the search was aborted
+/// (deadline, node budget, or `request_stop`) before a deeper iteration finished; see
+/// `Search::search`'s doc for why a partial iteration's own result is discarded rather
+/// than returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchResult {
     /// `None` only when the position handed to `search` itself has no legal
@@ -82,11 +84,11 @@ pub struct SearchResult {
     pub nodes: u64,
 }
 
-/// Mutable search state threaded through one [`Search::search`] call: the
-/// node counter and abort conditions the periodic check reads, and the
-/// repetition hash stack. A struct rather than several parameters threaded
-/// through the recursion is what makes the abort check and the draw check
-/// cheap to reach at every node.
+/// Mutable search state threaded through one [`Search::search`] call: the node counter
+/// and abort conditions the periodic check reads, and the repetition hash stack.
+///
+/// A struct rather than several parameters threaded through the recursion is what makes
+/// the abort check and the draw check cheap to reach at every node.
 pub struct Search {
     nodes: u64,
     /// Hashes of every position on the path leading up to (but not
@@ -122,6 +124,7 @@ impl Search {
     /// deadline or node budget by default, so `search` runs every
     /// iteration up to `max_depth` to completion; see `with_deadline`/
     /// `with_max_nodes` to bound it.
+    #[must_use]
     pub fn new(history: Vec<u64>) -> Self {
         Self {
             nodes: 0,
@@ -134,14 +137,16 @@ impl Search {
 
     /// Aborts the search once `nodes` reaches `max_nodes`, checked on the
     /// same periodic schedule `deadline` and `stop` are.
-    pub fn with_max_nodes(mut self, max_nodes: u64) -> Self {
+    #[must_use]
+    pub const fn with_max_nodes(mut self, max_nodes: u64) -> Self {
         self.max_nodes = Some(max_nodes);
         self
     }
 
     /// Aborts the search once `Instant::now()` passes `deadline`, checked
     /// on the same periodic schedule `max_nodes` and `stop` are.
-    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+    #[must_use]
+    pub const fn with_deadline(mut self, deadline: Instant) -> Self {
         self.deadline = Some(deadline);
         self
     }
@@ -152,6 +157,7 @@ impl Search {
     /// blocking the thread that would otherwise poll for more commands, so
     /// it has to hold onto (and be able to set) the exact same `Arc` the
     /// search itself checks, not just a fresh one of its own.
+    #[must_use]
     pub fn with_stop_flag(mut self, stop: Arc<AtomicBool>) -> Self {
         self.stop = stop;
         self
@@ -172,12 +178,14 @@ impl Search {
     /// can still set it via `Ordering::Relaxed` `store`, honored the next time
     /// `should_abort` checks (same `nodes & 2047` schedule as `deadline`
     /// and `max_nodes`).
+    #[must_use]
     pub fn stop_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
     }
 
     /// Total nodes visited so far by this `Search`.
-    pub fn nodes(&self) -> u64 {
+    #[must_use]
+    pub const fn nodes(&self) -> u64 {
         self.nodes
     }
 
@@ -187,6 +195,10 @@ impl Search {
     /// is amortized to roughly nothing per node rather than paid on every
     /// single one. Call this immediately after incrementing `self.nodes` at
     /// the top of `negamax`/`quiescence`.
+    #[allow(
+        clippy::verbose_bit_mask,
+        reason = "the mask form is the standard periodic-check idiom, not an oversight; `trailing_zeros() >= 11` would desync from this fn's own doc comment for no clarity gain"
+    )]
     fn should_abort(&self) -> bool {
         self.nodes & 2047 == 0
             && (self.stop.load(Ordering::Relaxed)
@@ -316,7 +328,7 @@ impl Search {
         let mut max = Score::MIN;
         let mut best_move = None;
         order_moves(board, &mut moves);
-        for &m in moves.iter() {
+        for &m in &moves {
             self.history.push(board.hash());
 
             let child = board.make_move(m);
@@ -346,6 +358,11 @@ impl Search {
     /// [`MATE`]'s doc and for keeping `self.history` in step with the
     /// recursion.
     ///
+    /// `ply` is `u16`, not `u32` like `depth`, deliberately: it feeds
+    /// `Score::from(ply)` below, and `Score` is `i32`, so `u16` is the widest
+    /// type that conversion covers losslessly. Widening `ply` to `u32` to
+    /// match `depth` would need an `as` cast right back at that call site.
+    ///
     /// Returns `None` if `should_abort()` trips; callers must propagate a
     /// `None` up immediately rather than treating it as a real score.
     ///
@@ -359,7 +376,7 @@ impl Search {
         &mut self,
         board: &Board,
         depth: u32,
-        ply: u32,
+        ply: u16,
         mut alpha: Score,
         beta: Score,
     ) -> Option<Score> {
@@ -375,7 +392,7 @@ impl Search {
         let mut moves = legal_moves(board);
         if moves.is_empty() {
             return if in_check(board, board.side_to_move()) {
-                Some(ply as Score - MATE)
+                Some(Score::from(ply) - MATE)
             } else {
                 Some(0)
             };
@@ -387,7 +404,7 @@ impl Search {
 
         let mut max = Score::MIN;
         order_moves(board, &mut moves);
-        for &m in moves.iter() {
+        for &m in &moves {
             self.history.push(board.hash());
 
             let child = board.make_move(m);
@@ -462,7 +479,7 @@ impl Search {
             moves.retain(|m| m.flags().is_capture());
 
             order_moves(board, &mut moves);
-            for m in moves.iter() {
+            for m in &moves {
                 let child = board.make_move(*m);
                 let score = self.quiescence(&child, -beta, -alpha, qdepth - 1, None);
 
@@ -513,7 +530,7 @@ fn order_moves(board: &Board, moves: &mut MoveList) {
                     .piece_at(m.to())
                     .expect("capture has a victim")
                     .piece();
-                PIECE_VALUES[attacker as usize] - PIECE_VALUES[victim as usize]
+                PIECE_VALUES[attacker.index()] - PIECE_VALUES[victim.index()]
             }
         } else {
             // non captures are considered less important (at this stage)

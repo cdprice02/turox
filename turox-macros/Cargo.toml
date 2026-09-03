@@ -1,0 +1,18 @@
+[package]
+name = "turox-macros"
+version = "0.1.0"
+edition = "2021"
+# Matches turox-engine's floor (see its Cargo.toml), the only crate that uses this.
+rust-version = "1.87"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+# proc_macro is part of the toolchain, not a published crate: deriving Ordinal
+# adds no runtime dependency to whatever crate uses it, the same reasoning that
+# lets turox-engine depend on this crate without breaking its own zero-runtime-
+# dependency policy (see turox-engine/Cargo.toml).
+[dependencies]
