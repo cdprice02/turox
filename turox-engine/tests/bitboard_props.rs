@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{any_bitboard, any_square};
+use common::{any_bitboard, any_color, any_square};
 use proptest::prelude::*;
 use turox_engine::{Bitboard, Color, Direction, File, Rank, Square};
 
@@ -101,6 +101,86 @@ fn naive_occluded_fill(a: Bitboard, empty: Bitboard, dir: Direction) -> Bitboard
                 break;
             }
             current = next;
+        }
+    }
+    result
+}
+
+/// Reference definition of `front_span`: within each file, smear every set bit
+/// toward `color`'s promotion rank, but a square's own contribution starts one
+/// step past itself, not at itself (that's what tells `front_span` apart from
+/// `forward_fill`/`north_fill`/`south_fill`). Built from `contains`/`with`, not
+/// from `forward_fill`, `shift`, or anything `front_span` itself might use, so
+/// this can't share a bug with whatever implementation it's checked against.
+fn naive_front_span(a: Bitboard, color: Color) -> Bitboard {
+    let mut result = Bitboard::EMPTY;
+    for file in File::ALL {
+        let mut seen = false;
+        match color {
+            Color::White => {
+                for rank in Rank::ALL {
+                    let sq = Square::new(file, rank);
+                    if seen {
+                        result = result.with(sq);
+                    }
+                    seen |= a.contains(sq);
+                }
+            }
+            Color::Black => {
+                for rank in Rank::ALL.into_iter().rev() {
+                    let sq = Square::new(file, rank);
+                    if seen {
+                        result = result.with(sq);
+                    }
+                    seen |= a.contains(sq);
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Reference definition of `front_attack_span`: `naive_front_span`, but a
+/// target file's "seen" bit is set by a source square on that file or either
+/// neighbor, clamped at the board edge (a-file/h-file have only one neighbor,
+/// not a wrapped-around one). Built the same way as `naive_front_span`, from
+/// `contains`/`with` over `File::ALL`/`Rank::ALL` directly.
+fn naive_front_attack_span(a: Bitboard, color: Color) -> Bitboard {
+    let mut result = Bitboard::EMPTY;
+    for file in File::ALL {
+        let file_idx = i16::from(file.to_u8());
+        let neighbor_files: Vec<File> = [-1i16, 0, 1]
+            .into_iter()
+            .filter_map(|delta| u8::try_from(file_idx + delta).ok().and_then(File::from_u8))
+            .collect();
+        let mut seen = false;
+        match color {
+            Color::White => {
+                for rank in Rank::ALL {
+                    if seen {
+                        result = result.with(Square::new(file, rank));
+                    }
+                    if neighbor_files
+                        .iter()
+                        .any(|&nf| a.contains(Square::new(nf, rank)))
+                    {
+                        seen = true;
+                    }
+                }
+            }
+            Color::Black => {
+                for rank in Rank::ALL.into_iter().rev() {
+                    if seen {
+                        result = result.with(Square::new(file, rank));
+                    }
+                    if neighbor_files
+                        .iter()
+                        .any(|&nf| a.contains(Square::new(nf, rank)))
+                    {
+                        seen = true;
+                    }
+                }
+            }
         }
     }
     result
@@ -422,5 +502,49 @@ proptest! {
     #[test]
     fn dilate_is_a_superset(a in any_bitboard()) {
         prop_assert_eq!(a.and_not(a.dilate()), Bitboard::EMPTY);
+    }
+
+    // ---- Color-relative fills ----
+
+    #[test]
+    fn forward_fill_white_matches_north_fill(a in any_bitboard()) {
+        prop_assert_eq!(a.forward_fill(Color::White), naive_north_fill(a));
+    }
+
+    #[test]
+    fn forward_fill_black_matches_south_fill(a in any_bitboard()) {
+        prop_assert_eq!(a.forward_fill(Color::Black), naive_south_fill(a));
+    }
+
+    #[test]
+    fn front_span_matches_naive_definition(a in any_bitboard(), color in any_color()) {
+        prop_assert_eq!(a.front_span(color), naive_front_span(a, color));
+    }
+
+    // front_span(a, color) == forward_fill(a, color) & !a does NOT hold in
+    // general: a source square can land inside another source's own span
+    // (e.g. White bits on D4 and D6: D6 is strictly ahead of D4, so D6 shows
+    // up in front_span even though D6 is also in `a`). The identity that
+    // does hold for any number of bits per file is the one below: every
+    // square forward_fill adds is either a source square itself or something
+    // front_span put there.
+    #[test]
+    fn front_span_union_self_equals_forward_fill(a in any_bitboard(), color in any_color()) {
+        prop_assert_eq!(a.front_span(color).or(a), a.forward_fill(color));
+    }
+
+    #[test]
+    fn front_span_is_a_subset_of_forward_fill(a in any_bitboard(), color in any_color()) {
+        prop_assert_eq!(a.front_span(color).and_not(a.forward_fill(color)), Bitboard::EMPTY);
+    }
+
+    #[test]
+    fn front_attack_span_matches_naive_definition(a in any_bitboard(), color in any_color()) {
+        prop_assert_eq!(a.front_attack_span(color), naive_front_attack_span(a, color));
+    }
+
+    #[test]
+    fn front_attack_span_is_a_superset_of_front_span(a in any_bitboard(), color in any_color()) {
+        prop_assert_eq!(a.front_span(color).and_not(a.front_attack_span(color)), Bitboard::EMPTY);
     }
 }

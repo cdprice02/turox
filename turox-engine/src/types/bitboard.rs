@@ -394,6 +394,41 @@ impl Bitboard {
             .shift(Direction::North)
             .or(dilated.shift(Direction::South)))
     }
+
+    /// `north_fill` for White, `south_fill` for Black: every square reachable
+    /// from `self` going toward that color's own promotion rank, `self`'s own
+    /// rank included.
+    #[inline]
+    #[must_use]
+    pub const fn forward_fill(self, color: Color) -> Self {
+        match color {
+            Color::White => self.north_fill(),
+            Color::Black => self.south_fill(),
+        }
+    }
+
+    /// Every square strictly ahead of `self` on its own file, from `color`'s
+    /// point of view: `self`'s own rank excluded, unlike `forward_fill`.
+    #[inline]
+    #[must_use]
+    pub const fn front_span(self, color: Color) -> Self {
+        match color {
+            Color::White => self.shift(Direction::North).north_fill(),
+            Color::Black => self.shift(Direction::South).south_fill(),
+        }
+    }
+
+    /// `front_span`, widened one file east and west: every square strictly
+    /// ahead of `self` on its own file or either adjacent file. The shape
+    /// passed-pawn detection needs (a pawn is passed if no enemy pawn sits on
+    /// this span, on any of the three files).
+    #[inline]
+    #[must_use]
+    pub const fn front_attack_span(self, color: Color) -> Self {
+        self.or(self.shift(Direction::East))
+            .or(self.shift(Direction::West))
+            .front_span(color)
+    }
 }
 
 impl Not for Bitboard {
@@ -551,5 +586,96 @@ mod tests {
         assert_eq!(Bitboard::EMPTY.msb(), None);
         assert_eq!(Bitboard::ALL.lsb(), Some(Square::A1));
         assert_eq!(Bitboard::ALL.msb(), Some(Square::H8));
+    }
+
+    /// White's forward direction is north, Black's is south: a symmetric test
+    /// case (e.g. both colors filling from the same central rank toward the
+    /// same edge) can pass even with the two colors' logic swapped, so this
+    /// pins down the actual direction each one goes from a single square.
+    #[test]
+    fn forward_fill_white_goes_up_black_goes_down() {
+        let expected_white = Bitboard::EMPTY
+            .with(Square::D4)
+            .with(Square::D5)
+            .with(Square::D6)
+            .with(Square::D7)
+            .with(Square::D8);
+        assert_eq!(
+            Square::D4.bitboard().forward_fill(Color::White),
+            expected_white
+        );
+
+        let expected_black = Bitboard::EMPTY
+            .with(Square::D1)
+            .with(Square::D2)
+            .with(Square::D3)
+            .with(Square::D4);
+        assert_eq!(
+            Square::D4.bitboard().forward_fill(Color::Black),
+            expected_black
+        );
+    }
+
+    /// Same source square as `forward_fill_white_goes_up_black_goes_down`, so
+    /// the only variable is the one `front_span` changes: `self`'s own rank
+    /// drops out of the result.
+    #[test]
+    fn front_span_excludes_its_own_rank_unlike_forward_fill() {
+        let expected_white = Bitboard::EMPTY
+            .with(Square::D5)
+            .with(Square::D6)
+            .with(Square::D7)
+            .with(Square::D8);
+        assert_eq!(
+            Square::D4.bitboard().front_span(Color::White),
+            expected_white
+        );
+
+        let expected_black = Bitboard::EMPTY
+            .with(Square::D1)
+            .with(Square::D2)
+            .with(Square::D3);
+        assert_eq!(
+            Square::D4.bitboard().front_span(Color::Black),
+            expected_black
+        );
+    }
+
+    /// A-file source: `front_attack_span` widens onto the b-file (its only
+    /// real neighbor) but must not wrap onto the h-file the way an unguarded
+    /// `shift(West)` would. The explicit `File::H` check documents that as
+    /// the property under test, on top of the exact-value check above it.
+    #[test]
+    fn front_attack_span_from_the_a_file_does_not_wrap_to_the_h_file() {
+        let expected = Bitboard::EMPTY
+            .with(Square::A5)
+            .with(Square::A6)
+            .with(Square::A7)
+            .with(Square::A8)
+            .with(Square::B5)
+            .with(Square::B6)
+            .with(Square::B7)
+            .with(Square::B8);
+        let actual = Square::A4.bitboard().front_attack_span(Color::White);
+        assert_eq!(actual, expected);
+        assert_eq!(actual.and(File::H.bitboard()), Bitboard::EMPTY);
+    }
+
+    /// The h-file mirror of `front_attack_span_from_the_a_file_does_not_wrap_to_the_h_file`:
+    /// widens onto the g-file, must not wrap onto the a-file.
+    #[test]
+    fn front_attack_span_from_the_h_file_does_not_wrap_to_the_a_file() {
+        let expected = Bitboard::EMPTY
+            .with(Square::G5)
+            .with(Square::G6)
+            .with(Square::G7)
+            .with(Square::G8)
+            .with(Square::H5)
+            .with(Square::H6)
+            .with(Square::H7)
+            .with(Square::H8);
+        let actual = Square::H4.bitboard().front_attack_span(Color::White);
+        assert_eq!(actual, expected);
+        assert_eq!(actual.and(File::A.bitboard()), Bitboard::EMPTY);
     }
 }
