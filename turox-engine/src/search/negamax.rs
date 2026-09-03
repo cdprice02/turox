@@ -12,6 +12,7 @@ use crate::move_gen::attacks::in_check;
 use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
 use crate::search::draw::is_draw;
+use crate::search::tt::Tt;
 use crate::types::Move;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -107,7 +108,12 @@ enum RootOutcome {
 ///
 /// A struct rather than several parameters threaded through the recursion is what makes
 /// the abort check and the draw check cheap to reach at every node.
-pub struct Search {
+///
+/// `'a` is only ever used by `tt`: everything else here is owned outright. A `Search`
+/// with no [`Search::with_tt`] call never actually borrows anything, so `'a` costs
+/// nothing at most call sites; Rust infers it from context the same way it always does
+/// for an unused generic parameter.
+pub struct Search<'a> {
     nodes: u64,
     /// Hashes of every position on the path leading up to (but not
     /// including) the position currently being searched, per
@@ -134,9 +140,15 @@ pub struct Search {
     /// clone of this same `Arc` before a caller moves `Search` onto its own
     /// search thread, so the main thread can still set it later.
     stop: Arc<AtomicBool>,
+    /// `None` by default (`negamax` searches with no transposition table at all, the same
+    /// as before one existed); set via [`Search::with_tt`]. Borrowed, not owned: the table
+    /// lives in `uci::session::run` (like `history` conceptually does, though `history` is
+    /// actually copied in), so it survives across the separate `Search` a later `go` call
+    /// rebuilds, rather than starting cold every time.
+    tt: Option<&'a mut Tt>,
 }
 
-impl Search {
+impl<'a> Search<'a> {
     /// A new search seeded with `history`: the real game's position hashes
     /// so far, not including the position `search` will be called on. No
     /// deadline or node budget by default, so `search` runs every
@@ -150,6 +162,7 @@ impl Search {
             deadline: None,
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
+            tt: None,
         }
     }
 
@@ -178,6 +191,15 @@ impl Search {
     #[must_use]
     pub fn with_stop_flag(mut self, stop: Arc<AtomicBool>) -> Self {
         self.stop = stop;
+        self
+    }
+
+    /// Gives this search a transposition table to probe/store against in `negamax`.
+    /// Without this, `negamax` searches exactly as if `tt` didn't exist: probing and
+    /// storing are both no-ops when `self.tt` is `None`, not an error condition.
+    #[must_use]
+    pub const fn with_tt(mut self, tt: &'a mut Tt) -> Self {
+        self.tt = Some(tt);
         self
     }
 
@@ -430,6 +452,18 @@ impl Search {
     /// And an empty move list is checkmate/stalemate (the [`MATE`] formula,
     /// or `0`), a different terminal case from the draw check above it, not
     /// the same `0` for a different reason.
+    ///
+    /// `self.tt` is probed right after those two terminal checks (so a hit doesn't cost
+    /// them, but a draw/terminal score is never confused with a bounded search result the
+    /// table would store), and *before* the `depth == 0` quiescence handoff: a stored
+    /// result from a deeper earlier visit to this same position can still resolve a
+    /// depth-0 node outright, skipping quiescence entirely, which is exactly the kind of
+    /// win a transposition table exists for. Storing happens only on the path that
+    /// actually ran this node's own move loop, keyed on the *original* `alpha`/`beta` this
+    /// call was given, not `alpha` as the loop below narrows it; see `Bound`'s own doc for
+    /// why that distinction matters. A depth-0 node that fell through to `quiescence`
+    /// instead never reaches the store below, matching `Entry.depth`'s own doc: `quiescence`
+    /// has no comparable notion of depth to store one under.
     fn negamax(
         &mut self,
         board: &Board,
@@ -456,11 +490,20 @@ impl Search {
             };
         }
 
+        let hash = board.hash();
+        if let Some(entry) = self.tt.as_deref().and_then(|tt| tt.probe(hash)) {
+            if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
+                return Some(score);
+            }
+        }
+
         if depth == 0 {
             return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
+        let original_alpha = alpha;
         let mut max = Score::MIN;
+        let mut best_move = None;
         order_moves(board, &mut moves);
         for &m in &moves {
             self.history.push(board.hash());
@@ -473,6 +516,7 @@ impl Search {
             let score = -score?;
             if score > max {
                 max = score;
+                best_move = Some(m);
             }
 
             if max > alpha {
@@ -482,6 +526,13 @@ impl Search {
                 break;
             }
         }
+
+        if let Some(tt) = self.tt.as_deref_mut() {
+            let best_move =
+                best_move.expect("moves is non-empty, so the loop always finds a best move");
+            tt.store(hash, ply, depth, max, original_alpha, beta, best_move);
+        }
+
         Some(max)
     }
 

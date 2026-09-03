@@ -82,6 +82,15 @@ pub struct Tt {
 }
 
 impl Tt {
+    /// The `Hash` UCI option's lower bound, in MB: still rounds down to a large
+    /// power-of-two entry count, comfortably above zero.
+    pub const MIN_HASH_MB: usize = 1;
+    /// The `Hash` UCI option's upper bound, in MB: generous for a single-threaded
+    /// engine with no lazy-SMP to productively fill a larger table.
+    pub const MAX_HASH_MB: usize = 1024;
+    /// The `Hash` UCI option's default, in MB, before a GUI ever sends `setoption`.
+    pub const DEFAULT_HASH_MB: usize = 16;
+
     /// Builds a table sized to fit within `hash_mb` megabytes, rounded *down* to the
     /// largest power-of-two entry count that fits, so a lookup's index is a plain `key &
     /// mask`, never a division or modulo.

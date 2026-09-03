@@ -56,7 +56,12 @@ where
     let reader_handle = thread::spawn(move || read_commands(reader, &tx, &reader_stop));
 
     let mut history: Vec<u64> = Vec::new();
-    // let mut tt = Tt::new(16); // 16 MiB, a reasonable default for now; a GUI can resize it later
+    // Owned here, not by `Search`: `Search` is rebuilt fresh every `go`, so a table
+    // living inside it would never see the transpositions that matter most in real
+    // play, ones found across *separate* `go` calls in the same game. `history`
+    // conceptually follows the same shape, though it's actually copied into `Search`
+    // per call rather than borrowed.
+    let mut tt = Tt::new(Tt::DEFAULT_HASH_MB);
 
     for command in rx {
         match command {
@@ -67,7 +72,10 @@ where
                 send(&mut writer, &Response::UciOk);
             }
             Command::IsReady => send(&mut writer, &Response::ReadyOk),
-            Command::NewGame => history.clear(),
+            Command::NewGame => {
+                history.clear();
+                tt.clear();
+            }
             Command::Position(new_board) => {
                 history.push(board.hash());
                 *board = new_board;
@@ -81,7 +89,8 @@ where
                     .lock()
                     .expect("active_stop mutex should not be poisoned") = Some(Arc::clone(&stop));
 
-                let (mut search, max_depth) = build_search(board, history.clone(), &options, stop);
+                let (mut search, max_depth) =
+                    build_search(board, history.clone(), &options, stop, &mut tt);
                 // `search_with_info`, not plain `search`: streams an `info`
                 // line after every completed depth, so a GUI watching a
                 // long search sees progress instead of silence until
@@ -101,14 +110,25 @@ where
                 }
                 send(&mut writer, &Response::BestMove(result.best_move));
             }
-            // `Stop`: already handled by `read_commands` setting
-            // `active_stop` directly, the only way to reach a search still
+            // Already handled by `read_commands` setting `active_stop`
+            // directly: that's the only way to reach a search still
             // blocking this loop, so there's nothing left to do here.
-            // `SetOption`: parsed and recognized, but nothing to configure
-            // yet, since a transposition table for `Hash` to actually
-            // resize doesn't exist in this loop until a later change adds
-            // one.
-            Command::Stop | Command::SetOption { .. } => {}
+            Command::Stop => {}
+            // Only `Hash` has any effect right now; any other option name is a
+            // recognized, well-formed command this engine just doesn't act on yet,
+            // per UCI's own ignore-what-you-don't-support convention.
+            Command::SetOption { name, value } => {
+                if name == "Hash" {
+                    // A value that doesn't parse as a number at all is ignored,
+                    // leaving the table untouched, the same convention as an
+                    // unrecognized option name; an in-range-or-not number is
+                    // clamped rather than discarded, honoring the GUI's intent
+                    // for an in-spirit-but-out-of-range request.
+                    if let Some(mb) = value.as_deref().and_then(|v| v.parse::<usize>().ok()) {
+                        tt.resize(mb.clamp(Tt::MIN_HASH_MB, Tt::MAX_HASH_MB));
+                    }
+                }
+            }
             Command::Quit => break,
         }
     }
@@ -182,15 +202,16 @@ fn read_commands<R: BufRead>(
     }
 }
 
-/// Turns `options` into a `Search` (seeded with `history` and `stop`) and
+/// Turns `options` into a `Search` (seeded with `history`, `stop`, and `tt`) and
 /// the `max_depth` to hand `Search::search`.
-fn build_search(
+fn build_search<'a>(
     board: &Board,
     history: Vec<u64>,
     options: &GoOptions,
     stop: Arc<AtomicBool>,
-) -> (Search, u8) {
-    let mut search = Search::new(history).with_stop_flag(stop);
+    tt: &'a mut Tt,
+) -> (Search<'a>, u8) {
+    let mut search = Search::new(history).with_stop_flag(stop).with_tt(tt);
 
     if let Some(nodes) = options.nodes {
         search = search.with_max_nodes(nodes);
