@@ -17,7 +17,14 @@ pub mod pst;
 
 /// A position score in centipawns. Positive favors whoever the score is
 /// relative to: White for `eval_white_pov`, the side to move for `evaluate`.
-pub type Score = i32;
+///
+/// `i16`, not a wider type: material plus piece-square terms never approach
+/// even a fraction of `i16::MAX` (a full board's worth of extra queens from
+/// promotion is still in the low five figures), and [`crate::search::MATE`]'s
+/// own magnitude leaves headroom under it too. Keeping this narrow is what
+/// lets `search::tt::Entry` store a score directly, with nothing to narrow
+/// or widen at the boundary.
+pub type Score = i16;
 
 /// Standard piece values in centipawns, indexed by `Piece::index`. Lives
 /// here rather than as a `Piece::value()` method: what a knight is worth is

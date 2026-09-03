@@ -212,6 +212,45 @@ fn setoption_is_accepted_without_disrupting_the_session() {
     assert!(output.contains("readyok"), "output: {output:?}");
 }
 
+/// An out-of-range `Hash` value (above the `max` `option name Hash` itself advertises)
+/// clamps rather than getting rejected outright: the session, and a search run right
+/// after, both still have to work normally.
+#[test]
+fn setoption_hash_above_the_max_is_clamped_not_rejected() {
+    let output =
+        run_session("setoption name Hash value 999999\nposition startpos\ngo depth 2\nquit\n");
+    assert!(
+        output.lines().any(|line| line.starts_with("bestmove ")),
+        "output: {output:?}"
+    );
+}
+
+/// A `Hash` value that doesn't parse as a number at all is ignored (the table is left
+/// untouched), not a reason to derail the rest of the session.
+#[test]
+fn setoption_hash_with_a_non_numeric_value_is_ignored() {
+    let output = run_session("setoption name Hash value banana\nisready\nquit\n");
+    assert!(output.contains("readyok"), "output: {output:?}");
+}
+
+/// `ucinewgame` clears the transposition table alongside `history`; a search run right
+/// after still has to produce a real move, not something a stale or freshly-cleared
+/// table could derail.
+#[test]
+fn ucinewgame_still_allows_a_normal_search_afterward() {
+    let output = run_session(
+        "position startpos\ngo depth 2\nucinewgame\nposition startpos\ngo depth 2\nquit\n",
+    );
+    let bestmove_count = output
+        .lines()
+        .filter(|line| line.starts_with("bestmove "))
+        .count();
+    assert_eq!(
+        bestmove_count, 2,
+        "both go commands, before and after ucinewgame, must produce a bestmove, output: {output:?}"
+    );
+}
+
 /// `go infinite`'s own doc says "search until `stop`, no depth/time budget
 /// at all"; this is the regression test for the bug where `go_deadline`
 /// parsed `infinite` but never consulted it, so a real GUI's `go infinite

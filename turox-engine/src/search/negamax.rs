@@ -12,6 +12,7 @@ use crate::move_gen::attacks::in_check;
 use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
 use crate::search::draw::is_draw;
+use crate::search::tt::Tt;
 use crate::types::Move;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -44,7 +45,7 @@ pub const MATE: Score = 30_000;
 /// `pub`, not private: `tests/search_props.rs`'s own `naive_quiescence` oracle needs the
 /// identical cap, not a hand-copied literal that could drift out of sync and silently
 /// turn the property test into a comparison between two different search depths.
-pub const MAX_QUIESCENCE_DEPTH: u32 = 8;
+pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 
 /// The safety-margin multiplier `search`'s soft time limit applies to the
 /// previous iteration's own elapsed time, as its estimate of the *next*
@@ -82,7 +83,7 @@ pub struct SearchResult {
     pub score: Score,
     /// The depth actually completed; see the struct doc for when this is
     /// less than the requested `max_depth`.
-    pub depth: u32,
+    pub depth: u8,
     /// Total nodes visited (negamax and quiescence both count) across every
     /// completed and aborted iteration of this call.
     pub nodes: u64,
@@ -107,7 +108,12 @@ enum RootOutcome {
 ///
 /// A struct rather than several parameters threaded through the recursion is what makes
 /// the abort check and the draw check cheap to reach at every node.
-pub struct Search {
+///
+/// `'a` is only ever used by `tt`: everything else here is owned outright. A `Search`
+/// with no [`Search::with_tt`] call never actually borrows anything, so `'a` costs
+/// nothing at most call sites; Rust infers it from context the same way it always does
+/// for an unused generic parameter.
+pub struct Search<'a> {
     nodes: u64,
     /// Hashes of every position on the path leading up to (but not
     /// including) the position currently being searched, per
@@ -134,9 +140,15 @@ pub struct Search {
     /// clone of this same `Arc` before a caller moves `Search` onto its own
     /// search thread, so the main thread can still set it later.
     stop: Arc<AtomicBool>,
+    /// `None` by default (`negamax` searches with no transposition table at all, the same
+    /// as before one existed); set via [`Search::with_tt`]. Borrowed, not owned: the table
+    /// lives in `uci::session::run` (like `history` conceptually does, though `history` is
+    /// actually copied in), so it survives across the separate `Search` a later `go` call
+    /// rebuilds, rather than starting cold every time.
+    tt: Option<&'a mut Tt>,
 }
 
-impl Search {
+impl<'a> Search<'a> {
     /// A new search seeded with `history`: the real game's position hashes
     /// so far, not including the position `search` will be called on. No
     /// deadline or node budget by default, so `search` runs every
@@ -150,6 +162,7 @@ impl Search {
             deadline: None,
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
+            tt: None,
         }
     }
 
@@ -178,6 +191,15 @@ impl Search {
     #[must_use]
     pub fn with_stop_flag(mut self, stop: Arc<AtomicBool>) -> Self {
         self.stop = stop;
+        self
+    }
+
+    /// Gives this search a transposition table to probe/store against in `negamax`.
+    /// Without this, `negamax` searches exactly as if `tt` didn't exist: probing and
+    /// storing are both no-ops when `self.tt` is `None`, not an error condition.
+    #[must_use]
+    pub const fn with_tt(mut self, tt: &'a mut Tt) -> Self {
+        self.tt = Some(tt);
         self
     }
 
@@ -240,7 +262,7 @@ impl Search {
     /// starting each iteration past the first, `ITERATION_TIME_SAFETY_MARGIN`
     /// may also stop the loop early rather than start a doomed one; see its
     /// own doc.
-    pub fn search(&mut self, board: &Board, max_depth: u32) -> SearchResult {
+    pub fn search(&mut self, board: &Board, max_depth: u8) -> SearchResult {
         self.search_with_info(board, max_depth, |_| {})
     }
 
@@ -264,7 +286,7 @@ impl Search {
     pub fn search_with_info<F: FnMut(&SearchResult)>(
         &mut self,
         board: &Board,
-        max_depth: u32,
+        max_depth: u8,
         mut on_iteration_complete: F,
     ) -> SearchResult {
         let mut result = SearchResult {
@@ -343,7 +365,7 @@ impl Search {
     /// trustworthy minimax values; only the one move that was mid-flight
     /// when the abort hit is genuinely unknown, hence `best_so_far` reports
     /// the finished moves' result rather than discarding it wholesale.
-    fn search_root(&mut self, board: &Board, depth: u32) -> RootOutcome {
+    fn search_root(&mut self, board: &Board, depth: u8) -> RootOutcome {
         self.nodes += 1;
         if self.should_abort() {
             return RootOutcome::Aborted { best_so_far: None };
@@ -416,10 +438,10 @@ impl Search {
     /// [`MATE`]'s doc and for keeping `self.history` in step with the
     /// recursion.
     ///
-    /// `ply` is `u16`, not `u32` like `depth`, deliberately: it feeds
-    /// `Score::from(ply)` below, and `Score` is `i32`, so `u16` is the widest
-    /// type that conversion covers losslessly. Widening `ply` to `u32` to
-    /// match `depth` would need an `as` cast right back at that call site.
+    /// `ply` is `u8`, same width as `depth`: both are bounded by the same
+    /// `max_depth` a search was started with, so nothing is lost keeping
+    /// them the same type, and `Score::from(ply)` below stays a plain
+    /// widening conversion either way.
     ///
     /// Returns `None` if `should_abort()` trips; callers must propagate a
     /// `None` up immediately rather than treating it as a real score.
@@ -430,11 +452,23 @@ impl Search {
     /// And an empty move list is checkmate/stalemate (the [`MATE`] formula,
     /// or `0`), a different terminal case from the draw check above it, not
     /// the same `0` for a different reason.
+    ///
+    /// `self.tt` is probed right after those two terminal checks (so a hit doesn't cost
+    /// them, but a draw/terminal score is never confused with a bounded search result the
+    /// table would store), and *before* the `depth == 0` quiescence handoff: a stored
+    /// result from a deeper earlier visit to this same position can still resolve a
+    /// depth-0 node outright, skipping quiescence entirely, which is exactly the kind of
+    /// win a transposition table exists for. Storing happens only on the path that
+    /// actually ran this node's own move loop, keyed on the *original* `alpha`/`beta` this
+    /// call was given, not `alpha` as the loop below narrows it; see `Bound`'s own doc for
+    /// why that distinction matters. A depth-0 node that fell through to `quiescence`
+    /// instead never reaches the store below, matching `Entry.depth`'s own doc: `quiescence`
+    /// has no comparable notion of depth to store one under.
     fn negamax(
         &mut self,
         board: &Board,
-        depth: u32,
-        ply: u16,
+        depth: u8,
+        ply: u8,
         mut alpha: Score,
         beta: Score,
     ) -> Option<Score> {
@@ -456,11 +490,20 @@ impl Search {
             };
         }
 
+        let hash = board.hash();
+        if let Some(entry) = self.tt.as_deref().and_then(|tt| tt.probe(hash)) {
+            if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
+                return Some(score);
+            }
+        }
+
         if depth == 0 {
             return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
+        let original_alpha = alpha;
         let mut max = Score::MIN;
+        let mut best_move = None;
         order_moves(board, &mut moves);
         for &m in &moves {
             self.history.push(board.hash());
@@ -473,6 +516,7 @@ impl Search {
             let score = -score?;
             if score > max {
                 max = score;
+                best_move = Some(m);
             }
 
             if max > alpha {
@@ -482,6 +526,13 @@ impl Search {
                 break;
             }
         }
+
+        if let Some(tt) = self.tt.as_deref_mut() {
+            let best_move =
+                best_move.expect("moves is non-empty, so the loop always finds a best move");
+            tt.store(hash, ply, depth, max, original_alpha, beta, best_move);
+        }
+
         Some(max)
     }
 
@@ -514,7 +565,7 @@ impl Search {
         board: &Board,
         mut alpha: Score,
         beta: Score,
-        qdepth: u32,
+        qdepth: u8,
         moves: Option<MoveList>,
     ) -> Option<Score> {
         self.nodes += 1;
@@ -592,7 +643,7 @@ fn order_moves(board: &Board, moves: &mut MoveList) {
             }
         } else {
             // non captures are considered less important (at this stage)
-            i32::MAX
+            Score::MAX
         }
     };
     moves.sort_unstable_by_key(|a| inv_mvv_lva(a));
