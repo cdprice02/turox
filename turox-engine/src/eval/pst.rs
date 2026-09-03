@@ -91,6 +91,24 @@ const VISUAL_PST: [[Score; 64]; 6] = [
     ],
 ];
 
+/// King endgame table: unlike every other piece, the king's positional
+/// preference flips once material thins out (back rank for safety in the
+/// midgame, the center for activity in the endgame), so it's the one piece
+/// this source publishes a second table for. Same visual-board-order and
+/// `Piece::index`-adjacent convention as [`VISUAL_PST`]; see that constant's
+/// doc.
+#[rustfmt::skip]
+const VISUAL_KING_PST_EG: [Score; 64] = [
+    -50, -40, -30, -20, -20, -30, -40, -50,
+    -30, -20, -10,   0,   0, -10, -20, -30,
+    -30, -10,  20,  30,  30,  20, -10, -30,
+    -30, -10,  30,  40,  40,  30, -10, -30,
+    -30, -10,  30,  40,  40,  30, -10, -30,
+    -30, -10,  20,  30,  30,  20, -10, -30,
+    -30, -30,   0,   0,   0,   0, -30, -30,
+    -50, -30, -30, -30, -30, -30, -30, -50,
+];
+
 /// `piece`'s positional bonus for a piece of `color` sitting on `sq`.
 ///
 /// From that piece's own side's perspective (positive is good for `color`,
@@ -135,4 +153,27 @@ pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
         Color::Black => sq,
     };
     VISUAL_PST[piece.index()][sq.index()]
+}
+
+/// Endgame analogue of [`pst_value`]: `piece`'s positional bonus for a piece
+/// of `color` on `sq`, read from the endgame table instead of the midgame
+/// one.
+///
+/// Only the king has a distinct endgame table (see [`VISUAL_KING_PST_EG`]);
+/// every other piece's positional preference doesn't change as material
+/// comes off the board, so this just forwards to [`pst_value`] for them.
+/// The king case reuses `pst_value`'s own reindex-then-Black-flip match
+/// rather than re-deriving it: the same orientation reasoning documented
+/// there applies unchanged here, only the table underneath differs.
+#[must_use]
+pub const fn pst_value_eg(color: Color, piece: Piece, sq: Square) -> Score {
+    if matches!(piece, Piece::King) {
+        let sq = match color {
+            Color::White => sq.flip_rank(),
+            Color::Black => sq,
+        };
+        VISUAL_KING_PST_EG[sq.index()]
+    } else {
+        pst_value(color, piece, sq)
+    }
 }

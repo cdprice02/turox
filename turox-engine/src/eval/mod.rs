@@ -9,10 +9,11 @@
 //! eval breakdown is readable in White-POV and confusing in side-relative.
 
 use crate::board::Board;
-use crate::eval::pst::pst_value;
+use crate::eval::pst::{pst_value, pst_value_eg};
 use crate::types::Color;
 use crate::Piece;
 
+mod phase;
 pub mod pst;
 
 /// A position score in centipawns. Positive favors whoever the score is
@@ -43,26 +44,35 @@ pub(crate) const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
 /// Material plus piece-square sum from White's perspective: positive means
 /// White is ahead, regardless of who's actually to move.
 ///
-/// For every `(Color, Piece)` pair, sums `PIECE_VALUES[piece] + pst_value`
-/// over each of that color's squares, White's total minus Black's. Iterates
-/// `board.pieces` (a `Bitboard`, so `for sq in ...` walks its set squares),
-/// not `board.piece_at` over `Square::ALL`: the mailbox walk is reserved for
-/// `tests/eval_props.rs`'s independent reference, which this gets checked
-/// against and shouldn't share code with.
+/// Accumulates a midgame and an endgame term together (packed into one
+/// `phase::Tapered` running total) and blends them into a single `Score`
+/// only once, at the end, rather than computing two full passes over the
+/// board and interpolating term-by-term: a piece's midgame and endgame
+/// contributions are already known the moment its square is visited, so
+/// there's no reason to walk the board twice to get them both.
+///
+/// Iterates `board.pieces` (a `Bitboard`, so `for sq in ...` walks its set
+/// squares), not `board.piece_at` over `Square::ALL`: the mailbox walk is
+/// reserved for `tests/eval_props.rs`'s independent reference, which this
+/// gets checked against and shouldn't share code with.
 #[must_use]
 pub fn eval_white_pov(board: &Board) -> Score {
-    let mut score = Score::default();
+    let mut score: phase::Tapered = 0;
     for piece in Piece::ALL {
         for sq in board.pieces(Color::White, piece) {
-            score += PIECE_VALUES[piece.index()];
-            score += pst_value(Color::White, piece, sq);
+            score += phase::pack(
+                PIECE_VALUES[piece.index()] + pst_value(Color::White, piece, sq),
+                PIECE_VALUES[piece.index()] + pst_value_eg(Color::White, piece, sq),
+            );
         }
         for sq in board.pieces(Color::Black, piece) {
-            score -= PIECE_VALUES[piece.index()];
-            score -= pst_value(Color::Black, piece, sq);
+            score -= phase::pack(
+                PIECE_VALUES[piece.index()] + pst_value(Color::Black, piece, sq),
+                PIECE_VALUES[piece.index()] + pst_value_eg(Color::Black, piece, sq),
+            );
         }
     }
-    score
+    phase::interpolate(score, phase::game_phase(board))
 }
 
 /// Side-to-move-relative score: positive means the side to move is ahead.
