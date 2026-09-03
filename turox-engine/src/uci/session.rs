@@ -61,6 +61,7 @@ where
             Command::Uci => {
                 send(&mut writer, &Response::IdName);
                 send(&mut writer, &Response::IdAuthor);
+                send(&mut writer, &Response::OptionHash);
                 send(&mut writer, &Response::UciOk);
             }
             Command::IsReady => send(&mut writer, &Response::ReadyOk),
@@ -98,10 +99,14 @@ where
                 }
                 send(&mut writer, &Response::BestMove(result.best_move));
             }
-            // Already handled by `read_commands` setting `active_stop`
-            // directly: that's the only way to reach a search still
+            // `Stop`: already handled by `read_commands` setting
+            // `active_stop` directly, the only way to reach a search still
             // blocking this loop, so there's nothing left to do here.
-            Command::Stop => {}
+            // `SetOption`: parsed and recognized, but nothing to configure
+            // yet, since a transposition table for `Hash` to actually
+            // resize doesn't exist in this loop until a later change adds
+            // one.
+            Command::Stop | Command::SetOption { .. } => {}
             Command::Quit => break,
         }
     }
@@ -196,13 +201,25 @@ fn build_search(
     (search, max_depth)
 }
 
-/// `movetime`, if given, wins outright. Otherwise, with a real game clock
-/// (`wtime`/`btime`), budgets from *whichever side's clock is actually
-/// running* (`board.side_to_move()`, not always White's) via
-/// `search::time::allocate_time`. Neither present (a bare `go`, `go
-/// infinite`, or `go depth N` with no clock fields) means no deadline at
-/// all: depth, node count, and `stop` are what bound the search instead.
+/// `infinite`, checked first, wins outright: per UCI, `go infinite` means
+/// search until `stop` alone, with no depth/time budget at all, so it has
+/// to bypass `movetime` and the clock fields entirely, not just fall
+/// through to them being absent. A real GUI can and does send `go
+/// infinite` alongside `wtime`/`btime` (both are simply always attached to
+/// `go`, independent of whether `infinite` is also set), so this can't be
+/// "no deadline" merely as a side effect of the clock fields happening to
+/// be unset.
+///
+/// Otherwise, `movetime`, if given, wins outright. Failing that, with a
+/// real game clock (`wtime`/`btime`), budgets from *whichever side's
+/// clock is actually running* (`board.side_to_move()`, not always
+/// White's) via `search::time::allocate_time`. None of the above (a bare
+/// `go`, or `go depth N` with no clock fields) means no deadline at all:
+/// depth, node count, and `stop` are what bound the search instead.
 fn go_deadline(board: &Board, options: &GoOptions) -> Option<Instant> {
+    if options.infinite {
+        return None;
+    }
     if let Some(movetime) = options.movetime {
         return Some(Instant::now() + movetime);
     }

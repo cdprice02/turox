@@ -4,7 +4,10 @@
 //! works in isolation; a genuine integration test, so it lives here rather
 //! than as a unit test alongside any one of those pieces.
 
-use std::io::Cursor;
+use std::io::{BufReader, Cursor, Write};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use turox_engine::board::Board;
 use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::Engine;
@@ -25,6 +28,10 @@ fn uci_command_gets_identification_and_uciok() {
     assert!(output.contains("id name turox"), "output: {output:?}");
     assert!(
         output.contains("id author Carson Price"),
+        "output: {output:?}"
+    );
+    assert!(
+        output.contains("option name Hash type spin default 16 min 1 max 1024"),
         "output: {output:?}"
     );
     assert!(output.contains("uciok"), "output: {output:?}");
@@ -168,4 +175,99 @@ fn session_ends_cleanly_on_eof_with_no_explicit_quit() {
 fn malformed_lines_are_ignored_without_disrupting_the_session() {
     let output = run_session("not a uci command\n\x00\x00\nisready\ngarbage again\nquit\n");
     assert!(output.contains("readyok"), "output: {output:?}");
+}
+
+/// `setoption` isn't wired to anything yet (a transposition table for
+/// `Hash` to resize doesn't exist), but it has to be a recognized command
+/// the session accepts without derailing whatever comes after it, the same
+/// way a genuinely malformed line is ignored above.
+#[test]
+fn setoption_is_accepted_without_disrupting_the_session() {
+    let output = run_session("setoption name Hash value 64\nisready\nquit\n");
+    assert!(output.contains("readyok"), "output: {output:?}");
+}
+
+/// `go infinite`'s own doc says "search until `stop`, no depth/time budget
+/// at all"; this is the regression test for the bug where `go_deadline`
+/// parsed `infinite` but never consulted it, so a real GUI's `go infinite
+/// wtime ... btime ...` (both clock fields are simply always attached to
+/// `go`, independent of `infinite`) got a clock-derived deadline anyway.
+///
+/// Drives the session over a real OS pipe rather than `run_session`'s
+/// in-memory `Cursor`: this test needs to control *when* `stop` arrives
+/// relative to the search actually starting, which an upfront buffer can't
+/// do (the reader thread would race the main thread to decide whether
+/// `stop` lands before or after the search begins, `go_depth_streams_an_
+/// info_line_per_completed_depth` above documents that exact race for a
+/// bounded search). A real pipe blocks the reader thread on `read_line`
+/// until bytes are actually written, so this test's own `sleep` reliably
+/// happens *during* the search rather than racing its start.
+///
+/// `wtime`/`btime` are deliberately tiny (1 second): if the bug were still
+/// present, `allocate_time` would hand back a deadline on that same order,
+/// and the sleep below (comfortably shorter) would still catch a
+/// `bestmove` that arrived on its own before `stop` was ever sent.
+#[test]
+fn go_infinite_ignores_the_clock_and_waits_for_stop() {
+    let (reader, mut writer) = std::io::pipe().expect("creating an OS pipe should not fail");
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    let mut engine = Engine::new();
+    let session_output = SharedOutput(Arc::clone(&output));
+    let handle = thread::spawn(move || {
+        engine.run_with_io(BufReader::new(reader), session_output);
+    });
+
+    writer
+        .write_all(b"position startpos\ngo infinite wtime 1000 btime 1000\n")
+        .expect("writing to the pipe should not fail");
+
+    thread::sleep(Duration::from_millis(300));
+    assert!(
+        !contains_bestmove(&output),
+        "go infinite must not return on its own before `stop`, even with a real \
+         game clock attached, output so far: {:?}",
+        String::from_utf8_lossy(&output.lock().expect("mutex not poisoned"))
+    );
+
+    writer
+        .write_all(b"stop\nquit\n")
+        .expect("writing to the pipe should not fail");
+    drop(writer);
+
+    handle.join().expect("session thread should not panic");
+    assert!(
+        contains_bestmove(&output),
+        "go infinite must return a bestmove once `stop` is sent, output: {:?}",
+        String::from_utf8_lossy(&output.lock().expect("mutex not poisoned"))
+    );
+}
+
+fn contains_bestmove(output: &Arc<Mutex<Vec<u8>>>) -> bool {
+    output
+        .lock()
+        .expect("mutex not poisoned")
+        .windows(b"bestmove ".len())
+        .any(|window| window == b"bestmove ")
+}
+
+/// `Engine::run_with_io` takes its writer by value; this shares one
+/// `Vec<u8>` between the session thread (which writes) and the test thread
+/// (which reads it mid-flight, before the session has finished) via a
+/// `Mutex` rather than requiring the session to finish before its output
+/// is readable at all.
+struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedOutput {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("mutex not poisoned")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

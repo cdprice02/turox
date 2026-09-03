@@ -18,13 +18,12 @@ use std::time::Duration;
 /// known start, never an incremental diff from wherever the engine currently is, so
 /// resolving it needs nothing beyond the line itself.
 ///
-/// Deliberately doesn't model the *entire* UCI spec: `debug`, `setoption`, `register`,
-/// `ponderhit`, and `go`'s `ponder`/`searchmoves`/`mate` sub-options have no effect on
-/// this engine (no debug logging, no configurable options yet, no pondering, no
-/// restricted-move or mate-distance search modes). `parse` returning `None` for a line
-/// built from one of these isn't a parse failure to report anywhere: UCI's own spec
-/// already treats input the engine doesn't act on as something to ignore, not reject, so
-/// this is that same behavior, not a gap.
+/// Deliberately doesn't model the *entire* UCI spec: `debug`, `register`, `ponderhit`, and
+/// `go`'s `ponder`/`searchmoves`/`mate` sub-options have no effect on this engine (no debug
+/// logging, no pondering, no restricted-move or mate-distance search modes). `parse`
+/// returning `None` for a line built from one of these isn't a parse failure to report
+/// anywhere: UCI's own spec already treats input the engine doesn't act on as something to
+/// ignore, not reject, so this is that same behavior, not a gap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// `uci`: identify ourselves and switch to UCI mode.
@@ -40,6 +39,21 @@ pub enum Command {
     Position(Board),
     /// `go [...]`: start searching under `GoOptions`.
     Go(GoOptions),
+    /// `setoption name <name> [value <value>]`: configure an engine option.
+    /// `name`/`value` can each be multiple whitespace-separated words per
+    /// the UCI spec (an option like `Debug Log File` is a real example),
+    /// so both are collected and rejoined with single spaces rather than
+    /// kept as separate tokens. An option this engine doesn't recognize
+    /// still parses to a real `Command`; the ignore-what-you-don't-support
+    /// decision belongs to whatever handles this command, not to parsing.
+    SetOption {
+        /// The option's name, e.g. `Hash`.
+        name: String,
+        /// The option's new value, e.g. `"64"`. `None` for a value-less
+        /// `setoption name <name>` line (some UCI options, like a `button`
+        /// type, never take one).
+        value: Option<String>,
+    },
     /// `stop`: stop searching and report the best move found so far.
     Stop,
     /// `quit`: exit.
@@ -102,6 +116,7 @@ pub fn parse(line: &str) -> Option<Command> {
         "ucinewgame" => Some(Command::NewGame),
         "position" => parse_position(tokens),
         "go" => parse_go(tokens),
+        "setoption" => parse_set_option(tokens),
         "stop" => Some(Command::Stop),
         "quit" => Some(Command::Quit),
         _ => None,
@@ -205,4 +220,31 @@ fn parse_go<'a>(mut tokens: impl Iterator<Item = &'a str>) -> Option<Command> {
         }
     }
     Some(Command::Go(options))
+}
+
+/// `setoption name <name> [value <value>]`, everything after the
+/// `setoption` token itself.
+///
+/// The `name` keyword is required (an unconditional `?` below): unlike
+/// `go`'s sub-options, there's no meaningful `SetOption` without one.
+/// Everything up to `value` (or the end of the line, if there's no
+/// `value`) is the name; everything after `value` is, well, the value.
+/// Multi-word names/values are real (`Debug Log File`, or a `string`-type
+/// value containing spaces), so both are collected token by token and
+/// rejoined with `join(" ")` rather than assumed to be a single token.
+fn parse_set_option<'a>(mut tokens: impl Iterator<Item = &'a str>) -> Option<Command> {
+    if tokens.next()? != "name" {
+        return None;
+    }
+
+    let rest: Vec<&str> = tokens.collect();
+    let (name_words, value) = rest.iter().position(|&token| token == "value").map_or_else(
+        || (&rest[..], None),
+        |i| (&rest[..i], Some(rest[i + 1..].join(" "))),
+    );
+
+    Some(Command::SetOption {
+        name: name_words.join(" "),
+        value,
+    })
 }

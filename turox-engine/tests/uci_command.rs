@@ -190,6 +190,58 @@ fn go_ignores_an_unrecognized_token_without_losing_the_rest_of_the_line() {
     );
 }
 
+#[test]
+fn parses_setoption_with_a_value() {
+    assert_eq!(
+        parse("setoption name Hash value 64"),
+        Some(Command::SetOption {
+            name: "Hash".to_string(),
+            value: Some("64".to_string()),
+        })
+    );
+}
+
+#[test]
+fn parses_setoption_with_no_value() {
+    assert_eq!(
+        parse("setoption name Ponder"),
+        Some(Command::SetOption {
+            name: "Ponder".to_string(),
+            value: None,
+        })
+    );
+}
+
+/// Both `name` and `value` are real multi-word UCI options in practice
+/// (`Debug Log File`, a `string`-type value containing spaces); this
+/// checks both sides of the `value` keyword collect every token they're
+/// given, not just the first one.
+#[test]
+fn parses_setoption_with_a_multi_word_name_and_value() {
+    assert_eq!(
+        parse("setoption name Debug Log File value C:\\temp log file.txt"),
+        Some(Command::SetOption {
+            name: "Debug Log File".to_string(),
+            value: Some("C:\\temp log file.txt".to_string()),
+        })
+    );
+}
+
+/// An option this engine doesn't recognize still parses to a real
+/// `Command::SetOption`: whether to act on it is downstream of parsing,
+/// not parsing's own job (`parse`'s module doc makes the same point about
+/// unrecognized `go` sub-options).
+#[test]
+fn parses_setoption_for_an_unrecognized_option_name() {
+    assert_eq!(
+        parse("setoption name UCI_Chess960 value true"),
+        Some(Command::SetOption {
+            name: "UCI_Chess960".to_string(),
+            value: Some("true".to_string()),
+        })
+    );
+}
+
 // ---- Malformed input: never panics, and never guesses ----
 
 #[test]
@@ -207,6 +259,8 @@ fn rejects_garbage_without_panicking() {
         "go depth",                          // keyword with no value
         "go depth abc",                      // not a number
         "go movetime abc",
+        "setoption",          // missing `name`
+        "setoption value 64", // `value` with no `name`
         "€ from_uci garbage €",
     ] {
         assert_eq!(parse(bad), None, "expected None for {bad:?}");
