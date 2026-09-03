@@ -68,11 +68,15 @@ const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 /// `depth` can be less than the requested `max_depth` if the search was aborted
 /// (deadline, node budget, or `request_stop`) before a deeper iteration finished; see
 /// `Search::search`'s doc for why a partial iteration's own result is discarded rather
-/// than returned.
+/// than returned. `depth` is `0` specifically when even the first iteration never
+/// finished: there, `best_move` still carries the best move found among whatever moves
+/// had already fully resolved before the abort, since that's the only case with no
+/// earlier completed iteration to fall back on instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchResult {
-    /// `None` only when the position handed to `search` itself has no legal
-    /// moves (checkmate or stalemate); there is nothing to search.
+    /// `None` only when the position handed to `search` has no legal moves at all
+    /// (checkmate or stalemate); every other case, including an aborted first
+    /// iteration, still has a real move to report.
     pub best_move: Option<Move>,
     /// Side-to-move-relative, same convention as [`evaluate`].
     pub score: Score,
@@ -82,6 +86,20 @@ pub struct SearchResult {
     /// Total nodes visited (negamax and quiescence both count) across every
     /// completed and aborted iteration of this call.
     pub nodes: u64,
+}
+
+/// What [`Search::search_root`] found for one depth: either the full move loop finished,
+/// or an abort cut it short partway through.
+enum RootOutcome {
+    /// The move loop finished every move at this depth. `best_move` is `None` only for
+    /// the genuine terminal case: no legal moves at all.
+    Completed(Score, Option<Move>),
+    /// The abort hit before every move at this depth could be tried. `best_so_far` is
+    /// the best move and score among moves whose subtree had already fully resolved
+    /// before the interruption, if any had; `None` when the abort landed before the
+    /// move loop could report anything (the top-of-function check, or the depth-0
+    /// quiescence-only path, which has no per-move loop to have made progress in).
+    Aborted { best_so_far: Option<(Score, Move)> },
 }
 
 /// Mutable search state threaded through one [`Search::search`] call: the node counter
@@ -212,12 +230,16 @@ impl Search {
     /// with a no-op callback; see that method to observe each iteration's
     /// result as it lands rather than only the final one.
     ///
-    /// An iteration interrupted partway through (`search_root` returns
-    /// `None`) must not overwrite the previous iteration's result;
-    /// returning a partial iteration's in-progress best move is the
-    /// classic bug here. Before starting each iteration past the first,
-    /// `ITERATION_TIME_SAFETY_MARGIN` may also stop the loop early rather
-    /// than start a doomed one; see its own doc.
+    /// An iteration interrupted partway through (`search_root` aborts)
+    /// must not overwrite the previous iteration's result; returning a
+    /// partial iteration's in-progress best move as if it were a completed
+    /// depth is the classic bug here. But when the *first* iteration
+    /// aborts, there is no previous completed iteration to fall back on,
+    /// and a position with legal moves must never report `best_move: None`
+    /// regardless; see `search_with_info`'s handling of that case. Before
+    /// starting each iteration past the first, `ITERATION_TIME_SAFETY_MARGIN`
+    /// may also stop the loop early rather than start a doomed one; see its
+    /// own doc.
     pub fn search(&mut self, board: &Board, max_depth: u32) -> SearchResult {
         self.search_with_info(board, max_depth, |_| {})
     }
@@ -229,6 +251,14 @@ impl Search {
     /// threading an `Option<impl FnMut>` through `search` itself) so
     /// existing callers that only want a final result (`benches/search.rs`,
     /// most of `tests/search_props.rs`) don't need to know callbacks exist.
+    ///
+    /// `on_iteration_complete` only fires for iterations that actually ran
+    /// to completion. If depth 1 itself aborts, `result` falls back to
+    /// whatever best move `search_root` had already resolved before the
+    /// abort (see [`RootOutcome::Aborted`]) instead of the zeroed-out
+    /// initial value, since a position with legal moves must never report
+    /// `best_move: None`; that fallback is reported at `depth: 0`, since
+    /// depth 1 didn't actually finish, and does not reach the callback.
     pub fn search_with_info<F: FnMut(&SearchResult)>(
         &mut self,
         board: &Board,
@@ -257,8 +287,7 @@ impl Search {
 
             let iteration_started = self.deadline.is_some().then(Instant::now);
             match self.search_root(board, depth) {
-                None => break,
-                Some((score, best_move)) => {
+                RootOutcome::Completed(score, best_move) => {
                     result = SearchResult {
                         best_move,
                         score,
@@ -266,6 +295,23 @@ impl Search {
                         nodes: self.nodes(),
                     };
                     on_iteration_complete(&result);
+                }
+                RootOutcome::Aborted { best_so_far } => {
+                    // Only depth 1 aborting can reach here with `result.best_move`
+                    // still `None`: every later depth has a completed iteration
+                    // already sitting in `result` to fall back on instead, per
+                    // this method's own doc.
+                    if result.best_move.is_none() {
+                        if let Some((score, best_move)) = best_so_far {
+                            result = SearchResult {
+                                best_move: Some(best_move),
+                                score,
+                                depth: 0,
+                                nodes: self.nodes(),
+                            };
+                        }
+                    }
+                    break;
                 }
             }
             if let Some(started) = iteration_started {
@@ -284,33 +330,38 @@ impl Search {
     /// already a draw, an interior node can just return `0` and stop (see
     /// `negamax`'s own doc), but the root still needs a real move to hand
     /// back to UCI so play can continue, so it generates and orders the
-    /// move list here instead. `Some((0, None))` stays reserved for the
+    /// move list here instead. `Completed(0, None)` stays reserved for the
     /// true terminal case below: no legal moves at all.
     ///
-    /// Returns `None` if the search was aborted before every move at this
-    /// depth could be tried; `search` discards a `None` result rather than
-    /// returning a partial best move.
-    fn search_root(&mut self, board: &Board, depth: u32) -> Option<(Score, Option<Move>)> {
+    /// Returns [`RootOutcome::Aborted`] if the search was interrupted
+    /// before every move at this depth could be tried. Moves already tried
+    /// only ever update `max`/`best_move` after their subtree search
+    /// returns a real score, never from a partially-searched one, so
+    /// whatever `max`/`best_move` hold at the moment of abort are still
+    /// trustworthy minimax values; only the one move that was mid-flight
+    /// when the abort hit is genuinely unknown, hence `best_so_far` reports
+    /// the finished moves' result rather than discarding it wholesale.
+    fn search_root(&mut self, board: &Board, depth: u32) -> RootOutcome {
         self.nodes += 1;
         if self.should_abort() {
-            return None;
+            return RootOutcome::Aborted { best_so_far: None };
         }
 
         if is_draw(board, &self.history, board.hash()) {
             let mut drawn_moves = legal_moves(board);
             if drawn_moves.is_empty() {
-                return Some((0, None));
+                return RootOutcome::Completed(0, None);
             }
             order_moves(board, &mut drawn_moves);
-            return Some((0, Some(drawn_moves.as_slice()[0])));
+            return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
 
         let mut moves = legal_moves(board);
         if moves.is_empty() {
             return if in_check(board, board.side_to_move()) {
-                Some((-MATE, None))
+                RootOutcome::Completed(-MATE, None)
             } else {
-                Some((0, None))
+                RootOutcome::Completed(0, None)
             };
         }
 
@@ -319,10 +370,11 @@ impl Search {
 
         // probably not necessary, but is technically possible by definition of depth being a u32 (it could be 0 even on this root step)
         if depth == 0 {
-            return Some((
-                self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves))?,
-                None,
-            ));
+            return self
+                .quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves))
+                .map_or(RootOutcome::Aborted { best_so_far: None }, |score| {
+                    RootOutcome::Completed(score, None)
+                });
         }
 
         let mut max = Score::MIN;
@@ -336,7 +388,11 @@ impl Search {
 
             self.history.pop();
 
-            let score = -score?;
+            let Some(score) = score else {
+                let best_so_far = best_move.map(|m| (max, m));
+                return RootOutcome::Aborted { best_so_far };
+            };
+            let score = -score;
             if score > max {
                 max = score;
                 best_move = Some(m);
@@ -349,7 +405,7 @@ impl Search {
                 break;
             }
         }
-        Some((max, best_move))
+        RootOutcome::Completed(max, best_move)
     }
 
     /// Fail-soft negamax with alpha-beta pruning: on a beta cutoff, returns

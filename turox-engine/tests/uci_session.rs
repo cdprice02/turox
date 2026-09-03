@@ -116,6 +116,31 @@ fn drawn_root_position_still_returns_a_real_bestmove() {
     );
 }
 
+/// A root position where depth 1 itself doesn't finish inside the node
+/// budget still has to produce a real `bestmove`, not `0000`: distinct from
+/// `drawn_root_position_still_returns_a_real_bestmove` above, which starts
+/// from a full move budget, this is any root with the budget expiring
+/// before the first iteration completes. `go nodes 1000` on this position
+/// is short of the 2376 nodes depth 1 actually costs here (confirmed via
+/// `go nodes 3000` returning a real move), so the first iteration always
+/// aborts partway through.
+#[test]
+fn interrupted_first_iteration_still_returns_a_real_bestmove() {
+    let output = run_session(concat!(
+        "position fen r1bqk2r/ppp2ppp/2n5/3np1N1/1bBP4/2P5/PP3PPP/RNBQK2R b KQkq - 0 1\n",
+        "go nodes 1000\n",
+        "quit\n",
+    ));
+    let bestmove_line = output
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .unwrap_or_else(|| panic!("no bestmove line in output: {output:?}"));
+    assert_ne!(
+        bestmove_line, "bestmove 0000",
+        "depth 1 aborting before it completes must not report the null move, output: {output:?}"
+    );
+}
+
 /// `session::run` streams an `info depth` line after every completed
 /// iteration, not just the final one. `go depth 3` with no deadline
 /// completes deterministically, so this counts exactly three lines rather

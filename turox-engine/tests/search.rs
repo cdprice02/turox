@@ -159,6 +159,54 @@ fn threefold_repetition_at_root_still_returns_a_legal_move() {
     assert!(legal_moves(&board).as_slice().contains(&best_move));
 }
 
+/// When depth 1 itself is the iteration that gets interrupted, there is no
+/// earlier completed iteration to fall back on the way
+/// `interrupted_iteration_keeps_the_last_completed_result` below relies on;
+/// `search` still must not report `best_move: None`, since real legal moves
+/// exist.
+///
+/// `should_abort` only actually samples `max_nodes` every 2048th node (its
+/// own doc comment), so a budget merely one short of the true cost, the
+/// trick the sibling test below uses, doesn't reliably land mid-loop: for a
+/// tree under 2048 nodes total, that checkpoint is never reached at all and
+/// the search just runs to completion regardless of the budget. This
+/// position is the one from the issue that exposed this bug specifically
+/// because its depth-1 tree exceeds 2048 nodes; budgeting half its true
+/// cost keeps the next 2048-node checkpoint above the budget yet still
+/// strictly below the tree's actual size, so the abort is real and
+/// deterministic without needing to know precisely where that checkpoint
+/// lands.
+#[test]
+fn interrupted_first_iteration_still_returns_a_partial_bestmove() {
+    let board =
+        Board::try_from_fen("r1bqk2r/ppp2ppp/2n5/3np1N1/1bBP4/2P5/PP3PPP/RNBQK2R b KQkq - 0 1")
+            .expect("valid FEN");
+
+    let unbounded = Search::new(Vec::new()).search(&board, 1);
+    assert_eq!(
+        unbounded.depth, 1,
+        "sanity check: an unbounded depth-1 search must complete depth 1"
+    );
+    assert!(
+        unbounded.nodes > 2048,
+        "this test relies on depth 1's own tree crossing at least one \
+         2048-node checkpoint past the halfway budget below; got {} nodes",
+        unbounded.nodes
+    );
+
+    let mut bounded = Search::new(Vec::new()).with_max_nodes(unbounded.nodes / 2);
+    let result = bounded.search(&board, 1);
+
+    let best_move = result
+        .best_move
+        .expect("depth 1 aborted, but some moves fully resolved before the abort hit");
+    assert_eq!(
+        result.depth, 0,
+        "depth 1 never actually finished, so the fallback reports depth 0, not 1"
+    );
+    assert!(legal_moves(&board).as_slice().contains(&best_move));
+}
+
 /// Iterative deepening must return the last *completed* iteration's result,
 /// not a deeper iteration's partial one. `with_max_nodes` makes this
 /// deterministic and repeatable: a wall-clock deadline can't reliably land
