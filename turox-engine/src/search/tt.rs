@@ -65,7 +65,6 @@ impl Entry {
     /// adjustment `Tt::store` applied before narrowing this entry's own `score`; see that
     /// method's doc for why the adjustment exists at all.
     #[must_use]
-    #[allow(clippy::todo, reason = "stub: signature settled, body still to write")]
     pub fn cutoff_score(
         &self,
         min_depth: u32,
@@ -73,17 +72,21 @@ impl Entry {
         beta: Score,
         ply: u16,
     ) -> Option<Score> {
-        let _ = (min_depth, alpha, beta, ply);
-        todo!("depth/bound eligibility, then undo the ply adjustment on `self.score`")
+        if u32::from(self.depth) < min_depth {
+            return None;
+        }
+        let score = Score::from(self.score) + Score::from(ply);
+        match self.bound {
+            Bound::Exact => Some(score),
+            Bound::LowerBound if score >= beta => Some(score),
+            Bound::UpperBound if score <= alpha => Some(score),
+            Bound::UpperBound | Bound::LowerBound => None,
+        }
     }
 }
 
 /// A fixed-size, always-replace transposition table.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "written by `new`/`store`, read by `probe`; all three are still `todo!()` stubs"
-)]
 pub struct Tt {
     entries: Vec<Option<Entry>>,
     mask: u64,
@@ -94,26 +97,30 @@ impl Tt {
     /// largest power-of-two entry count that fits, so a lookup's index is a plain `key &
     /// mask`, never a division or modulo.
     #[must_use]
-    #[allow(clippy::todo, reason = "stub: signature settled, body still to write")]
     pub fn new(hash_mb: usize) -> Self {
-        let _ = hash_mb;
-        todo!("compute the power-of-two entry count from `hash_mb`, size `entries`, derive `mask`")
+        let bytes = hash_mb * 1024 * 1024;
+        let entry_size = std::mem::size_of::<Option<Entry>>();
+        let count = u64::try_from(bytes / entry_size).unwrap_or(u64::MAX); // saturate to u64::MAX if the caller asked for more than that
+        let pow2_count = count.next_power_of_two() >> 1; // round down to the largest power of two
+        let mask = pow2_count - 1;
+        let pow2_count = usize::try_from(pow2_count).unwrap_or(usize::MAX); // saturate to usize::MAX if the caller asked for more than that
+        Self {
+            entries: vec![None; pow2_count],
+            mask,
+        }
     }
 
     /// Rebuilds this table at a new size, discarding every existing entry. What a GUI's
     /// `setoption name Hash value <n>` drives.
-    #[allow(clippy::todo, reason = "stub: signature settled, body still to write")]
     pub fn resize(&mut self, hash_mb: usize) {
-        let _ = hash_mb;
-        todo!("replace `self` with a freshly sized table")
+        *self = Self::new(hash_mb);
     }
 
     /// Wipes every entry without changing the table's size. What `ucinewgame` drives,
     /// deliberately distinct from `resize`: the size isn't changing, only what's cached
     /// from a game that's now over.
-    #[allow(clippy::todo, reason = "stub: signature settled, body still to write")]
     pub fn clear(&mut self) {
-        todo!("reset every slot to empty")
+        self.entries.fill(None);
     }
 
     /// Looks up `key`, returning the entry stored there only if its own `key` actually
@@ -121,11 +128,17 @@ impl Tt {
     /// different position can and will land on the same index. Whether the entry found
     /// this way can resolve the probing node outright is [`Entry::cutoff_score`]'s
     /// question, not this method's; this only answers "what, if anything, is here."
+    ///
+    /// # Panics
+    ///
+    /// Never panics: the `expect` is safe because the `filter` already checked for `Some`.
     #[must_use]
-    #[allow(clippy::todo, reason = "stub: signature settled, body still to write")]
     pub fn probe(&self, key: u64) -> Option<Entry> {
-        let _ = key;
-        todo!("compute the index from `key & self.mask`, return the slot only on a real key match")
+        self.entries
+            .iter()
+            .filter(|&entry| entry.is_some_and(|e| e.key == key & self.mask))
+            .map(|entry| entry.expect("filter already checked for `Some`"))
+            .next()
     }
 
     /// Records `key`'s search result at `ply` (distance from the root): `score` is
@@ -141,7 +154,6 @@ impl Tt {
                   is derived from; free to regroup into a params struct while implementing \
                   if that reads better"
     )]
-    #[allow(clippy::todo, reason = "stub: signature settled, body still to write")]
     pub fn store(
         &mut self,
         key: u64,
@@ -152,7 +164,21 @@ impl Tt {
         beta: Score,
         mv: Move,
     ) {
-        let _ = (key, ply, depth, score, alpha, beta, mv);
-        todo!("derive `Bound`, ply-adjust and narrow `score`, write the slot at `key & self.mask`")
+        let bound = if score <= alpha {
+            Bound::UpperBound
+        } else if score >= beta {
+            Bound::LowerBound
+        } else {
+            Bound::Exact
+        };
+        let entry = Entry {
+            key: key & self.mask,
+            mv: mv.bits(),
+            score: (score - Score::from(ply)) as i16, // ply-adjusted and narrowed to i16
+            depth: depth as u8, // narrowing to u8 is safe: depth is never more than 255 plies in a real game
+            bound,
+        };
+        let index = (key & self.mask) as usize;
+        self.entries[index] = Some(entry);
     }
 }

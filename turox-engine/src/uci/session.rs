@@ -21,6 +21,7 @@
 
 use crate::board::Board;
 use crate::search::time::allocate_time;
+use crate::search::tt::Tt;
 use crate::search::{Search, SearchResult};
 use crate::types::Color;
 use crate::uci::{self, Command, GoOptions, Response};
@@ -55,6 +56,7 @@ where
     let reader_handle = thread::spawn(move || read_commands(reader, &tx, &reader_stop));
 
     let mut history: Vec<u64> = Vec::new();
+    // let mut tt = Tt::new(16); // 16 MiB, a reasonable default for now; a GUI can resize it later
 
     for command in rx {
         match command {
