@@ -21,6 +21,15 @@ pub enum Response {
     IdName,
     /// `id author Carson Price`.
     IdAuthor,
+    /// `option name Hash type spin default 16 min 1 max 1024`: advertises
+    /// the transposition table size, in MB, a GUI can configure via
+    /// `setoption`. Carries no data, like `IdName`/`IdAuthor`: there's
+    /// exactly one option to advertise right now, not something a caller
+    /// supplies per call. `1024` (1 GB) is a generous ceiling for a
+    /// single-threaded engine with no lazy-SMP to productively fill a
+    /// larger table; `1` is a floor that still rounds down to a large
+    /// power-of-two entry count, never zero.
+    OptionHash,
     /// `uciok`: done identifying, ready to receive commands.
     UciOk,
     /// `readyok`: reply to `isready`.
@@ -95,6 +104,9 @@ impl fmt::Display for Response {
         match self {
             Self::IdName => write!(f, "id name turox"),
             Self::IdAuthor => write!(f, "id author Carson Price"),
+            Self::OptionHash => {
+                write!(f, "option name Hash type spin default 16 min 1 max 1024")
+            }
             Self::UciOk => write!(f, "uciok"),
             Self::ReadyOk => write!(f, "readyok"),
             Self::BestMove(m) => {
@@ -184,6 +196,14 @@ mod tests {
     fn id_name_and_author() {
         assert_eq!(Response::IdName.to_string(), "id name turox");
         assert_eq!(Response::IdAuthor.to_string(), "id author Carson Price");
+    }
+
+    #[test]
+    fn option_hash() {
+        assert_eq!(
+            Response::OptionHash.to_string(),
+            "option name Hash type spin default 16 min 1 max 1024"
+        );
     }
 
     #[test]
