@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 /// with a real time/node/`stop` budget, a search should never actually
 /// reach it. `go infinite` and a bare `go` (no depth given at all) both
 /// use it too, relying on `stop` alone to end the search.
-const DEFAULT_MAX_DEPTH: u32 = 64;
+const DEFAULT_MAX_DEPTH: u8 = 64;
 
 /// Drives `board` from `reader`, writing UCI responses to `writer`, until
 /// `quit` arrives or `reader` runs out of input. `reader` moves onto its
@@ -189,7 +189,7 @@ fn build_search(
     history: Vec<u64>,
     options: &GoOptions,
     stop: Arc<AtomicBool>,
-) -> (Search, u32) {
+) -> (Search, u8) {
     let mut search = Search::new(history).with_stop_flag(stop);
 
     if let Some(nodes) = options.nodes {

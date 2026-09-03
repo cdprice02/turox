@@ -44,7 +44,7 @@ pub const MATE: Score = 30_000;
 /// `pub`, not private: `tests/search_props.rs`'s own `naive_quiescence` oracle needs the
 /// identical cap, not a hand-copied literal that could drift out of sync and silently
 /// turn the property test into a comparison between two different search depths.
-pub const MAX_QUIESCENCE_DEPTH: u32 = 8;
+pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 
 /// The safety-margin multiplier `search`'s soft time limit applies to the
 /// previous iteration's own elapsed time, as its estimate of the *next*
@@ -82,7 +82,7 @@ pub struct SearchResult {
     pub score: Score,
     /// The depth actually completed; see the struct doc for when this is
     /// less than the requested `max_depth`.
-    pub depth: u32,
+    pub depth: u8,
     /// Total nodes visited (negamax and quiescence both count) across every
     /// completed and aborted iteration of this call.
     pub nodes: u64,
@@ -240,7 +240,7 @@ impl Search {
     /// starting each iteration past the first, `ITERATION_TIME_SAFETY_MARGIN`
     /// may also stop the loop early rather than start a doomed one; see its
     /// own doc.
-    pub fn search(&mut self, board: &Board, max_depth: u32) -> SearchResult {
+    pub fn search(&mut self, board: &Board, max_depth: u8) -> SearchResult {
         self.search_with_info(board, max_depth, |_| {})
     }
 
@@ -264,7 +264,7 @@ impl Search {
     pub fn search_with_info<F: FnMut(&SearchResult)>(
         &mut self,
         board: &Board,
-        max_depth: u32,
+        max_depth: u8,
         mut on_iteration_complete: F,
     ) -> SearchResult {
         let mut result = SearchResult {
@@ -343,7 +343,7 @@ impl Search {
     /// trustworthy minimax values; only the one move that was mid-flight
     /// when the abort hit is genuinely unknown, hence `best_so_far` reports
     /// the finished moves' result rather than discarding it wholesale.
-    fn search_root(&mut self, board: &Board, depth: u32) -> RootOutcome {
+    fn search_root(&mut self, board: &Board, depth: u8) -> RootOutcome {
         self.nodes += 1;
         if self.should_abort() {
             return RootOutcome::Aborted { best_so_far: None };
@@ -416,10 +416,10 @@ impl Search {
     /// [`MATE`]'s doc and for keeping `self.history` in step with the
     /// recursion.
     ///
-    /// `ply` is `u16`, not `u32` like `depth`, deliberately: it feeds
-    /// `Score::from(ply)` below, and `Score` is `i32`, so `u16` is the widest
-    /// type that conversion covers losslessly. Widening `ply` to `u32` to
-    /// match `depth` would need an `as` cast right back at that call site.
+    /// `ply` is `u8`, same width as `depth`: both are bounded by the same
+    /// `max_depth` a search was started with, so nothing is lost keeping
+    /// them the same type, and `Score::from(ply)` below stays a plain
+    /// widening conversion either way.
     ///
     /// Returns `None` if `should_abort()` trips; callers must propagate a
     /// `None` up immediately rather than treating it as a real score.
@@ -433,8 +433,8 @@ impl Search {
     fn negamax(
         &mut self,
         board: &Board,
-        depth: u32,
-        ply: u16,
+        depth: u8,
+        ply: u8,
         mut alpha: Score,
         beta: Score,
     ) -> Option<Score> {
@@ -514,7 +514,7 @@ impl Search {
         board: &Board,
         mut alpha: Score,
         beta: Score,
-        qdepth: u32,
+        qdepth: u8,
         moves: Option<MoveList>,
     ) -> Option<Score> {
         self.nodes += 1;
@@ -592,7 +592,7 @@ fn order_moves(board: &Board, moves: &mut MoveList) {
             }
         } else {
             // non captures are considered less important (at this stage)
-            i32::MAX
+            Score::MAX
         }
     };
     moves.sort_unstable_by_key(|a| inv_mvv_lva(a));

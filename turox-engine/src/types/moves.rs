@@ -123,10 +123,6 @@ impl Move {
     /// `pub(crate)`, not `pub`: nothing outside this crate has a reason to
     /// see a move's bit layout rather than working through `Move` itself.
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "used by search::tt::Tt::store, still a `todo!()` stub"
-    )]
     pub(crate) const fn bits(self) -> u16 {
         self.0
     }

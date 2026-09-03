@@ -72,7 +72,7 @@ pub enum Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GoOptions {
     /// `depth <x>`: search exactly `x` plies, per iterative deepening.
-    pub depth: Option<u32>,
+    pub depth: Option<u8>,
     /// `nodes <x>`: abort once `x` nodes have been searched.
     pub nodes: Option<u64>,
     /// `movetime <x>`: search for exactly `x` milliseconds.

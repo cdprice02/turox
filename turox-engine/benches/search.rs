@@ -22,7 +22,7 @@ use turox_engine::search::Search;
 const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const KIWIPETE: &str = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
 
-fn bench_search(c: &mut Criterion, name: &str, fen: &str, depth: u32) {
+fn bench_search(c: &mut Criterion, name: &str, fen: &str, depth: u8) {
     let board = Board::try_from_fen(fen).expect("valid FEN");
     let nodes = Search::new(Vec::new()).search(&board, depth).nodes;
 

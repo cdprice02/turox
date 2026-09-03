@@ -7,9 +7,6 @@
 //! `Search` is rebuilt fresh on every `go`, so a table that lived inside it would never
 //! see the transpositions that matter most in real play, ones found across *separate*
 //! `go` calls in the same game.
-//!
-//! Signatures below reflect the design settled during planning; bodies are `todo!()`,
-//! left for the actual bit-twiddling and control flow to fill in.
 
 use crate::eval::Score;
 use crate::types::Move;
@@ -41,12 +38,10 @@ pub struct Entry {
     /// list is separate, later work. Stored now so that later change doesn't need to
     /// touch this struct's layout.
     pub mv: u16,
-    /// Narrowed from [`Score`] (`i32`); [`crate::search::MATE`]'s own magnitude leaves
-    /// enough headroom under `i16::MAX` that this is always lossless. Ply-adjusted: not
-    /// the score as seen from the root, but a form independent of *how* this node was
-    /// reached, so a later [`Tt::probe`] at a different ply from a different path can
-    /// correctly re-derive its own root-relative value from it.
-    pub score: i16,
+    /// Ply-adjusted: not the score as seen from the root, but a form independent of *how*
+    /// this node was reached, so a later [`Tt::probe`] at a different ply from a different
+    /// path can correctly re-derive its own root-relative value from it.
+    pub score: Score,
     /// The remaining search depth `score` was computed at.
     pub depth: u8,
     /// How `score` relates to the true minimax value; see [`Bound`]'s own doc.
@@ -62,20 +57,14 @@ impl Entry {
     /// `alpha`).
     ///
     /// `ply` is the probing node's distance from the root, used to undo the ply
-    /// adjustment `Tt::store` applied before narrowing this entry's own `score`; see that
-    /// method's doc for why the adjustment exists at all.
+    /// adjustment `Tt::store` applied to this entry's own `score`; see that method's doc
+    /// for why the adjustment exists at all.
     #[must_use]
-    pub fn cutoff_score(
-        &self,
-        min_depth: u32,
-        alpha: Score,
-        beta: Score,
-        ply: u16,
-    ) -> Option<Score> {
-        if u32::from(self.depth) < min_depth {
+    pub fn cutoff_score(&self, min_depth: u8, alpha: Score, beta: Score, ply: u8) -> Option<Score> {
+        if self.depth < min_depth {
             return None;
         }
-        let score = Score::from(self.score) + Score::from(ply);
+        let score = self.score + Score::from(ply);
         match self.bound {
             Bound::Exact => Some(score),
             Bound::LowerBound if score >= beta => Some(score),
@@ -142,12 +131,18 @@ impl Tt {
     }
 
     /// Records `key`'s search result at `ply` (distance from the root): `score` is
-    /// ply-adjusted to a form independent of how this node was reached before being
-    /// narrowed to `i16` (see [`Entry::score`]'s own doc), `depth` and `mv` are stored as
-    /// given, and `bound` is derived from comparing `score` against `alpha`/`beta` (see
-    /// [`Bound`]'s own doc for the exact mapping, and the gotcha in comparing against the
-    /// right ones). Always-replace: overwrites whatever was in this slot before, no
-    /// depth-preferred comparison.
+    /// ply-adjusted to a form independent of how this node was reached (see
+    /// [`Entry::score`]'s own doc), `depth` and `mv` are stored as given, and `bound` is
+    /// derived from comparing `score` against `alpha`/`beta` (see [`Bound`]'s own doc for
+    /// the exact mapping, and the gotcha in comparing against the right ones).
+    /// Always-replace: overwrites whatever was in this slot before, no depth-preferred
+    /// comparison.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice: the `expect` on the index conversion only fails if the
+    /// entry count exceeds `usize::MAX`, and `Hash`'s own advertised ceiling (1024 MB) is
+    /// nowhere near large enough to produce that many entries even on a 32-bit target.
     #[allow(
         clippy::too_many_arguments,
         reason = "one slot's worth of independent fields plus the alpha/beta window `Bound` \
@@ -157,8 +152,8 @@ impl Tt {
     pub fn store(
         &mut self,
         key: u64,
-        ply: u16,
-        depth: u32,
+        ply: u8,
+        depth: u8,
         score: Score,
         alpha: Score,
         beta: Score,
@@ -174,11 +169,12 @@ impl Tt {
         let entry = Entry {
             key: key & self.mask,
             mv: mv.bits(),
-            score: (score - Score::from(ply)) as i16, // ply-adjusted and narrowed to i16
-            depth: depth as u8, // narrowing to u8 is safe: depth is never more than 255 plies in a real game
+            score: score - Score::from(ply),
+            depth,
             bound,
         };
-        let index = (key & self.mask) as usize;
+        let index = usize::try_from(key & self.mask)
+            .expect("Hash's advertised MB ceiling keeps the entry count well within usize");
         self.entries[index] = Some(entry);
     }
 }

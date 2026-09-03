@@ -42,7 +42,7 @@ use turox_engine::search::{Search, MATE, MAX_QUIESCENCE_DEPTH};
 /// `legal_moves`/`evaluate` with the real implementation (those are
 /// themselves already independently tested elsewhere), but not `Search`'s
 /// own pruning, ordering, or abort logic.
-fn naive_negamax(board: &Board, depth: u32, ply: u16, history: &mut Vec<u64>) -> Score {
+fn naive_negamax(board: &Board, depth: u8, ply: u8, history: &mut Vec<u64>) -> Score {
     if draw::is_draw(board, history, board.hash()) {
         return 0;
     }
@@ -75,7 +75,7 @@ fn naive_negamax(board: &Board, depth: u32, ply: u16, history: &mut Vec<u64>) ->
 /// how many captures deep it'll chase, and a sufficiently tangled
 /// `any_board()` position can make that blow up long before comparing
 /// against the real (now-capped) implementation ever gets a chance to.
-fn naive_quiescence(board: &Board, qdepth: u32) -> Score {
+fn naive_quiescence(board: &Board, qdepth: u8) -> Score {
     let mut best = evaluate(board);
     if qdepth > 0 {
         let mut captures = legal_moves(board);
@@ -114,7 +114,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
     #[test]
-    fn alpha_beta_agrees_with_unpruned_negamax(board in sparse_board_with_legal_move(), depth in 1u32..=2) {
+    fn alpha_beta_agrees_with_unpruned_negamax(board in sparse_board_with_legal_move(), depth in 1u8..=2) {
         let expected = naive_negamax(&board, depth, 0, &mut Vec::new());
         let mut search = Search::new(Vec::new());
         let result = search.search(&board, depth);
@@ -123,7 +123,7 @@ proptest! {
     }
 
     #[test]
-    fn best_move_is_always_legal(board in any_board_with_legal_move(), depth in 1u32..=2) {
+    fn best_move_is_always_legal(board in any_board_with_legal_move(), depth in 1u8..=2) {
         let mut search = Search::new(Vec::new());
         let result = search.search(&board, depth);
         let best_move = result.best_move.expect("board has a legal move, so search must return one");
@@ -131,7 +131,7 @@ proptest! {
     }
 
     #[test]
-    fn search_is_deterministic(board in any_board_with_legal_move(), depth in 1u32..=2) {
+    fn search_is_deterministic(board in any_board_with_legal_move(), depth in 1u8..=2) {
         let result_a = Search::new(Vec::new()).search(&board, depth);
         let result_b = Search::new(Vec::new()).search(&board, depth);
         prop_assert_eq!(result_a, result_b);
@@ -150,7 +150,7 @@ proptest! {
     /// sparse restriction isn't hiding anything density-dependent.
     #[test]
     #[ignore = "dense-board sweep, several minutes; run with --run-ignored all"]
-    fn alpha_beta_agrees_with_unpruned_negamax_at_full_density(board in any_board_with_legal_move(), depth in 1u32..=2) {
+    fn alpha_beta_agrees_with_unpruned_negamax_at_full_density(board in any_board_with_legal_move(), depth in 1u8..=2) {
         let expected = naive_negamax(&board, depth, 0, &mut Vec::new());
         let mut search = Search::new(Vec::new());
         let result = search.search(&board, depth);

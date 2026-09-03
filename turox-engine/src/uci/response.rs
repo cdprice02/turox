@@ -46,7 +46,7 @@ pub enum Response {
     /// `search::SearchResult::score` already uses.
     Info {
         /// Search depth this result came from.
-        depth: u32,
+        depth: u8,
         /// Side-to-move-relative score, `SearchResult::score`'s own
         /// convention.
         score: Score,
@@ -67,7 +67,7 @@ pub enum Response {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScoreKind {
     Cp(Score),
-    Mate(i32),
+    Mate(Score),
 }
 
 /// Classifies a side-to-move-relative score (`SearchResult::score`'s own
