@@ -90,7 +90,11 @@ impl Tt {
         let bytes = hash_mb * 1024 * 1024;
         let entry_size = std::mem::size_of::<Option<Entry>>();
         let count = u64::try_from(bytes / entry_size).unwrap_or(u64::MAX); // saturate to u64::MAX if the caller asked for more than that
-        let pow2_count = count.next_power_of_two() >> 1; // round down to the largest power of two
+        let pow2_count = if count.is_power_of_two() {
+            count
+        } else {
+            count.next_power_of_two() >> 1
+        };
         let mask = pow2_count - 1;
         let pow2_count = usize::try_from(pow2_count).unwrap_or(usize::MAX); // saturate to usize::MAX if the caller asked for more than that
         Self {
@@ -118,16 +122,21 @@ impl Tt {
     /// this way can resolve the probing node outright is [`Entry::cutoff_score`]'s
     /// question, not this method's; this only answers "what, if anything, is here."
     ///
+    /// Compares against the *full* `key`, not `key & self.mask`: every key that lands on
+    /// a given index shares the same masked value by construction, so comparing masked
+    /// values here would make every collision at this index look like a hit for whichever
+    /// key was stored last, defeating the reason a full key is stored at all.
+    ///
     /// # Panics
     ///
-    /// Never panics: the `expect` is safe because the `filter` already checked for `Some`.
+    /// Never panics in practice: the `expect` on the index conversion only fails if the
+    /// entry count exceeds `usize::MAX`, and `Hash`'s own advertised ceiling (1024 MB) is
+    /// nowhere near large enough to produce that many entries even on a 32-bit target.
     #[must_use]
     pub fn probe(&self, key: u64) -> Option<Entry> {
-        self.entries
-            .iter()
-            .filter(|&entry| entry.is_some_and(|e| e.key == key & self.mask))
-            .map(|entry| entry.expect("filter already checked for `Some`"))
-            .next()
+        let index = usize::try_from(key & self.mask)
+            .expect("Hash's advertised MB ceiling keeps the entry count well within usize");
+        self.entries[index].filter(|entry| entry.key == key)
     }
 
     /// Records `key`'s search result at `ply` (distance from the root): `score` is
@@ -167,7 +176,7 @@ impl Tt {
             Bound::Exact
         };
         let entry = Entry {
-            key: key & self.mask,
+            key,
             mv: mv.bits(),
             score: score - Score::from(ply),
             depth,
