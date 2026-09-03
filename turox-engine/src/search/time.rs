@@ -62,6 +62,12 @@ const OVERHEAD_RESERVE: Duration = Duration::from_millis(100);
 ///    the reserve, since a zero budget is a guaranteed forfeit. The cap
 ///    is reapplied for the same reason step 3 exists: `MIN_BUDGET` can
 ///    again exceed `time_left` once `time_left` itself is tiny.
+///
+///    This (and step 2-3's identical pattern above) is `.max(...).min(...)`
+///    rather than a single `.clamp(MIN_BUDGET, time_left)`: `Ord::clamp`
+///    panics when its lower bound exceeds its upper bound, and
+///    `MIN_BUDGET > time_left` is exactly the tiny-clock case these steps
+///    exist to handle gracefully, not reject.
 #[must_use]
 pub fn allocate_time(
     time_left: Duration,
