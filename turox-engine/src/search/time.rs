@@ -26,12 +26,23 @@ const DEFAULT_MOVES_TO_GO: u32 = 30;
 /// more time than actually exists.
 const MIN_BUDGET: Duration = Duration::from_millis(30);
 
+/// Reserve subtracted from the computed budget to cover the gap between search
+/// finishing and the move actually reaching the clock: process scheduling, UCI I/O,
+/// and (for lichess-bot specifically) network round-trip time. That overhead is
+/// roughly constant no matter the time control, since it comes from the dispatch
+/// path rather than from anything proportional to `time_left` or `increment`, so
+/// it's a fixed constant here rather than scaled the way the rest of the formula
+/// is. 100ms comfortably clears an 87ms overrun observed in real self-play testing,
+/// with margin left for jitter. Treat it as a tunable starting point; real tuning
+/// belongs to the self-play SPRT harness, not further reasoning in this comment.
+const OVERHEAD_RESERVE: Duration = Duration::from_millis(100);
+
 /// Budgets a [`Duration`] for the current move.
 ///
 /// From the time left on the clock (`time_left`), the per-move increment (`increment`),
 /// and how many moves remain until the next time control (`moves_to_go`, `None` if UCI
 /// didn't say). The raw estimate is `time_left / moves_to_go + increment`
-/// (`DEFAULT_MOVES_TO_GO` standing in when `moves_to_go` is unknown), then clamped three
+/// (`DEFAULT_MOVES_TO_GO` standing in when `moves_to_go` is unknown), then clamped four
 /// ways in order:
 /// 1. Capped at half of `time_left`: a low or defaulted `moves_to_go` (most
 ///    of all, `Some(1)`) could otherwise budget the *entire* remaining
@@ -44,6 +55,19 @@ const MIN_BUDGET: Duration = Duration::from_millis(30);
 ///    result back above `time_left` when the clock is already down to only
 ///    a few milliseconds; there's never more time to give than what's
 ///    actually left.
+/// 4. `OVERHEAD_RESERVE` subtracted (saturating, so it can't underflow past
+///    zero), then re-floored at `MIN_BUDGET` and re-capped at `time_left`.
+///    The floor wins over the reserve on purpose: under extreme time
+///    pressure, guaranteeing search gets *some* time outweighs guaranteeing
+///    the reserve, since a zero budget is a guaranteed forfeit. The cap
+///    is reapplied for the same reason step 3 exists: `MIN_BUDGET` can
+///    again exceed `time_left` once `time_left` itself is tiny.
+///
+///    This (and step 2-3's identical pattern above) is `.max(...).min(...)`
+///    rather than a single `.clamp(MIN_BUDGET, time_left)`: `Ord::clamp`
+///    panics when its lower bound exceeds its upper bound, and
+///    `MIN_BUDGET > time_left` is exactly the tiny-clock case these steps
+///    exist to handle gracefully, not reject.
 #[must_use]
 pub fn allocate_time(
     time_left: Duration,
@@ -56,6 +80,9 @@ pub fn allocate_time(
     };
     (time_left / moves_to_go + increment)
         .min(time_left / 2)
+        .max(MIN_BUDGET)
+        .min(time_left)
+        .saturating_sub(OVERHEAD_RESERVE)
         .max(MIN_BUDGET)
         .min(time_left)
 }
@@ -124,5 +151,39 @@ mod tests {
         let budget = allocate_time(time_left, Duration::ZERO, Some(20));
         assert!(budget > Duration::ZERO);
         assert!(budget <= time_left);
+    }
+
+    #[test]
+    fn overhead_reserve_is_subtracted_from_the_clamped_budget() {
+        // time_left generous enough that the pre-reserve three-step clamp
+        // lands well above MIN_BUDGET + OVERHEAD_RESERVE, so the reserve's
+        // effect is isolated rather than masked by the MIN_BUDGET floor.
+        let time_left = Duration::from_secs(60);
+        let increment = Duration::ZERO;
+        let moves_to_go: u32 = 30;
+        let pre_reserve_budget = (time_left / moves_to_go + increment)
+            .min(time_left / 2)
+            .max(MIN_BUDGET)
+            .min(time_left);
+        let budget = allocate_time(time_left, increment, Some(moves_to_go));
+        assert_eq!(
+            budget,
+            pre_reserve_budget.saturating_sub(OVERHEAD_RESERVE),
+            "budget {budget:?} should be exactly OVERHEAD_RESERVE less than the pre-reserve clamp {pre_reserve_budget:?}"
+        );
+    }
+
+    #[test]
+    fn min_budget_still_wins_when_the_reserve_would_push_below_it() {
+        // time_left small enough that the pre-reserve clamp already sits at
+        // MIN_BUDGET; subtracting OVERHEAD_RESERVE from it would go negative
+        // if not for the saturating subtract and the re-floor after it.
+        let time_left = Duration::from_millis(40);
+        let budget = allocate_time(time_left, Duration::ZERO, Some(20));
+        assert!(
+            budget >= MIN_BUDGET,
+            "budget {budget:?} must never drop below MIN_BUDGET, even with the reserve applied"
+        );
+        assert!(budget > Duration::ZERO, "budget: {budget:?}");
     }
 }
