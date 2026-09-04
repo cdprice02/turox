@@ -91,6 +91,11 @@ impl Tt {
     /// The `Hash` UCI option's default, in MB, before a GUI ever sends `setoption`.
     pub const DEFAULT_HASH_MB: usize = 16;
 
+    /// How many entries [`Self::hashfull`] inspects. 1000 makes the permille it
+    /// returns exact for tables at least this large, since each sampled entry is
+    /// worth exactly one permille, and it matches what other engines sample.
+    const HASHFULL_SAMPLE: usize = 1000;
+
     /// Builds a table sized to fit within `hash_mb` megabytes, rounded *down* to the
     /// largest power-of-two entry count that fits, so a lookup's index is a plain `key &
     /// mask`, never a division or modulo.
@@ -116,6 +121,34 @@ impl Tt {
     /// `setoption name Hash value <n>` drives.
     pub fn resize(&mut self, hash_mb: usize) {
         *self = Self::new(hash_mb);
+    }
+
+    /// How full this table is, in permille, for UCI's `hashfull` info field.
+    ///
+    /// Samples `HASHFULL_SAMPLE` entries rather than counting the whole
+    /// table: a 1024 MB table holds tens of millions of entries, and walking all
+    /// of them once per iterative-deepening iteration would cost more than the
+    /// number is worth to a GUI. The sample is the *prefix* of the table rather
+    /// than a strided or random selection, which is only sound because Zobrist
+    /// keys distribute uniformly across indices, so any contiguous run is as
+    /// representative as any other.
+    ///
+    /// Returns permille (0 to 1000), not a percentage, because that is what the
+    /// UCI specification asks for.
+    #[must_use]
+    pub fn hashfull(&self) -> u16 {
+        let sample = self.entries.len().min(Self::HASHFULL_SAMPLE);
+        if sample == 0 {
+            return 0;
+        }
+        let occupied = self.entries[..sample]
+            .iter()
+            .filter(|e| e.is_some())
+            .count();
+        // `occupied` never exceeds `sample`, so the ratio is at most 1000 and this
+        // conversion cannot actually fail. Saturating rather than unwrapping keeps
+        // the search's per-iteration path free of a panic that can't happen.
+        u16::try_from(occupied * 1000 / sample).unwrap_or(1000)
     }
 
     /// Wipes every entry without changing the table's size. What `ucinewgame` drives,

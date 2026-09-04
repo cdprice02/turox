@@ -9,6 +9,7 @@ use crate::search::tt::Tt;
 use crate::search::MATE;
 use crate::types::Move;
 use std::fmt;
+use std::time::Duration;
 
 /// One line of UCI output.
 ///
@@ -52,9 +53,33 @@ pub enum Response {
         score: Score,
         /// Total nodes searched.
         nodes: u64,
+        /// Wall-clock time this search has taken. Emitted in milliseconds, and
+        /// also what `nps` is derived from, so the two can never disagree the
+        /// way two independently-passed fields could.
+        time: Duration,
+        /// Transposition table occupancy in permille, or `None` when the search
+        /// had no table, in which case the field is omitted entirely rather
+        /// than reported as zero.
+        hashfull: Option<u16>,
         /// The principal variation, root move first.
         pv: Vec<Move>,
     },
+}
+
+/// Nodes per second, the `nps` info field.
+///
+/// Reports `nodes` unchanged when no measurable time has passed rather than
+/// dividing by zero: the first iteration routinely completes inside a
+/// millisecond, and `Duration::as_secs_f64` would make that an infinity that
+/// formats as `inf` and confuses a GUI. Treating it as "this many nodes in
+/// about a second" understates the real rate, which is the safe direction for
+/// a diagnostic number.
+fn nps(nodes: u64, time: Duration) -> u64 {
+    let micros = u64::try_from(time.as_micros()).unwrap_or(u64::MAX);
+    if micros == 0 {
+        return nodes;
+    }
+    nodes.saturating_mul(1_000_000) / micros
 }
 
 /// UCI's two mutually exclusive ways to report a score: an ordinary
@@ -124,6 +149,8 @@ impl fmt::Display for Response {
                 depth,
                 score,
                 nodes,
+                time,
+                hashfull,
                 pv,
             } => {
                 write!(f, "info depth {depth} score ")?;
@@ -132,7 +159,12 @@ impl fmt::Display for Response {
                     ScoreKind::Cp(score) => write!(f, "cp {score}"),
                     ScoreKind::Mate(moves) => write!(f, "mate {moves}"),
                 }?;
-                write!(f, " nodes {nodes}")?;
+                let millis = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
+                write!(f, " nodes {nodes} nps {} ", nps(*nodes, *time))?;
+                if let Some(permille) = hashfull {
+                    write!(f, "hashfull {permille} ")?;
+                }
+                write!(f, "time {millis}")?;
                 if !pv.is_empty() {
                     write!(f, " pv")?;
                     for m in pv {
@@ -278,11 +310,13 @@ mod tests {
             depth: 5,
             score: 150,
             nodes: 12345,
+            time: Duration::from_millis(0),
+            hashfull: None,
             pv: Vec::new(),
         };
         assert_eq!(
             response.to_string(),
-            "info depth 5 score cp 150 nodes 12345"
+            "info depth 5 score cp 150 nodes 12345 nps 12345 time 0"
         );
     }
 
@@ -292,9 +326,14 @@ mod tests {
             depth: 4,
             score: -320,
             nodes: 999,
+            time: Duration::from_millis(0),
+            hashfull: None,
             pv: Vec::new(),
         };
-        assert_eq!(response.to_string(), "info depth 4 score cp -320 nodes 999");
+        assert_eq!(
+            response.to_string(),
+            "info depth 4 score cp -320 nodes 999 nps 999 time 0"
+        );
     }
 
     #[test]
@@ -303,11 +342,13 @@ mod tests {
             depth: 3,
             score: 20,
             nodes: 500,
+            time: Duration::from_millis(0),
+            hashfull: None,
             pv: vec![quiet(Square::E2, Square::E4), quiet(Square::E7, Square::E5)],
         };
         assert_eq!(
             response.to_string(),
-            "info depth 3 score cp 20 nodes 500 pv e2e4 e7e5"
+            "info depth 3 score cp 20 nodes 500 nps 500 time 0 pv e2e4 e7e5"
         );
     }
 
@@ -321,11 +362,13 @@ mod tests {
             depth: 1,
             score: MATE - 1,
             nodes: 15,
+            time: Duration::from_millis(0),
+            hashfull: None,
             pv: vec![quiet(Square::A1, Square::A8)],
         };
         assert_eq!(
             response.to_string(),
-            "info depth 1 score mate 1 nodes 15 pv a1a8"
+            "info depth 1 score mate 1 nodes 15 nps 15 time 0 pv a1a8"
         );
     }
 
@@ -336,9 +379,14 @@ mod tests {
             depth: 2,
             score: -(MATE - 2),
             nodes: 40,
+            time: Duration::from_millis(0),
+            hashfull: None,
             pv: Vec::new(),
         };
-        assert_eq!(response.to_string(), "info depth 2 score mate -1 nodes 40");
+        assert_eq!(
+            response.to_string(),
+            "info depth 2 score mate -1 nodes 40 nps 40 time 0"
+        );
     }
 
     /// Same mate-in-2 score `search`'s own `philidors_legacy_smothered_mate`
@@ -349,11 +397,75 @@ mod tests {
             depth: 3,
             score: MATE - 3,
             nodes: 200,
+            time: Duration::from_millis(0),
+            hashfull: None,
             pv: vec![quiet(Square::E6, Square::G8)],
         };
         assert_eq!(
             response.to_string(),
-            "info depth 3 score mate 2 nodes 200 pv e6g8"
+            "info depth 3 score mate 2 nodes 200 nps 200 time 0 pv e6g8"
+        );
+    }
+
+    /// `nps` is derived from `nodes` and `time` rather than passed in, so this
+    /// pins the arithmetic rather than the plumbing: 2000 nodes in half a
+    /// second is 4000 per second.
+    #[test]
+    fn info_derives_nps_from_nodes_and_elapsed_time() {
+        let response = Response::Info {
+            depth: 7,
+            score: 30,
+            nodes: 2000,
+            time: Duration::from_millis(500),
+            hashfull: None,
+            pv: vec![],
+        };
+        assert_eq!(
+            response.to_string(),
+            "info depth 7 score cp 30 nodes 2000 nps 4000 time 500"
+        );
+    }
+
+    /// The first iteration routinely finishes inside a microsecond, where a
+    /// naive divide would produce an infinity that formats as `inf`. Reporting
+    /// the raw node count understates the rate, which is the safe direction.
+    #[test]
+    fn info_does_not_divide_by_zero_when_no_time_has_elapsed() {
+        assert_eq!(nps(41, Duration::ZERO), 41);
+    }
+
+    /// `None` omits the field entirely rather than emitting `hashfull 0`: a
+    /// search with no table and a search with an empty one are different
+    /// states, and only the latter is worth reporting as zero.
+    #[test]
+    fn info_omits_hashfull_when_the_search_had_no_table() {
+        let response = Response::Info {
+            depth: 2,
+            score: 0,
+            nodes: 10,
+            time: Duration::from_millis(1),
+            hashfull: None,
+            pv: vec![],
+        };
+        assert!(
+            !response.to_string().contains("hashfull"),
+            "no table means the field is absent, got: {response}"
+        );
+    }
+
+    #[test]
+    fn info_emits_hashfull_in_permille_when_a_table_is_present() {
+        let response = Response::Info {
+            depth: 2,
+            score: 0,
+            nodes: 10,
+            time: Duration::from_millis(1),
+            hashfull: Some(37),
+            pv: vec![],
+        };
+        assert_eq!(
+            response.to_string(),
+            "info depth 2 score cp 0 nodes 10 nps 10000 hashfull 37 time 1"
         );
     }
 }

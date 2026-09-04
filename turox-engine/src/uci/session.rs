@@ -149,6 +149,8 @@ fn info_response(result: &SearchResult) -> Response {
         depth: result.depth,
         score: result.score,
         nodes: result.nodes,
+        time: result.time,
+        hashfull: result.hashfull,
         pv: result.best_move.into_iter().collect(),
     }
 }

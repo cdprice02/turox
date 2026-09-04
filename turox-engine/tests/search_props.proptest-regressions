@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a6246ddd2c1e5a3619c5f49a5f517d7a355b8e88726309d809a86c6d401dde21 # shrinks to board = 8 . . . . . . . .  7 . . . . . . . .  6 . . . . . . . .  5 . . . . . . . .  4 . . . . . . . .  3 . . . . . . . .  2 . . . . . . . .  1 K k . . . . . .    a b c d e f g h, depth = 1

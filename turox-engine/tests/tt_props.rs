@@ -4,6 +4,8 @@ mod common;
 
 use common::any_board_and_legal_move;
 use proptest::prelude::*;
+use turox_engine::board::Board;
+use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::search::tt::Tt;
 
 proptest! {
@@ -66,4 +68,61 @@ proptest! {
              colliding at the same index: {hit:?}"
         );
     }
+}
+
+/// `hashfull` is what UCI reports so a GUI can tell whether the table is
+/// sized sensibly for the time control, so the two ends of its range are
+/// worth pinning concretely rather than only through a property.
+#[test]
+fn hashfull_is_zero_for_a_table_nothing_has_been_stored_in() {
+    let tt = Tt::new(1);
+    assert_eq!(tt.hashfull(), 0, "a fresh table holds nothing");
+}
+
+/// Every entry in the sampled prefix occupied means 1000 permille, not 100:
+/// UCI asks for permille, and confusing the two is the kind of off-by-ten
+/// that looks plausible in a GUI right up until the table is genuinely full.
+#[test]
+fn hashfull_reports_permille_not_percent_when_the_sample_is_saturated() {
+    let mut tt = Tt::new(1);
+    let mv = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .first()
+        .expect("the start position has legal moves");
+
+    // Fill well past the sampled prefix. Keys are the raw index here rather
+    // than real Zobrist hashes: `store` masks the key to an index, so a
+    // contiguous run of small integers lands on a contiguous run of slots,
+    // which is exactly the prefix `hashfull` samples.
+    for key in 0..4096u64 {
+        tt.store(key, 0, 1, 0, -25_000, 25_000, mv);
+    }
+
+    assert_eq!(
+        tt.hashfull(),
+        1000,
+        "a saturated sample is 1000 permille, not 100"
+    );
+}
+
+/// Occupying half the sampled prefix reads as half. Guards the direction of
+/// the ratio: `occupied / sample` and `sample / occupied` both produce
+/// plausible-looking numbers, and only one is right.
+#[test]
+fn hashfull_scales_with_occupancy() {
+    let mut tt = Tt::new(1);
+    let mv = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .first()
+        .expect("the start position has legal moves");
+
+    for key in 0..500u64 {
+        tt.store(key, 0, 1, 0, -25_000, 25_000, mv);
+    }
+
+    assert_eq!(
+        tt.hashfull(),
+        500,
+        "500 of the 1000 sampled slots are taken"
+    );
 }
