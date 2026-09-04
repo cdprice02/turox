@@ -127,6 +127,16 @@ impl Move {
         self.0
     }
 
+    /// Reconstructs a move from its packed bits (the inverse of [`Self::bits`]),
+    /// for a caller (a transposition table probe) that has raw bits rather
+    /// than a `Move` value. `pub(crate)`, matching `bits`'s own visibility:
+    /// nothing outside this crate has a reason to work with a move's bit
+    /// layout directly.
+    #[must_use]
+    pub(crate) const fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
     /// Packs a move from `from` to `to` with the given `flags`.
     #[must_use]
     #[allow(
