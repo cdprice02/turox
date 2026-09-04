@@ -49,6 +49,14 @@ const NAIVE_PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
 const NAIVE_PHASE_WEIGHT: [i32; 6] = [0, 1, 1, 2, 4, 0];
 const NAIVE_TOTAL_PHASE: i32 = 24;
 
+/// Independent of `eval::pawn_structure`'s own constants (`pawn_structure`
+/// is private to `eval`, unreachable from this integration-test crate
+/// anyway): the same `(mg, eg)` values, transcribed again here for the
+/// same reason `NAIVE_PIECE_VALUES` isn't shared either.
+const NAIVE_DOUBLED_PENALTY: (i32, i32) = (-10, -20);
+const NAIVE_ISOLATED_PENALTY: (i32, i32) = (-10, -10);
+const NAIVE_PASSED_BONUS: (i32, i32) = (10, 20);
+
 /// Mailbox walk over `board.piece_at`, reproducing `eval::phase::game_phase`
 /// without calling it: sums `NAIVE_PHASE_WEIGHT` for every non-pawn,
 /// non-king piece found, subtracts from `NAIVE_TOTAL_PHASE`, clamps to
@@ -68,14 +76,14 @@ fn naive_game_phase(board: &Board) -> i32 {
 }
 
 /// Sums a midgame and an endgame total independently (no packed
-/// representation, unlike `eval::phase::Tapered`) and blends them with the
-/// standard tapered-eval formula, `(mg * (256 - phase) + eg * phase) / 256`:
-/// the widely reproduced technique this whole module is built on, described
-/// on the chess programming wiki's "Tapered Eval" page. Widened to `i32`
-/// for the multiply, since `mg`/`eg` scaled by up to 256 would overflow
-/// `Score` (`i16`) well before the division brings the result back down to
-/// eval-sized magnitudes.
-fn naive_eval_white_pov(board: &Board) -> Score {
+/// representation, unlike `eval::phase::Tapered`), material and
+/// piece-square terms only: the pre-pawn-structure baseline
+/// `eval_white_pov_deviates_from_material_and_pst_only_by_a_bounded_amount`
+/// below is checked against, kept separate from
+/// `naive_pawn_structure_mg_eg` rather than folded into one function so
+/// that property has an independent "pawn structure switched off" total to
+/// compare the real, full `eval_white_pov` against.
+fn naive_material_and_pst_mg_eg(board: &Board) -> (i32, i32) {
     let mut mg: i32 = 0;
     let mut eg: i32 = 0;
     for sq in Square::ALL {
@@ -91,6 +99,122 @@ fn naive_eval_white_pov(board: &Board) -> Score {
             eg += sign * (material + eg_positional);
         }
     }
+    (mg, eg)
+}
+
+/// Mailbox-only reference for `color`'s doubled/isolated/passed pawn terms
+/// (see `eval::pawn_structure`'s own doc for the exact contract each one
+/// is scored against), returned as an unblended `(mg, eg)` pair rather
+/// than a single `Score`: `naive_eval_white_pov` folds this into its own
+/// running `mg`/`eg` totals before blending once, the same shape the real
+/// implementation's `Tapered` accumulator uses, rather than blending this
+/// term in isolation and adding two already-blended numbers together
+/// (which would round differently).
+///
+/// Shares no bitboard tricks with `eval::pawn_structure`: files are
+/// counted with a plain `[u32; 8]` mailbox scan, and passed/isolated
+/// status is decided by scanning every square directly rather than via
+/// `Bitboard::front_attack_span`/`file_fill`.
+fn naive_pawn_structure_mg_eg(board: &Board, color: Color) -> (i32, i32) {
+    let mut file_counts = [0u32; 8];
+    let mut own_pawns: Vec<Square> = Vec::new();
+    for sq in Square::ALL {
+        if let Some(cp) = board.piece_at(sq) {
+            if cp.color() == color && cp.piece() == Piece::Pawn {
+                file_counts[sq.file().index()] += 1;
+                own_pawns.push(sq);
+            }
+        }
+    }
+
+    let mut mg = 0i32;
+    let mut eg = 0i32;
+
+    for &count in &file_counts {
+        if count >= 2 {
+            let doubled = i32::try_from(count - 1).expect("a file holds at most 8 pawns");
+            mg += doubled * NAIVE_DOUBLED_PENALTY.0;
+            eg += doubled * NAIVE_DOUBLED_PENALTY.1;
+        }
+    }
+
+    for sq in own_pawns {
+        let file = sq.file().index();
+        let west_occupied = file.checked_sub(1).is_some_and(|f| file_counts[f] > 0);
+        let east_occupied = file_counts.get(file + 1).is_some_and(|&c| c > 0);
+        if !west_occupied && !east_occupied {
+            mg += NAIVE_ISOLATED_PENALTY.0;
+            eg += NAIVE_ISOLATED_PENALTY.1;
+        }
+
+        let blocked = Square::ALL.into_iter().any(|other| {
+            let Some(cp) = board.piece_at(other) else {
+                return false;
+            };
+            if cp.color() != color.flip() || cp.piece() != Piece::Pawn {
+                return false;
+            }
+            let file_diff = i32::try_from(other.file().index()).expect("file index fits i32")
+                - i32::try_from(file).expect("file index fits i32");
+            if !(-1..=1).contains(&file_diff) {
+                return false;
+            }
+            match color {
+                Color::White => other.rank() > sq.rank(),
+                Color::Black => other.rank() < sq.rank(),
+            }
+        });
+        if !blocked {
+            mg += NAIVE_PASSED_BONUS.0;
+            eg += NAIVE_PASSED_BONUS.1;
+        }
+    }
+
+    (mg, eg)
+}
+
+/// The total number of pawns (both colors) on `board`: the scale the
+/// pawn-structure deviation bound below is measured against.
+fn total_pawn_count(board: &Board) -> i32 {
+    let mut count = 0i32;
+    for sq in Square::ALL {
+        if matches!(board.piece_at(sq), Some(cp) if cp.piece() == Piece::Pawn) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Sums a midgame and an endgame total independently (no packed
+/// representation, unlike `eval::phase::Tapered`) and blends them with the
+/// standard tapered-eval formula, `(mg * (256 - phase) + eg * phase) / 256`:
+/// the widely reproduced technique this whole module is built on, described
+/// on the chess programming wiki's "Tapered Eval" page. Widened to `i32`
+/// for the multiply, since `mg`/`eg` scaled by up to 256 would overflow
+/// `Score` (`i16`) well before the division brings the result back down to
+/// eval-sized magnitudes.
+#[allow(
+    clippy::similar_names,
+    reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
+)]
+fn naive_eval_white_pov(board: &Board) -> Score {
+    let (mut mg, mut eg) = naive_material_and_pst_mg_eg(board);
+    let (white_mg, white_eg) = naive_pawn_structure_mg_eg(board, Color::White);
+    let (black_mg, black_eg) = naive_pawn_structure_mg_eg(board, Color::Black);
+    mg += white_mg - black_mg;
+    eg += white_eg - black_eg;
+    let phase = naive_game_phase(board);
+    let blended = (mg * (256 - phase) + eg * phase) / 256;
+    Score::try_from(blended)
+        .expect("eval magnitudes stay well under i16::MAX, per eval::Score's own invariant")
+}
+
+/// `naive_material_and_pst_mg_eg`, blended the same way
+/// `naive_eval_white_pov` blends its own totals: the "pawn structure
+/// switched off" baseline `eval_white_pov`'s deviation is measured
+/// against below.
+fn naive_material_and_pst_white_pov(board: &Board) -> Score {
+    let (mg, eg) = naive_material_and_pst_mg_eg(board);
     let phase = naive_game_phase(board);
     let blended = (mg * (256 - phase) + eg * phase) / 256;
     Score::try_from(blended)
@@ -160,5 +284,31 @@ proptest! {
         let mut reduced = board;
         reduced.remove(sq);
         prop_assert!(eval_white_pov(&reduced) > eval_white_pov(&board));
+    }
+
+    // A loose sanity bound rather than a tight one, but a real structural
+    // guarantee, not an arbitrary number: each pawn can contribute at most
+    // one `DOUBLED_PENALTY` (eg magnitude 20), one `ISOLATED_PENALTY` (10),
+    // and one `PASSED_BONUS` (20) to its own side's total, and
+    // `interpolate` can never blend a result outside the span of the `mg`
+    // and `eg` totals it's given (`tests/eval_props.rs`'s sibling property
+    // in `eval::phase`'s own test module establishes that). So the total
+    // pawn-structure swing, combined across both colors, is bounded by 50
+    // centipawns per pawn on the board, not merely "some bound found
+    // empirically." A doubled- or isolated-counting bug that scales with
+    // the number of *pairs* of pawns rather than the number of pawns
+    // (quadratic instead of linear) blows past this bound as soon as a
+    // board has more than a handful of pawns, which `any_board()`
+    // regularly generates.
+    #[test]
+    fn pawn_structure_contribution_is_bounded_by_pawn_count(board in any_board()) {
+        let deviation =
+            i32::from(eval_white_pov(&board)) - i32::from(naive_material_and_pst_white_pov(&board));
+        let bound = 50 * total_pawn_count(&board);
+        prop_assert!(
+            deviation.abs() <= bound,
+            "pawn-structure deviation {deviation} exceeds the {bound}-centipawn bound for {} pawns",
+            total_pawn_count(&board)
+        );
     }
 }
