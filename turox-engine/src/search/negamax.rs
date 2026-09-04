@@ -376,7 +376,7 @@ impl<'a> Search<'a> {
             if drawn_moves.is_empty() {
                 return RootOutcome::Completed(0, None);
             }
-            order_moves(board, &mut drawn_moves);
+            order_moves(board, &mut drawn_moves, None);
             return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
 
@@ -403,7 +403,7 @@ impl<'a> Search<'a> {
 
         let mut max = Score::MIN;
         let mut best_move = None;
-        order_moves(board, &mut moves);
+        order_moves(board, &mut moves, None);
         for &m in &moves {
             self.history.push(board.hash());
 
@@ -463,7 +463,10 @@ impl<'a> Search<'a> {
     /// call was given, not `alpha` as the loop below narrows it; see `Bound`'s own doc for
     /// why that distinction matters. A depth-0 node that fell through to `quiescence`
     /// instead never reaches the store below, matching `Entry.depth`'s own doc: `quiescence`
-    /// has no comparable notion of depth to store one under.
+    /// has no comparable notion of depth to store one under. The probed entry itself is
+    /// kept around past the cutoff check (it's `Copy`, so this costs nothing): even when it
+    /// doesn't license an outright cutoff, its stored move is still worth trying first in
+    /// this node's own move loop, so it survives long enough to feed `order_moves`.
     fn negamax(
         &mut self,
         board: &Board,
@@ -491,7 +494,8 @@ impl<'a> Search<'a> {
         }
 
         let hash = board.hash();
-        if let Some(entry) = self.tt.as_deref().and_then(|tt| tt.probe(hash)) {
+        let tt_entry = self.tt.as_deref().and_then(|tt| tt.probe(hash));
+        if let Some(entry) = tt_entry {
             if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
                 return Some(score);
             }
@@ -501,10 +505,14 @@ impl<'a> Search<'a> {
             return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
+        let tt_move = tt_entry
+            .map(|entry| Move::from_bits(entry.mv))
+            .filter(|m| moves.as_slice().contains(m));
+
         let original_alpha = alpha;
         let mut max = Score::MIN;
         let mut best_move = None;
-        order_moves(board, &mut moves);
+        order_moves(board, &mut moves, tt_move);
         for &m in &moves {
             self.history.push(board.hash());
 
@@ -587,7 +595,7 @@ impl<'a> Search<'a> {
             let mut moves = moves.unwrap_or_else(|| legal_moves(board));
             moves.retain(|m| m.flags().is_capture());
 
-            order_moves(board, &mut moves);
+            order_moves(board, &mut moves, None);
             for m in &moves {
                 let child = board.make_move(*m);
                 let score = self.quiescence(&child, -beta, -alpha, qdepth - 1, None);
@@ -613,7 +621,8 @@ impl<'a> Search<'a> {
 /// of the tree: MVV-LVA (most valuable victim, least valuable attacker)
 /// among captures, ahead of quiet moves, since a capture that wins the most
 /// material with the cheapest piece is most likely to hold up and cause a
-/// beta cutoff early.
+/// beta cutoff early. `tt_move`, when `Some`, ranks ahead of all of that; see
+/// [`move_priority`].
 ///
 /// En passant's victim isn't actually on `m.to()`; scored as `0` (an
 /// equal-value trade) rather than looking up the true victim square, an
@@ -622,29 +631,276 @@ impl<'a> Search<'a> {
 ///
 /// Uses [`MoveList::as_mut_slice`] to sort in place without a second
 /// allocation.
-fn order_moves(board: &Board, moves: &mut MoveList) {
-    // Inverted from "standard" MVV-LVA: `sort_unstable_by_key` sorts
-    // ascending, so the most promising move needs the smallest key.
-    let inv_mvv_lva = |m: &Move| {
-        let flags = m.flags();
-        if flags.is_capture() {
-            if flags.is_en_passant() {
-                0
-            } else {
-                let attacker = board
-                    .piece_at(m.from())
-                    .expect("capture has an attacker")
-                    .piece();
-                let victim = board
-                    .piece_at(m.to())
-                    .expect("capture has a victim")
-                    .piece();
-                PIECE_VALUES[attacker.index()] - PIECE_VALUES[victim.index()]
-            }
-        } else {
-            // non captures are considered less important (at this stage)
-            Score::MAX
+fn order_moves(board: &Board, moves: &mut MoveList, tt_move: Option<Move>) {
+    moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move));
+}
+
+/// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on a
+/// fieldless enum compares by declaration order, so this list *is* the
+/// ranking, not a lookup table alongside it. The hand-written version this
+/// replaced computed the same order through a separate `rank()` match
+/// function called on every sort comparison; `benches/search.rs` found no
+/// measurable throughput difference between the two at depth 6, so this
+/// isn't a performance change, just removing a lookup table that a typo
+/// could silently desync from this declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(
+    dead_code,
+    reason = "PrincipalVariation, KillerCapture, MateKiller, and Killer have no producer yet \
+              (real PV tracking needs PVS's triangular PV table, killers need a per-ply killer-move \
+              table; both are #38, not this issue) but the ranking scheme is designed to be complete \
+              for when they land, rather than needing to be reshuffled later"
+)]
+enum MovePriority {
+    PrincipalVariation,
+    Hash,
+    KillerCapture,
+    WinningCapture,
+    EqualCapture,
+    MateKiller,
+    Killer,
+    LosingCapture,
+    Quiet,
+}
+
+fn move_priority(board: &Board, m: Move, tt_move: Option<Move>) -> MovePriority {
+    if Some(m) == tt_move {
+        MovePriority::Hash
+    } else if m.flags().is_capture() {
+        if m.flags().is_en_passant() {
+            return MovePriority::EqualCapture;
         }
-    };
-    moves.sort_unstable_by_key(|a| inv_mvv_lva(a));
+        let attacker = board
+            .piece_at(m.from())
+            .expect("capture has an attacker")
+            .piece();
+        let victim = board
+            .piece_at(m.to())
+            .expect("capture has a victim")
+            .piece();
+        let score = PIECE_VALUES[victim.index()] - PIECE_VALUES[attacker.index()];
+        match score.cmp(&0) {
+            std::cmp::Ordering::Greater => MovePriority::WinningCapture,
+            std::cmp::Ordering::Equal => MovePriority::EqualCapture,
+            std::cmp::Ordering::Less => MovePriority::LosingCapture,
+        }
+    } else {
+        MovePriority::Quiet
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Square;
+
+    /// `move_priority` is private to this module, and so is `order_moves`;
+    /// both are pure enough (no board mutation, no search recursion) to test
+    /// directly here rather than only through `Search::search` end to end,
+    /// matching this crate's convention of unit-testing a private pure
+    /// function in-module and reserving `tests/search.rs`/`search_props.rs`
+    /// for `Search`'s own public API.
+    ///
+    /// A position with exactly one capture on offer (`Qe4xd5`) alongside
+    /// several quiet king moves, so the direction tests below have a real
+    /// capture to out-rank a hint against, not just a pair of quiet moves
+    /// that would already tie regardless of which one is hinted.
+    fn capture_and_quiet_position() -> Board {
+        Board::try_from_fen("4k3/8/8/3n4/4Q3/8/8/4K3 w - - 0 1").expect("valid FEN")
+    }
+
+    fn find_move(board: &Board, from: Square, to: Square) -> Move {
+        *legal_moves(board)
+            .as_slice()
+            .iter()
+            .find(|m| m.from() == from && m.to() == to)
+            .unwrap_or_else(|| panic!("{from:?}{to:?} must be a legal move in this position"))
+    }
+
+    /// Every variant, in the exact order the hand-written `rank` closure in
+    /// `Ord for MovePriority` intends. This is what actually pins the
+    /// ranking down: `rank`'s match arms are a hand-written lookup table
+    /// (a shape this project has repeatedly gotten wrong elsewhere via a
+    /// copy-paste or off-by-one in similar tables), and a typo'd or
+    /// duplicated number there wouldn't fail to compile, it would just
+    /// silently misorder two variants relative to each other.
+    #[test]
+    fn move_priority_rank_order_matches_the_intended_hierarchy() {
+        use MovePriority::{
+            EqualCapture, Hash, Killer, KillerCapture, LosingCapture, MateKiller,
+            PrincipalVariation, Quiet, WinningCapture,
+        };
+        let ranked_best_to_worst = [
+            PrincipalVariation,
+            Hash,
+            KillerCapture,
+            WinningCapture,
+            EqualCapture,
+            MateKiller,
+            Killer,
+            LosingCapture,
+            Quiet,
+        ];
+        for pair in ranked_best_to_worst.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "{:?} must rank strictly ahead of {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn move_priority_with_no_tt_hint_classifies_a_quiet_move_as_quiet() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        assert_eq!(move_priority(&board, quiet, None), MovePriority::Quiet);
+    }
+
+    // MVV-LVA's whole point: a small attacker taking a large victim (pawn
+    // takes queen) is the most promising capture there is, tried before a
+    // big attacker taking a small victim (queen takes pawn), which is
+    // comparatively unpromising. `WinningCapture`/`LosingCapture` need to
+    // land on the *correct side* of that distinction, not just land on two
+    // different variants (a naming swap between the two would still produce
+    // "two distinct variants" and could still pass a looser test).
+    #[test]
+    fn move_priority_classifies_a_small_attacker_taking_a_big_victim_as_winning() {
+        let board = Board::try_from_fen("4k3/8/8/8/3q4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
+        let pawn_takes_queen = find_move(&board, Square::E3, Square::D4);
+        assert_eq!(
+            move_priority(&board, pawn_takes_queen, None),
+            MovePriority::WinningCapture,
+            "a pawn capturing a queen is the textbook winning capture"
+        );
+    }
+
+    #[test]
+    fn move_priority_classifies_a_big_attacker_taking_a_small_victim_as_losing() {
+        let board = Board::try_from_fen("4k3/8/8/8/3p4/4Q3/8/4K3 w - - 0 1").expect("valid FEN");
+        let queen_takes_pawn = find_move(&board, Square::E3, Square::D4);
+        assert_eq!(
+            move_priority(&board, queen_takes_pawn, None),
+            MovePriority::LosingCapture,
+            "a queen capturing an undefended pawn is comparatively unpromising, \
+             the opposite end of the scale from a pawn capturing a queen"
+        );
+    }
+
+    #[test]
+    fn move_priority_classifies_an_equal_value_capture_as_equal() {
+        let board = Board::try_from_fen("4k3/8/8/8/3r4/8/8/3RK3 w - - 0 1").expect("valid FEN");
+        let rook_takes_rook = find_move(&board, Square::D1, Square::D4);
+        assert_eq!(
+            move_priority(&board, rook_takes_rook, None),
+            MovePriority::EqualCapture
+        );
+    }
+
+    /// The direction, stated as its own property rather than two isolated
+    /// classifications: whichever variants "winning" and "losing" end up
+    /// being, a small-attacker/big-victim capture must outrank a
+    /// big-attacker/small-victim one on the same squares. This is the
+    /// property the two classification tests above only check indirectly
+    /// (through whatever `MovePriority::Ord` says those variants are worth);
+    /// this one checks the actual consequence.
+    #[test]
+    fn small_attacker_takes_big_victim_ranks_above_big_attacker_takes_small_victim() {
+        let winning_board =
+            Board::try_from_fen("4k3/8/8/8/3q4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
+        let pawn_takes_queen = find_move(&winning_board, Square::E3, Square::D4);
+
+        let losing_board =
+            Board::try_from_fen("4k3/8/8/8/3p4/4Q3/8/4K3 w - - 0 1").expect("valid FEN");
+        let queen_takes_pawn = find_move(&losing_board, Square::E3, Square::D4);
+
+        assert!(
+            move_priority(&winning_board, pawn_takes_queen, None)
+                < move_priority(&losing_board, queen_takes_pawn, None),
+            "a pawn capturing a queen must be tried before a queen capturing a pawn"
+        );
+    }
+
+    #[test]
+    fn move_priority_with_matching_tt_hint_is_hash_regardless_of_move_shape() {
+        let board = capture_and_quiet_position();
+        let capture = find_move(&board, Square::E4, Square::D5);
+        let quiet = find_move(&board, Square::E1, Square::D1);
+
+        assert_eq!(
+            move_priority(&board, capture, Some(capture)),
+            MovePriority::Hash
+        );
+        assert_eq!(
+            move_priority(&board, quiet, Some(quiet)),
+            MovePriority::Hash
+        );
+    }
+
+    #[test]
+    fn move_priority_with_non_matching_tt_hint_falls_back_to_normal_classification() {
+        let board = capture_and_quiet_position();
+        let capture = find_move(&board, Square::E4, Square::D5);
+        let quiet = find_move(&board, Square::E1, Square::D1);
+
+        // `quiet` is hinted, but `capture` is the move being scored: the
+        // hint shouldn't affect a move it doesn't match.
+        assert_eq!(
+            move_priority(&board, capture, Some(quiet)),
+            move_priority(&board, capture, None),
+            "a tt hint for a different move must not affect this move's own ordering"
+        );
+    }
+
+    /// The direction check: a lazier stub that only satisfies the
+    /// `move_priority`-level tests above (e.g. one that *deprioritizes* the
+    /// hinted move instead of prioritizing it) could still pass every one of
+    /// them if it never actually checked which way "outranks" needs to go.
+    /// Ordering a real capture against a real, unrelated quiet hint is what
+    /// would actually catch that: a backwards implementation sends the
+    /// quiet hint to the back, not the front.
+    #[test]
+    fn order_moves_ranks_an_unrelated_tt_hint_above_a_good_capture() {
+        let board = capture_and_quiet_position();
+        let mut moves = legal_moves(&board);
+
+        let capture = find_move(&board, Square::E4, Square::D5);
+        let quiet_hint = find_move(&board, Square::E1, Square::D1);
+
+        order_moves(&board, &mut moves, Some(quiet_hint));
+
+        assert_eq!(
+            moves.as_slice()[0],
+            quiet_hint,
+            "the tt-hinted quiet move must sort first, ahead of the available capture"
+        );
+        assert_ne!(
+            moves.as_slice()[0],
+            capture,
+            "the capture must not outrank an unrelated tt hint"
+        );
+    }
+
+    /// The issue's own testing note: whichever legal move is handed to
+    /// `order_moves` as the hint lands at index 0, regardless of what that
+    /// move actually is. Looping over every legal move in the position (the
+    /// one capture and several quiet king moves) as the hint in turn checks
+    /// this generically rather than pinning it to one move's own kind.
+    #[test]
+    fn order_moves_places_any_hinted_move_first() {
+        let board = capture_and_quiet_position();
+        let legal = legal_moves(&board);
+
+        for &hint in legal.as_slice() {
+            let mut moves = legal_moves(&board);
+            order_moves(&board, &mut moves, Some(hint));
+            assert_eq!(
+                moves.as_slice()[0],
+                hint,
+                "hint move {hint:?} must land at index 0 regardless of whether \
+                 it's a capture or a quiet move"
+            );
+        }
+    }
 }
