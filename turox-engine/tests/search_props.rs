@@ -158,3 +158,101 @@ proptest! {
         prop_assert_eq!(result.score, expected);
     }
 }
+
+/// Root randomization must never cost strength: the score reported with it on
+/// has to match the score reported with it off, because shuffling only changes
+/// *which* of several equally-good moves is chosen, never how good the chosen
+/// one is.
+///
+/// This is the property that makes the feature safe to ship without an SPRT
+/// verdict of its own. If it ever fails, randomization is picking worse moves
+/// rather than reordering equal ones.
+#[test]
+fn root_randomization_never_changes_the_score() {
+    let board = Board::start_pos();
+    let baseline = Search::new(Vec::new()).search(&board, 4);
+
+    for seed in 1..40u64 {
+        let randomized = Search::new(Vec::new())
+            .with_root_randomization(seed)
+            .search(&board, 4);
+        assert_eq!(
+            randomized.score, baseline.score,
+            "seed {seed} changed the root score, so it picked a worse move"
+        );
+    }
+}
+
+/// The behaviour the feature exists for. A deterministic engine played
+/// byte-identical games on lichess; over a spread of seeds the chosen move has
+/// to actually vary, or nothing has been fixed.
+///
+/// A `Vec` rather than a `HashSet` because `Move` deliberately implements
+/// neither `Hash` nor `Ord`; comparing against the first result answers the
+/// question without needing either.
+#[test]
+fn root_randomization_actually_varies_the_chosen_move() {
+    let board = Board::start_pos();
+    let chosen: Vec<_> = (1..60u64)
+        .map(|seed| {
+            Search::new(Vec::new())
+                .with_root_randomization(seed)
+                .search(&board, 3)
+                .best_move
+                .expect("start position has legal moves")
+        })
+        .collect();
+
+    let first = chosen[0];
+    assert!(
+        chosen.iter().any(|m| *m != first),
+        "every seed produced the same move, so randomization is inert"
+    );
+}
+
+/// Same seed, same result. Randomization is opt-in partly so that a caller who
+/// wants reproducibility can still have it, which requires the seed to fully
+/// determine the outcome.
+#[test]
+fn root_randomization_is_reproducible_for_a_given_seed() {
+    let board = Board::start_pos();
+    let a = Search::new(Vec::new())
+        .with_root_randomization(12345)
+        .search(&board, 4);
+    let b = Search::new(Vec::new())
+        .with_root_randomization(12345)
+        .search(&board, 4);
+    assert_eq!(a, b, "a fixed seed must fully determine the search result");
+}
+
+/// xorshift64* maps zero to zero forever, so a zero seed would silently produce
+/// an all-zero sequence and a shuffle that never moves anything. `Search`
+/// forces it nonzero rather than letting that fail quietly, which is the one
+/// case where "it still works" and "it silently did nothing" look identical
+/// from the outside.
+#[test]
+fn a_zero_seed_is_forced_nonzero_rather_than_silently_disabling_the_shuffle() {
+    let board = Board::start_pos();
+    let baseline = Search::new(Vec::new()).search(&board, 3);
+
+    let zero = Search::new(Vec::new())
+        .with_root_randomization(0)
+        .search(&board, 3);
+    assert_eq!(zero.score, baseline.score, "score must be unaffected");
+
+    let again = Search::new(Vec::new())
+        .with_root_randomization(0)
+        .search(&board, 3);
+    assert_eq!(zero, again, "a zero seed must still be reproducible");
+
+    // The real check: a seed of 0 must behave like the seed it is remapped to,
+    // not like "no randomization at all". Comparing against an explicit 1
+    // pins that remapping rather than just asserting nothing crashed.
+    let one = Search::new(Vec::new())
+        .with_root_randomization(1)
+        .search(&board, 3);
+    assert_eq!(
+        zero, one,
+        "a zero seed should be remapped to 1, not left as a no-op shuffle"
+    );
+}

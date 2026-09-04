@@ -211,7 +211,10 @@ fn build_search<'a>(
     stop: Arc<AtomicBool>,
     tt: &'a mut Tt,
 ) -> (Search<'a>, u8) {
-    let mut search = Search::new(history).with_stop_flag(stop).with_tt(tt);
+    let mut search = Search::new(history)
+        .with_stop_flag(stop)
+        .with_tt(tt)
+        .with_root_randomization(root_seed());
 
     if let Some(nodes) = options.nodes {
         search = search.with_max_nodes(nodes);
@@ -239,6 +242,22 @@ fn build_search<'a>(
 /// White's) via `search::time::allocate_time`. None of the above (a bare
 /// `go`, or `go depth N` with no clock fields) means no deadline at all:
 /// depth, node count, and `stop` are what bound the search instead.
+/// A per-search seed for root move randomization, taken from the wall clock.
+///
+/// Deliberately not a fixed seed: a fixed one would make every *game* identical
+/// again, just along a different line than the unrandomized engine played, which
+/// is the exact problem this exists to solve. Reproducibility lives at the
+/// `Search` layer instead, where a caller passes its own seed.
+///
+/// Nanosecond resolution rather than seconds: two `go` commands inside the same
+/// second are the normal case in a fast time control, and a second-resolution
+/// clock would hand them the same seed.
+fn root_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+}
+
 fn go_deadline(board: &Board, options: &GoOptions) -> Option<Instant> {
     if options.infinite {
         return None;

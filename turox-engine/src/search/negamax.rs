@@ -11,6 +11,7 @@ use crate::eval::{evaluate, Score, PIECE_VALUES};
 use crate::move_gen::attacks::in_check;
 use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
+use crate::rng::xorshift64star;
 use crate::search::draw::is_draw;
 use crate::search::tt::Tt;
 use crate::types::Move;
@@ -146,6 +147,14 @@ pub struct Search<'a> {
     /// actually copied in), so it survives across the separate `Search` a later `go` call
     /// rebuilds, rather than starting cold every time.
     tt: Option<&'a mut Tt>,
+    /// xorshift64* state when root move randomization is on, `None` when it is
+    /// off (the default, so every existing test and bench stays deterministic
+    /// without knowing this exists).
+    ///
+    /// Only the *root* move list is shuffled. Interior nodes stay deterministic
+    /// because shuffling them would fight move ordering, which is the single
+    /// biggest lever on search efficiency this engine has.
+    root_rng: Option<u64>,
 }
 
 impl<'a> Search<'a> {
@@ -163,6 +172,39 @@ impl<'a> Search<'a> {
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
+            root_rng: None,
+        }
+    }
+
+    /// Breaks ties between equally-good root moves at random instead of always
+    /// taking the first one generated, so the same position does not produce
+    /// the same game every time.
+    ///
+    /// `seed` is forced nonzero: xorshift64* maps zero to zero forever, so a
+    /// zero seed would silently disable the shuffle rather than fail loudly.
+    ///
+    /// Off by default. Search results are otherwise reproducible, and several
+    /// tests depend on that, so this is something a caller opts into (the UCI
+    /// session does) rather than something they have to opt out of.
+    #[must_use]
+    pub const fn with_root_randomization(mut self, seed: u64) -> Self {
+        self.root_rng = Some(if seed == 0 { 1 } else { seed });
+        self
+    }
+
+    /// Fisher-Yates over the root move list, so every permutation is equally
+    /// likely. A cheaper "swap two random entries" would bias the result toward
+    /// the original order, which is the order this exists to stop depending on.
+    fn shuffle_root_moves(&mut self, moves: &mut MoveList) {
+        let Some(state) = self.root_rng.as_mut() else {
+            return;
+        };
+        let slice = moves.as_mut_slice();
+        for i in (1..slice.len()).rev() {
+            *state = xorshift64star(*state);
+            let span = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
+            let j = usize::try_from(*state % span).unwrap_or(0);
+            slice.swap(i, j);
         }
     }
 
@@ -403,6 +445,11 @@ impl<'a> Search<'a> {
 
         let mut max = Score::MIN;
         let mut best_move = None;
+        // Before ordering, not after: `order_moves` sorts by a coarse priority
+        // class, so shuffling first is what decides which of several moves
+        // sharing a class gets tried first, while still leaving the ordering
+        // itself intact.
+        self.shuffle_root_moves(&mut moves);
         order_moves(board, &mut moves, None);
         for &m in &moves {
             self.history.push(board.hash());
