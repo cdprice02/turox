@@ -1,5 +1,6 @@
-//! Static position evaluation: material (below) and piece-square tables
-//! (`pst`), returned from the side-to-move's perspective via `evaluate`.
+//! Static position evaluation: material (below), piece-square tables
+//! (`pst`), and pawn structure (`pawn_structure`), returned from the
+//! side-to-move's perspective via `evaluate`.
 //!
 //! `eval_white_pov` is the absolute (White-relative) sum of terms;
 //! `evaluate` is the side-to-move-relative wrapper negamax search wants.
@@ -13,6 +14,7 @@ use crate::eval::pst::{pst_value, pst_value_eg};
 use crate::types::Color;
 use crate::Piece;
 
+mod pawn_structure;
 mod phase;
 pub mod pst;
 
@@ -41,8 +43,9 @@ pub type Score = i16;
 /// second table that could drift out of sync with this one.
 pub(crate) const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
 
-/// Material plus piece-square sum from White's perspective: positive means
-/// White is ahead, regardless of who's actually to move.
+/// Material, piece-square, and pawn-structure sum from White's
+/// perspective: positive means White is ahead, regardless of who's
+/// actually to move.
 ///
 /// Accumulates a midgame and an endgame term together (packed into one
 /// `phase::Tapered` running total) and blends them into a single `Score`
@@ -72,6 +75,8 @@ pub fn eval_white_pov(board: &Board) -> Score {
             );
         }
     }
+    score += pawn_structure::pawn_structure_score(board, Color::White);
+    score -= pawn_structure::pawn_structure_score(board, Color::Black);
     phase::interpolate(score, phase::game_phase(board))
 }
 
