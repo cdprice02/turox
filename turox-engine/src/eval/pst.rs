@@ -159,7 +159,7 @@ pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {
 /// of `color` on `sq`, read from the endgame table instead of the midgame
 /// one.
 ///
-/// Only the king has a distinct endgame table (see [`VISUAL_KING_PST_EG`]);
+/// Only the king has a distinct endgame table (`VISUAL_KING_PST_EG`);
 /// every other piece's positional preference doesn't change as material
 /// comes off the board, so this just forwards to [`pst_value`] for them.
 /// The king case reuses `pst_value`'s own reindex-then-Black-flip match
