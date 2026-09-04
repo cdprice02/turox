@@ -73,7 +73,7 @@ const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 /// finished: there, `best_move` still carries the best move found among whatever moves
 /// had already fully resolved before the abort, since that's the only case with no
 /// earlier completed iteration to fall back on instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct SearchResult {
     /// `None` only when the position handed to `search` has no legal moves at all
     /// (checkmate or stalemate); every other case, including an aborted first
@@ -87,6 +87,35 @@ pub struct SearchResult {
     /// Total nodes visited (negamax and quiescence both count) across every
     /// completed and aborted iteration of this call.
     pub nodes: u64,
+    /// Wall-clock time spent since [`Search::search`] was entered, covering
+    /// every iteration so far rather than just the one this result came from.
+    /// Measured even when no deadline is set, since UCI reports it regardless
+    /// of what bounded the search.
+    pub time: Duration,
+    /// Table occupancy in permille, or `None` when this search has no
+    /// transposition table at all. `None` rather than `0` because the two mean
+    /// different things to a GUI: an empty table and no table are not the same
+    /// state, and only the former is worth reporting as `hashfull 0`.
+    pub hashfull: Option<u16>,
+}
+
+/// Compares every field except `time`, mirroring how `Board` excludes its
+/// Zobrist hash: elapsed wall-clock is an observation about one particular
+/// run, not part of what a search *found*, so two runs that reached the same
+/// move, score, depth and node count are the same result even though they
+/// took different amounts of time.
+///
+/// Without this, `tests/search_props.rs`'s `search_is_deterministic` would
+/// compare two timings and fail essentially always, and weakening that test
+/// to dodge the problem would give up the check it exists for.
+impl PartialEq for SearchResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.best_move == other.best_move
+            && self.score == other.score
+            && self.depth == other.depth
+            && self.nodes == other.nodes
+            && self.hashfull == other.hashfull
+    }
 }
 
 /// What [`Search::search_root`] found for one depth: either the full move loop finished,
@@ -289,11 +318,14 @@ impl<'a> Search<'a> {
         max_depth: u8,
         mut on_iteration_complete: F,
     ) -> SearchResult {
+        let started = Instant::now();
         let mut result = SearchResult {
             best_move: None,
             score: 0,
             depth: 0,
             nodes: 0,
+            time: Duration::ZERO,
+            hashfull: None,
         };
         // Only tracked when `self.deadline` is set: a `max_nodes`-bounded or
         // fully unbounded search has nothing to estimate against, so this
@@ -317,6 +349,8 @@ impl<'a> Search<'a> {
                         score,
                         depth,
                         nodes: self.nodes(),
+                        time: started.elapsed(),
+                        hashfull: self.tt.as_deref().map(Tt::hashfull),
                     };
                     on_iteration_complete(&result);
                 }
@@ -332,6 +366,8 @@ impl<'a> Search<'a> {
                                 score,
                                 depth: 0,
                                 nodes: self.nodes(),
+                                time: started.elapsed(),
+                                hashfull: self.tt.as_deref().map(Tt::hashfull),
                             };
                         }
                     }

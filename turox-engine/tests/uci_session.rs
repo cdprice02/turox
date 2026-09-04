@@ -335,3 +335,59 @@ impl Write for SharedOutput {
         Ok(())
     }
 }
+
+/// The fields a GUI and a game record need in order to describe a search
+/// without it having to be reconstructed offline. Asserted end to end through
+/// a real session rather than only on `Response`'s `Display`, since the two
+/// can drift: the formatting could be right while `info_response` forgets to
+/// pass the values through.
+///
+/// `hashfull` is included because the session owns the transposition table,
+/// so a real session is the only place it can be non-`None`.
+#[test]
+fn go_emits_time_nps_and_hashfull_on_every_info_line() {
+    let output = run_session("position startpos\ngo depth 3\n");
+
+    let info_lines: Vec<&str> = output
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .collect();
+    assert!(
+        !info_lines.is_empty(),
+        "expected at least one info line, output: {output:?}"
+    );
+
+    for line in info_lines {
+        for field in ["nodes ", "nps ", "hashfull ", "time "] {
+            assert!(
+                line.contains(field),
+                "info line is missing {field:?}: {line:?}"
+            );
+        }
+    }
+}
+
+/// UCI's field order is conventional rather than enforced, but a GUI parsing
+/// positionally is a real thing, and `pv` in particular must stay last: it is
+/// the one variable-length field, so anything after it would be swallowed into
+/// the move list.
+#[test]
+fn info_line_keeps_pv_last() {
+    let output = run_session("position startpos\ngo depth 2\n");
+
+    let with_pv = output
+        .lines()
+        .find(|line| line.starts_with("info depth ") && line.contains(" pv "))
+        .unwrap_or_else(|| panic!("expected an info line carrying a pv, output: {output:?}"));
+
+    let after_pv = with_pv
+        .split_once(" pv ")
+        .map(|(_, rest)| rest)
+        .unwrap_or_default();
+    for field in ["nodes", "nps", "hashfull", "time", "score", "depth"] {
+        assert!(
+            !after_pv.contains(field),
+            "{field:?} appears after the pv in: {with_pv:?}"
+        );
+    }
+}
