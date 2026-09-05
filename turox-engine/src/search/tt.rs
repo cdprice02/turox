@@ -9,7 +9,41 @@
 //! `go` calls in the same game.
 
 use crate::eval::Score;
+use crate::search::is_mate_score;
 use crate::types::Move;
+
+/// Rewrites a score from root-relative to node-relative, for storage.
+///
+/// Only mate scores carry a distance-from-root component, so only they are
+/// adjusted; [`is_mate_score`] is the single definition of that boundary,
+/// shared with the UCI layer rather than restated here. A mate *for* the side
+/// to move is `MATE - ply`, so removing the ply means adding it back; a mate
+/// *against* is `ply - MATE`, so removing it means subtracting.
+///
+/// Applying one arm to everything, which is what this used to do, shifts quiet
+/// scores by the ply difference and moves winning mates the wrong way twice
+/// over, far enough to push them past `MATE` entirely.
+const fn score_to_tt(score: Score, ply: Score) -> Score {
+    if !is_mate_score(score) {
+        score
+    } else if score > 0 {
+        score + ply
+    } else {
+        score - ply
+    }
+}
+
+/// Inverse of [`score_to_tt`]: rewrites a stored node-relative score back to
+/// root-relative for the ply actually probing it.
+const fn score_from_tt(score: Score, ply: Score) -> Score {
+    if !is_mate_score(score) {
+        score
+    } else if score > 0 {
+        score - ply
+    } else {
+        score + ply
+    }
+}
 
 /// How a stored score relates to the true minimax value at the depth it was searched to.
 ///
@@ -41,11 +75,19 @@ pub struct Entry {
     /// Ply-adjusted: not the score as seen from the root, but a form independent of *how*
     /// this node was reached, so a later [`Tt::probe`] at a different ply from a different
     /// path can correctly re-derive its own root-relative value from it.
-    pub score: Score,
-    /// The remaining search depth `score` was computed at.
-    pub depth: u8,
-    /// How `score` relates to the true minimax value; see [`Bound`]'s own doc.
-    pub bound: Bound,
+    ///
+    /// Private, unlike `key` and `mv`: this number is meaningless without the ply that
+    /// produced it, and reading it directly is how a caller would silently reintroduce
+    /// the bug this encoding exists to prevent. [`Entry::cutoff_score`] is the only way
+    /// to get a score out, and it converts back to root-relative on the way.
+    score: Score,
+    /// The remaining search depth `score` was computed at. Private for the same reason
+    /// `score` is: it only means anything paired with it.
+    depth: u8,
+    /// How `score` relates to the true minimax value; see [`Bound`]'s own doc. Private:
+    /// interpreting a bound without the score it bounds is not a thing a caller should
+    /// be doing.
+    bound: Bound,
 }
 
 impl Entry {
@@ -64,7 +106,7 @@ impl Entry {
         if self.depth < min_depth {
             return None;
         }
-        let score = self.score + Score::from(ply);
+        let score = score_from_tt(self.score, Score::from(ply));
         match self.bound {
             Bound::Exact => Some(score),
             Bound::LowerBound if score >= beta => Some(score),
@@ -181,13 +223,19 @@ impl Tt {
         self.entries[index].filter(|entry| entry.key == key)
     }
 
-    /// Records `key`'s search result at `ply` (distance from the root): `score` is
-    /// ply-adjusted to a form independent of how this node was reached (see
-    /// [`Entry::score`]'s own doc), `depth` and `mv` are stored as given, and `bound` is
-    /// derived from comparing `score` against `alpha`/`beta` (see [`Bound`]'s own doc for
-    /// the exact mapping, and the gotcha in comparing against the right ones).
-    /// Always-replace: overwrites whatever was in this slot before, no depth-preferred
-    /// comparison.
+    /// Records `key`'s search result at `ply` (distance from the root).
+    ///
+    /// `score` goes in root-relative, exactly as the search produced it, and comes back
+    /// out root-relative from [`Entry::cutoff_score`]. The node-relative form it is held
+    /// in between those two points is this module's business, not the caller's: a mate
+    /// score means "mate at ply N counted from the root", which stops being true the
+    /// moment the same position is reached by a different path, so it is rewritten on the
+    /// way in and back on the way out.
+    ///
+    /// `depth` and `mv` are stored as given, and `bound` is derived from comparing
+    /// `score` against `alpha`/`beta` (see [`Bound`]'s own doc for the exact mapping, and
+    /// the gotcha in comparing against the right ones). Always-replace: overwrites
+    /// whatever was in this slot before, no depth-preferred comparison.
     ///
     /// # Panics
     ///
@@ -220,7 +268,7 @@ impl Tt {
         let entry = Entry {
             key,
             mv: mv.bits(),
-            score: score - Score::from(ply),
+            score: score_to_tt(score, Score::from(ply)),
             depth,
             bound,
         };
