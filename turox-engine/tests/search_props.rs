@@ -33,6 +33,7 @@ use turox_engine::eval::{evaluate, Score};
 use turox_engine::move_gen::attacks::in_check;
 use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::search::draw;
+use turox_engine::search::tt::Tt;
 use turox_engine::search::{Search, MATE, MAX_QUIESCENCE_DEPTH};
 
 // ---- Independent reference ----
@@ -255,4 +256,126 @@ fn a_zero_seed_is_forced_nonzero_rather_than_silently_disabling_the_shuffle() {
         zero, one,
         "a zero seed should be remapped to 1, not left as a no-op shuffle"
     );
+}
+
+/// A transposition table is a memoisation of a pure function, so a search that
+/// uses one must return exactly what the same search returns without one. Any
+/// score difference is a table bug by definition, which makes this the one
+/// check that needs no independent oracle.
+///
+/// This is the property that would have caught the mate-score corruption
+/// directly. The existing round-trip property could not: it probes at the same
+/// ply it stored at, where the adjustment applied on store and the one applied
+/// on probe cancel exactly.
+///
+/// Depths are small on purpose. The no-table side is a search with its
+/// memoisation removed, so it pays full price at this engine's branching
+/// factor; the deeper sweep that actually exercises accumulated drift is the
+/// `#[ignore]`d test below, following the same split the deep perft depths
+/// already use.
+#[test]
+fn a_warm_transposition_table_never_changes_a_score() {
+    assert_table_never_changes_scores(&[
+        // The position turox got this wrong in: one legal move, forced mate
+        // against it.
+        ("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53", 5),
+        // A bare forced mate.
+        ("4k3/8/8/8/8/8/6q1/6K1 w - - 0 1", 4),
+        // An ordinary midgame position, so the property is not only checked on
+        // mate scores, which are the special case rather than the common one.
+        (
+            "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+            4,
+        ),
+    ]);
+}
+
+/// The deep version of the property above. Mate-score drift grows with the gap
+/// between the storing ply and the probing ply, so it is shallow depths that
+/// are least likely to catch it; this is the run that would.
+#[test]
+#[ignore = "searches without a table at depth, minutes; run with --run-ignored all"]
+fn a_warm_transposition_table_never_changes_a_score_at_depth() {
+    assert_table_never_changes_scores(&[
+        ("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53", 10),
+        ("4k3/8/8/8/8/8/6q1/6K1 w - - 0 1", 8),
+        (
+            "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+            6,
+        ),
+    ]);
+}
+
+fn assert_table_never_changes_scores(cases: &[(&str, u8)]) {
+    for &(fen, max_depth) in cases {
+        let board = Board::try_from_fen(fen).expect("test FEN is valid");
+        for depth in 1..=max_depth {
+            let without = Search::new(Vec::new()).search(&board, depth);
+            let mut tt = Tt::new(16);
+            let with = Search::new(Vec::new())
+                .with_tt(&mut tt)
+                .search(&board, depth);
+
+            assert_eq!(
+                with.score, without.score,
+                "depth {depth} on {fen}: table changed the score from {} to {}",
+                without.score, with.score
+            );
+        }
+    }
+}
+
+/// The same table reused across successive searches, which is how the UCI
+/// session actually drives it: the table outlives any one `go`, so entries
+/// stored during a shallow search get probed during a deeper one. That reuse
+/// is what let the error accumulate in a real game rather than staying within
+/// a single search.
+#[test]
+fn a_table_reused_across_searches_never_changes_a_score() {
+    let board =
+        Board::try_from_fen("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53").expect("test FEN is valid");
+    let mut tt = Tt::new(16);
+
+    for depth in 1u8..=6 {
+        let without = Search::new(Vec::new()).search(&board, depth);
+        let with = Search::new(Vec::new())
+            .with_tt(&mut tt)
+            .search(&board, depth);
+        assert_eq!(
+            with.score, without.score,
+            "depth {depth}: a table carried over from earlier depths changed the score"
+        );
+    }
+}
+
+/// No search may report a score outside the range `negamax` can produce. The
+/// UCI layer derives a mate's *sign* from this value, so a score past `MATE`
+/// does not merely misreport the distance, it can invert which side is mating.
+///
+/// Every search here uses the table, which is the shape the real game had: the
+/// engine reported `mate 118` at depth 64 in a position it was being mated in.
+/// Depth 12 is enough to catch it, since the drift was already visible at
+/// depth 10 (-30022, printed as `mate 10`); the root has one legal move but
+/// the opponent has a queen, so deeper costs real time for no extra coverage.
+#[test]
+fn a_search_score_never_escapes_the_mate_range() {
+    let board =
+        Board::try_from_fen("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53").expect("test FEN is valid");
+    let mut tt = Tt::new(16);
+
+    for depth in 1u8..=12 {
+        let score = Search::new(Vec::new())
+            .with_tt(&mut tt)
+            .search(&board, depth)
+            .score;
+        assert!(
+            score.abs() <= MATE,
+            "depth {depth} reported {score}, outside +/- MATE"
+        );
+        assert!(
+            score < 0,
+            "depth {depth} reported {score}: this position is a forced mate \
+             against the side to move, so the score must stay negative"
+        );
+    }
 }

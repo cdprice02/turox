@@ -31,6 +31,29 @@ use std::time::{Duration, Instant};
 /// this comment.
 pub const MATE: Score = 30_000;
 
+/// The widest distance-from-root a mate score can carry.
+///
+/// Comfortably above any ply a real search reaches (iterative deepening stops
+/// at 64, plus a bounded quiescence tail) and far above anything the static
+/// evaluation terms can produce, so "is this a mate" never has to guess. The
+/// margin only has to separate the two ranges, not be tight.
+pub const MAX_MATE_PLY: Score = 512;
+
+/// Whether `score` encodes a forced mate rather than an ordinary evaluation.
+///
+/// The single definition of that boundary. It used to be answered in two
+/// places with two different thresholds: the transposition table's ply
+/// adjustment and the UCI layer's `mate` reporting each had their own idea of
+/// how close to [`MATE`] counted, which is exactly the kind of drift that lets
+/// a score be treated as a mate by one and as a centipawn value by the other.
+///
+/// `saturating_abs` rather than `abs`: [`Score::MIN`] has no positive
+/// counterpart and would overflow.
+#[must_use]
+pub const fn is_mate_score(score: Score) -> bool {
+    score.saturating_abs() >= MATE - MAX_MATE_PLY
+}
+
 /// How many plies past `negamax`'s horizon `quiescence` is allowed to keep resolving
 /// captures before it gives up and falls back to stand pat, same as if no more captures
 /// were available.
