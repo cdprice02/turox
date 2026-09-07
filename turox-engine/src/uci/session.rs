@@ -62,6 +62,10 @@ where
     // conceptually follows the same shape, though it's actually copied into `Search`
     // per call rather than borrowed.
     let mut tt = Tt::new(Tt::DEFAULT_HASH_MB);
+    // On by default: varied play is what a real opponent should meet. Turned off
+    // only by a caller that needs the same search twice, which is measurement,
+    // not play.
+    let mut randomize = true;
 
     for command in rx {
         match command {
@@ -69,6 +73,7 @@ where
                 send(&mut writer, &Response::IdName);
                 send(&mut writer, &Response::IdAuthor);
                 send(&mut writer, &Response::OptionHash);
+                send(&mut writer, &Response::OptionRandomize);
                 send(&mut writer, &Response::UciOk);
             }
             Command::IsReady => send(&mut writer, &Response::ReadyOk),
@@ -90,7 +95,7 @@ where
                     .expect("active_stop mutex should not be poisoned") = Some(Arc::clone(&stop));
 
                 let (mut search, max_depth) =
-                    build_search(board, history.clone(), &options, stop, &mut tt);
+                    build_search(board, history.clone(), &options, stop, &mut tt, randomize);
                 // `search_with_info`, not plain `search`: streams an `info`
                 // line after every completed depth, so a GUI watching a
                 // long search sees progress instead of silence until
@@ -118,6 +123,17 @@ where
             // recognized, well-formed command this engine just doesn't act on yet,
             // per UCI's own ignore-what-you-don't-support convention.
             Command::SetOption { name, value } => {
+                // UCI's `check` type sends the literal strings "true"/"false".
+                // Anything else leaves the setting alone, the same
+                // ignore-what-you-do-not-understand convention `Hash` uses for
+                // an unparseable number.
+                if name == "Randomize" {
+                    match value.as_deref() {
+                        Some("true") => randomize = true,
+                        Some("false") => randomize = false,
+                        _ => {}
+                    }
+                }
                 if name == "Hash" {
                     // A value that doesn't parse as a number at all is ignored,
                     // leaving the table untouched, the same convention as an
@@ -212,11 +228,12 @@ fn build_search<'a>(
     options: &GoOptions,
     stop: Arc<AtomicBool>,
     tt: &'a mut Tt,
+    randomize: bool,
 ) -> (Search<'a>, u8) {
-    let mut search = Search::new(history)
-        .with_stop_flag(stop)
-        .with_tt(tt)
-        .with_root_randomization(root_seed());
+    let mut search = Search::new(history).with_stop_flag(stop).with_tt(tt);
+    if randomize {
+        search = search.with_root_randomization(root_seed());
+    }
 
     if let Some(nodes) = options.nodes {
         search = search.with_max_nodes(nodes);

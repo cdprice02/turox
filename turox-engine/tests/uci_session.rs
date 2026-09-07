@@ -391,3 +391,71 @@ fn info_line_keeps_pv_last() {
         );
     }
 }
+
+/// Turning randomization off has to make the search reproducible, which is the
+/// entire reason the option exists: fixed-depth node counts are the one search
+/// metric exact enough to compare two builds on a busy machine, and they are
+/// worthless if a single build disagrees with itself.
+#[test]
+fn randomize_off_makes_repeated_searches_identical() {
+    let script = "setoption name Randomize value false\nposition startpos\ngo depth 5\n";
+    let first = run_session(script);
+    let second = run_session(script);
+
+    let info_of = |out: &str| {
+        out.lines()
+            .filter(|l| l.starts_with("info depth ") || l.starts_with("bestmove"))
+            // `time` and `nps` are wall-clock and legitimately differ between
+            // two runs of an identical search; everything else must not.
+            .map(|l| {
+                l.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .chunks(2)
+                    .filter(|kv| !matches!(kv.first(), Some(&("time" | "nps"))))
+                    .map(|kv| kv.join(" "))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        info_of(&first),
+        info_of(&second),
+        "Randomize=false must give the same search twice"
+    );
+}
+
+/// The default stays on, so ordinary play is still varied. Asserted through a
+/// real session rather than on `Search` directly, because the session is what
+/// decides the default and that is the thing that could silently regress.
+#[test]
+fn randomization_is_on_by_default() {
+    let chosen: Vec<String> = (0..12)
+        .map(|_| {
+            run_session("position startpos\ngo depth 3\n")
+                .lines()
+                .find(|l| l.starts_with("bestmove"))
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+
+    let first = &chosen[0];
+    assert!(
+        chosen.iter().any(|m| m != first),
+        "default should still vary the move, got {chosen:?}"
+    );
+}
+
+/// The option has to be advertised, or a GUI has no way to discover it.
+#[test]
+fn uci_advertises_the_randomize_option() {
+    let output = run_session("uci\n");
+    assert!(
+        output
+            .lines()
+            .any(|l| l == "option name Randomize type check default true"),
+        "expected the Randomize option in the uci block, got: {output:?}"
+    );
+}
