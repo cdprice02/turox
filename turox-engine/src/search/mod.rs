@@ -14,4 +14,4 @@ mod negamax;
 pub mod time;
 pub mod tt;
 
-pub use negamax::{Search, SearchResult, MATE, MAX_QUIESCENCE_DEPTH};
+pub use negamax::{is_mate_score, Search, SearchResult, MATE, MAX_MATE_PLY, MAX_QUIESCENCE_DEPTH};

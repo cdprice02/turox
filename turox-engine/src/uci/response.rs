@@ -6,7 +6,7 @@
 
 use crate::eval::Score;
 use crate::search::tt::Tt;
-use crate::search::MATE;
+use crate::search::{is_mate_score, MATE};
 use crate::types::Move;
 use std::fmt;
 use std::time::Duration;
@@ -98,30 +98,38 @@ enum ScoreKind {
 /// Classifies a side-to-move-relative score (`SearchResult::score`'s own
 /// convention) as an ordinary centipawn evaluation or a mate distance.
 ///
-/// A genuine mate score is always within a few hundred of `MATE` (`search`'s
-/// own `ply as Score - MATE`/`MATE - ply` formula, documented on `MATE`
-/// itself), however deep the search went; an ordinary material/positional
-/// evaluation never gets remotely close to that magnitude. `MATE / 2` as
-/// the cutoff between the two is generous in both directions: no realistic
-/// evaluation swing approaches it, and no realistic search depth produces a
-/// mate distance anywhere near it either.
+/// The mate boundary comes from [`is_mate_score`] rather than a threshold
+/// chosen here. It used to be `MATE / 2`, which disagreed with the
+/// transposition table's own idea of the same boundary; a score could be a
+/// mate to one and a centipawn value to the other.
 ///
-/// Converting a mate *score* into a mate *move count* reuses the same ply
-/// arithmetic `MATE`'s own doc lays out, just run in reverse: recover the
-/// ply distance from `MATE - score.abs()`, then convert plies to full moves
-/// (UCI's unit, not this engine's own). Get the rounding direction right,
-/// worth checking against a concrete case rather than trusting it by
-/// inspection: `tests/uci_response.rs` pins specific mate scores
-/// already confirmed correct by `search`'s own mate-puzzle tests
-/// (`MATE - 1`, `MATE - 3`, ...) to their expected `mate N` output.
+/// UCI counts full moves, not plies, so the ply distance recovered from
+/// `MATE - score.abs()` is halved (rounding up: a mate delivered on the very
+/// next ply is `mate 1`, not `mate 0`).
+///
+/// `tests` below pin the ply-to-move table in both directions, and the
+/// out-of-range cases separately.
 const fn classify_score(score: Score) -> ScoreKind {
-    if score.abs() > MATE / 2 {
-        let ply = MATE - score.abs();
-        let moves = (ply + 1) / 2;
-        ScoreKind::Mate(score.signum() * moves)
-    } else {
-        ScoreKind::Cp(score)
+    if !is_mate_score(score) {
+        return ScoreKind::Cp(score);
     }
+    // `saturating_abs`, not `abs`: `Score::MIN` has no positive counterpart.
+    let magnitude = score.saturating_abs();
+    if magnitude > MATE {
+        // A score past `MATE` is not something search should produce, and if it
+        // does, the arithmetic below inverts the mate's sign rather than merely
+        // misreporting its distance: `MATE - magnitude` goes negative, Rust
+        // truncates the division toward zero, and `signum` multiplies by -1, so
+        // a side being mated announces a win. The transposition table produced
+        // exactly that (-30022 printed as `mate 10`) before its ply adjustment
+        // was fixed. Reporting the most urgent mate in the score's own
+        // direction keeps the one thing that matters, which side is winning,
+        // correct.
+        return ScoreKind::Mate(score.signum());
+    }
+    let ply = MATE - magnitude;
+    let moves = (ply + 1) / 2;
+    ScoreKind::Mate(score.signum() * moves)
 }
 
 impl fmt::Display for Response {
@@ -467,5 +475,41 @@ mod tests {
             response.to_string(),
             "info depth 2 score cp 0 nodes 10 nps 10000 hashfull 37 time 1"
         );
+    }
+
+    /// A score past `MATE` must never be reported as a mate for the *other*
+    /// side. This is defence in depth rather than a restatement of the table
+    /// fix: `classify_score` computes `MATE - score.abs()`, and once that goes
+    /// negative, Rust's truncation toward zero and the `signum` multiply
+    /// compound into a sign inversion, so a side being mated confidently
+    /// announces a win.
+    ///
+    /// Found in a real game: an engine score of -30022 printed as `mate 10`.
+    #[test]
+    fn an_out_of_range_losing_score_is_never_reported_as_a_win() {
+        for score in [-30_001, -30_006, -30_022, -30_500, Score::MIN] {
+            match classify_score(score) {
+                ScoreKind::Mate(moves) => assert!(
+                    moves < 0,
+                    "score {score} is a loss but classified as mate {moves}"
+                ),
+                ScoreKind::Cp(cp) => panic!("score {score} classified as cp {cp}, not a mate"),
+            }
+        }
+    }
+
+    /// The mirror case, so the guard cannot be written in a way that fixes one
+    /// sign by breaking the other.
+    #[test]
+    fn an_out_of_range_winning_score_is_never_reported_as_a_loss() {
+        for score in [30_001, 30_006, 30_022, 30_500, Score::MAX] {
+            match classify_score(score) {
+                ScoreKind::Mate(moves) => assert!(
+                    moves > 0,
+                    "score {score} is a win but classified as mate {moves}"
+                ),
+                ScoreKind::Cp(cp) => panic!("score {score} classified as cp {cp}, not a mate"),
+            }
+        }
     }
 }

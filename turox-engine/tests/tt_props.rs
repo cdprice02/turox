@@ -2,11 +2,23 @@
 
 mod common;
 
+/// Any legal move, for tests that need a syntactically valid one to store and
+/// do not care which. `Move` has no public constructor by design, so this goes
+/// through move generation rather than fabricating bits.
+fn a_move() -> turox_engine::types::Move {
+    *legal_moves(&Board::start_pos())
+        .as_slice()
+        .first()
+        .expect("the start position has legal moves")
+}
+
 use common::any_board_and_legal_move;
 use proptest::prelude::*;
 use turox_engine::board::Board;
+use turox_engine::eval::Score;
 use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::search::tt::Tt;
+use turox_engine::search::MATE;
 
 proptest! {
     /// Storing a result with `score` strictly inside `(alpha, beta)` always yields
@@ -125,4 +137,112 @@ fn hashfull_scales_with_occupancy() {
         500,
         "500 of the 1000 sampled slots are taken"
     );
+}
+
+// Mate-score handling through the transposition table.
+//
+// The table stores scores in a form independent of how a node was reached, so
+// a mate score has to have its distance-from-root removed on store and
+// re-added on probe. An ordinary positional score has no such component and
+// must survive untouched. Getting this wrong produces no panic and no failing
+// test elsewhere: it surfaces as the engine reporting a mate for the wrong
+// side, which is how it was found (a lost game where turox announced `#110`
+// one move before being checkmated).
+//
+// The three cases below are deliberately separate rather than one property,
+// because they fail independently and one of them passed all along.
+
+/// A quiet positional score has no distance-from-root component, so probing at
+/// a different ply than it was stored at must return it unchanged.
+#[test]
+fn a_quiet_score_is_unchanged_by_the_ply_it_is_probed_at() {
+    let mut tt = Tt::new(1);
+    let key = 0xDEAD_BEEF_1234_5678;
+    tt.store(key, 2, 5, 50, -MATE, MATE, a_move());
+    let entry = tt.probe(key).expect("just stored");
+
+    assert_eq!(
+        entry.cutoff_score(1, -MATE, MATE, 2),
+        Some(50),
+        "probing at the ply it was stored at must round-trip"
+    );
+    assert_eq!(
+        entry.cutoff_score(1, -MATE, MATE, 6),
+        Some(50),
+        "a quiet score must not shift with the probing ply"
+    );
+}
+
+/// Being mated: `negamax` scores this as `ply - MATE`, so the same mate
+/// reached at a deeper ply is further away and must score accordingly.
+///
+/// This case has always worked, because the unconditional adjustment the table
+/// used to apply happens to be exactly the right one for losing scores. It is
+/// here to stay green through the fix, not to go from red to green.
+#[test]
+fn a_losing_mate_re_anchors_to_the_probing_ply() {
+    let mut tt = Tt::new(1);
+    let key = 0x1111_2222_3333_4444;
+    // A node at ply 4 that is mated 4 plies from the root.
+    tt.store(key, 4, 3, 4 - MATE, -MATE, MATE, a_move());
+    let entry = tt.probe(key).expect("just stored");
+
+    assert_eq!(
+        entry.cutoff_score(3, -MATE, MATE, 9),
+        Some(9 - MATE),
+        "the same mate reached at ply 9 is 9 plies from the root"
+    );
+}
+
+/// Delivering mate: scored as `MATE - ply`. The mirror of the losing case, and
+/// the one the unconditional adjustment gets wrong in both directions at once,
+/// so the error compounds to twice the ply difference and can push the score
+/// past `MATE` entirely.
+#[test]
+fn a_winning_mate_re_anchors_to_the_probing_ply() {
+    let mut tt = Tt::new(1);
+    let key = 0x5555_6666_7777_8888;
+    // A node at ply 4 that mates 4 plies from the root.
+    tt.store(key, 4, 3, MATE - 4, -MATE, MATE, a_move());
+    let entry = tt.probe(key).expect("just stored");
+
+    assert_eq!(
+        entry.cutoff_score(3, -MATE, MATE, 9),
+        Some(MATE - 9),
+        "the same mate reached at ply 9 is 9 plies from the root"
+    );
+}
+
+/// No stored score may ever come back outside the range `negamax` can produce.
+/// A score past `MATE` is what turns a subtle distance error into a reported
+/// win for the side being mated, since the UCI layer derives the mate's sign
+/// from it.
+///
+/// Scores are derived from the storing ply rather than picked freely: a node at
+/// ply `p` cannot score better than `MATE - p`, because the mate has to be
+/// delivered somewhere at or below it. Feeding impossible pairs (say `MATE - 1`
+/// at ply 23) would fail this on inputs no search can generate, testing the
+/// arithmetic's behaviour on garbage instead of its behaviour on real search
+/// output.
+#[test]
+fn a_probed_score_never_escapes_the_mate_range() {
+    let mut tt = Tt::new(1);
+    for store_ply in 0u8..24 {
+        for probe_ply in 0u8..24 {
+            let key = u64::from(store_ply) << 32 | u64::from(probe_ply) | 0xABCD_0000_0000_0000;
+            let p = Score::from(store_ply);
+            // Mates reachable from a node at `store_ply`, plus ordinary scores.
+            for score in [MATE - p, MATE - p - 3, p - MATE, p + 3 - MATE, 0, 250, -250] {
+                tt.store(key, store_ply, 3, score, -MATE, MATE, a_move());
+                let Some(entry) = tt.probe(key) else { continue };
+                if let Some(got) = entry.cutoff_score(3, -MATE, MATE, probe_ply) {
+                    assert!(
+                        got.abs() <= MATE,
+                        "score {score} stored at ply {store_ply} came back as {got} \
+                         when probed at ply {probe_ply}, outside +/- MATE"
+                    );
+                }
+            }
+        }
+    }
 }
