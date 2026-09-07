@@ -31,6 +31,15 @@ pub enum Response {
     /// `IdName`/`IdAuthor`: there's exactly one option to advertise right now, not
     /// something a caller supplies per call.
     OptionHash,
+    /// `option name Randomize type check default true`: advertises whether the
+    /// engine may break ties between equally-good root moves at random.
+    ///
+    /// Exists so a measurement can turn it off. Randomization never changes the
+    /// score, only which of several equally-scoring moves is chosen, but it does
+    /// change how many nodes reaching that score costs, and fixed-depth node
+    /// counts are the one search metric that is otherwise exact enough to
+    /// compare two builds on a busy machine.
+    OptionRandomize,
     /// `uciok`: done identifying, ready to receive commands.
     UciOk,
     /// `readyok`: reply to `isready`.
@@ -144,6 +153,9 @@ impl fmt::Display for Response {
                 Tt::MIN_HASH_MB,
                 Tt::MAX_HASH_MB
             ),
+            Self::OptionRandomize => {
+                write!(f, "option name Randomize type check default true")
+            }
             Self::UciOk => write!(f, "uciok"),
             Self::ReadyOk => write!(f, "readyok"),
             Self::BestMove(m) => {
