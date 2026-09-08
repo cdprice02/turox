@@ -22,7 +22,7 @@
 use crate::board::Board;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
-use crate::search::{Search, SearchResult};
+use crate::search::{CutoffStats, Search, SearchResult};
 use crate::types::Color;
 use crate::uci::{self, Command, GoOptions, Response};
 use std::io::{BufRead, Write};
@@ -113,6 +113,7 @@ where
                 if result.depth == 0 {
                     send(&mut writer, &info_response(&result));
                 }
+                send(&mut writer, &cutoff_info_string(&result));
                 send(&mut writer, &Response::BestMove(result.best_move));
             }
             // Already handled by `read_commands` setting `active_stop`
@@ -169,6 +170,46 @@ fn info_response(result: &SearchResult) -> Response {
         hashfull: result.hashfull,
         pv: result.best_move.into_iter().collect(),
     }
+}
+
+/// Builds the `info string` line reporting the cutoff-index histogram, the
+/// diagnostic that answers whether move ordering is actually improving
+/// rather than just moving work around (an `info string` line, not a
+/// dedicated `Response` field, since no GUI has a slot for this: it's a
+/// human/log-reading diagnostic, not something a GUI parses).
+///
+/// Negamax and quiescence report separately (see `SearchResult`'s own
+/// doc on why): a single combined number would flatter or distort
+/// whichever of the two dominates the raw count.
+fn cutoff_info_string(result: &SearchResult) -> Response {
+    Response::InfoString(format!(
+        "cutoffs negamax {} quiescence {}",
+        cutoff_summary(&result.negamax_cutoffs),
+        cutoff_summary(&result.quiescence_cutoffs)
+    ))
+}
+
+/// `fail_high=<n> first_move_rate=<pct>% index=<histogram>` for one
+/// `CutoffStats`. `first_move_rate` is 0% on a stats with no cutoffs at all
+/// (rather than dividing by zero) since there's nothing to rate yet, not
+/// because ordering failed.
+fn cutoff_summary(stats: &CutoffStats) -> String {
+    let first_move_rate = if stats.fail_high_nodes == 0 {
+        0.0
+    } else {
+        #[allow(
+            clippy::as_conversions,
+            clippy::cast_precision_loss,
+            reason = "a diagnostic percentage; node counts are nowhere near f64's \
+                      2^52 exact-integer ceiling, so precision loss here isn't real"
+        )]
+        let rate = 100.0 * stats.cutoff_index[0] as f64 / stats.fail_high_nodes as f64;
+        rate
+    };
+    format!(
+        "fail_high={} first_move_rate={first_move_rate:.1}% index={:?}",
+        stats.fail_high_nodes, stats.cutoff_index
+    )
 }
 
 fn send(writer: &mut impl Write, response: &Response) {

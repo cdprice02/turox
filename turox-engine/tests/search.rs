@@ -552,3 +552,37 @@ fn quiescence_finds_a_mate_inside_its_own_recursion() {
         result.score
     );
 }
+
+// ---- Cutoff-index instrumentation ----
+
+/// Kiwipete's own histogram at a fixed depth, pinned as a floor rather than an
+/// exact match: node counts (and so their split across the histogram) shift
+/// with pruning/ordering tuning, which is expected to happen, but a
+/// well-ordered search should never regress *below* this rate. Each Ordering
+/// milestone technique is expected to raise this number, not just avoid
+/// lowering it; this documents where it starts.
+#[test]
+fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+    let result = Search::new(Vec::new()).search(&board, 6);
+
+    let stats = result.negamax_cutoffs;
+    assert!(
+        stats.fail_high_nodes > 0,
+        "this position must actually produce beta cutoffs to search at all, or the \
+         rate below is measuring nothing"
+    );
+    #[allow(
+        clippy::as_conversions,
+        clippy::cast_precision_loss,
+        reason = "a diagnostic ratio; node counts are nowhere near f64's 2^52 \
+                  exact-integer ceiling, so precision loss here isn't real"
+    )]
+    let first_move_rate = stats.cutoff_index[0] as f64 / stats.fail_high_nodes as f64;
+    assert!(
+        first_move_rate >= 0.9,
+        "first-move cutoff rate regressed to {first_move_rate:.3}, below the 0.9 floor"
+    );
+}

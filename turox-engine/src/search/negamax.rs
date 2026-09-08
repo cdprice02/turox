@@ -87,6 +87,29 @@ pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 /// that would need less than half the typical growth factor to fit.
 const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
+/// Which move index took a beta cutoff, the standard diagnostic for move-ordering quality.
+///
+/// A well-ordered search takes most of its cutoffs on the first move tried (index 0),
+/// since that's what alpha-beta pruning is actually trying to arrange.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CutoffStats {
+    /// Nodes whose move loop hit a beta cutoff (`alpha >= beta`) at all.
+    pub fail_high_nodes: u64,
+    /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
+    /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
+    /// make this array itself unbounded; summing the whole array always equals
+    /// `fail_high_nodes`.
+    pub cutoff_index: [u64; 16],
+}
+
+impl CutoffStats {
+    /// Records a cutoff at `index` (0-based position in the already-ordered move list).
+    fn record(&mut self, index: usize) {
+        self.fail_high_nodes += 1;
+        self.cutoff_index[index.min(15)] += 1;
+    }
+}
+
 /// One completed call to [`Search::search`]: the best move and score found, and the depth
 /// actually reached.
 ///
@@ -121,6 +144,16 @@ pub struct SearchResult {
     /// different things to a GUI: an empty table and no table are not the same
     /// state, and only the former is worth reporting as `hashfull 0`.
     pub hashfull: Option<u16>,
+    /// Cutoff-index histogram for `negamax`'s own move loop (`search_root`'s
+    /// counts the same way), across every completed and aborted iteration so
+    /// far, the same accumulation `nodes` uses.
+    pub negamax_cutoffs: CutoffStats,
+    /// Cutoff-index histogram for `quiescence`'s move loop, kept separate from
+    /// `negamax_cutoffs`: quiescence's own list (captures, or evasions while in
+    /// check) is a different, usually much shorter list than a main-search
+    /// node's, and mixing the two would flatter or distort whichever one
+    /// dominates the combined count.
+    pub quiescence_cutoffs: CutoffStats,
 }
 
 /// Compares every field except `time`, mirroring how `Board` excludes its
@@ -139,6 +172,8 @@ impl PartialEq for SearchResult {
             && self.depth == other.depth
             && self.nodes == other.nodes
             && self.hashfull == other.hashfull
+            && self.negamax_cutoffs == other.negamax_cutoffs
+            && self.quiescence_cutoffs == other.quiescence_cutoffs
     }
 }
 
@@ -207,6 +242,12 @@ pub struct Search<'a> {
     /// because shuffling them would fight move ordering, which is the single
     /// biggest lever on search efficiency this engine has.
     root_rng: Option<u64>,
+    /// Accumulates across `search_root` and `negamax`'s move loops; see
+    /// [`CutoffStats`] and [`SearchResult::negamax_cutoffs`].
+    negamax_cutoffs: CutoffStats,
+    /// Accumulates across `quiescence`'s move loop (captures and evasions
+    /// both); see [`CutoffStats`] and [`SearchResult::quiescence_cutoffs`].
+    quiescence_cutoffs: CutoffStats,
 }
 
 impl<'a> Search<'a> {
@@ -225,6 +266,8 @@ impl<'a> Search<'a> {
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
             root_rng: None,
+            negamax_cutoffs: CutoffStats::default(),
+            quiescence_cutoffs: CutoffStats::default(),
         }
     }
 
@@ -391,6 +434,8 @@ impl<'a> Search<'a> {
             nodes: 0,
             time: Duration::ZERO,
             hashfull: None,
+            negamax_cutoffs: CutoffStats::default(),
+            quiescence_cutoffs: CutoffStats::default(),
         };
         // Only tracked when `self.deadline` is set: a `max_nodes`-bounded or
         // fully unbounded search has nothing to estimate against, so this
@@ -416,6 +461,8 @@ impl<'a> Search<'a> {
                         nodes: self.nodes(),
                         time: started.elapsed(),
                         hashfull: self.tt.as_deref().map(Tt::hashfull),
+                        negamax_cutoffs: self.negamax_cutoffs,
+                        quiescence_cutoffs: self.quiescence_cutoffs,
                     };
                     on_iteration_complete(&result);
                 }
@@ -433,6 +480,8 @@ impl<'a> Search<'a> {
                                 nodes: self.nodes(),
                                 time: started.elapsed(),
                                 hashfull: self.tt.as_deref().map(Tt::hashfull),
+                                negamax_cutoffs: self.negamax_cutoffs,
+                                quiescence_cutoffs: self.quiescence_cutoffs,
                             };
                         }
                     }
@@ -510,7 +559,7 @@ impl<'a> Search<'a> {
         // itself intact.
         self.shuffle_root_moves(&mut moves);
         order_moves(board, &mut moves, None);
-        for &m in &moves {
+        for (i, &m) in moves.as_slice().iter().enumerate() {
             self.history.push(board.hash());
 
             let child = board.make_move(m);
@@ -532,6 +581,7 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
+                self.negamax_cutoffs.record(i);
                 break;
             }
         }
@@ -619,7 +669,7 @@ impl<'a> Search<'a> {
         let mut max = Score::MIN;
         let mut best_move = None;
         order_moves(board, &mut moves, tt_move);
-        for &m in &moves {
+        for (i, &m) in moves.as_slice().iter().enumerate() {
             self.history.push(board.hash());
 
             let child = board.make_move(m);
@@ -637,6 +687,7 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
+                self.negamax_cutoffs.record(i);
                 break;
             }
         }
@@ -711,7 +762,7 @@ impl<'a> Search<'a> {
 
             order_moves(board, &mut evasions, None);
             let mut max = Score::MIN;
-            for &m in &evasions {
+            for (i, &m) in evasions.as_slice().iter().enumerate() {
                 let child = board.make_move(m);
                 let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth, None);
 
@@ -724,6 +775,7 @@ impl<'a> Search<'a> {
                     alpha = max;
                 }
                 if alpha >= beta {
+                    self.quiescence_cutoffs.record(i);
                     break;
                 }
             }
@@ -744,7 +796,7 @@ impl<'a> Search<'a> {
             captures.retain(|m| m.flags().is_capture());
 
             order_moves(board, &mut captures, None);
-            for &m in &captures {
+            for (i, &m) in captures.as_slice().iter().enumerate() {
                 let child = board.make_move(m);
                 let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth - 1, None);
 
@@ -757,6 +809,7 @@ impl<'a> Search<'a> {
                     alpha = max;
                 }
                 if alpha >= beta {
+                    self.quiescence_cutoffs.record(i);
                     break;
                 }
             }
