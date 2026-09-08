@@ -1010,31 +1010,11 @@ mod tests {
         }
     }
 
-    // Two invariants in this hot loop that are already correct but subtle
-    // enough that a later change could break them silently without anything
-    // else failing at the point of the mistake. Pinned here rather than
-    // trusted by inspection.
-
-    /// `history.pop()` runs before the `-score?` that can propagate an abort, in
-    /// both `search_root` and `negamax`, so every push this search makes has a
-    /// matching pop even on a path that aborts partway through. Moving the pop
-    /// after the `?`, which reads as a harmless tidy-up, would leak one stack
-    /// entry per aborted node instead: `self.history` would grow every time this
-    /// search itself is bounded and interrupted, and never shrink back down,
-    /// corrupting repetition detection for whatever reuses this `Search` (or a
-    /// fresh one seeded from a `history` that outlived the search that grew it).
-    ///
-    /// A node-budget-bounded search that aborts mid-tree, asserting `history`'s
-    /// own length before and after, is a direct observation of the leak: an
-    /// indirect check through whether a repetition got missed or invented would
-    /// still catch the same bug, but only by accident of which position happened
-    /// to be on the board, not by construction.
+    /// Every `history.push` in the move loop is matched by a `pop` before the
+    /// `-score?` that can propagate an abort, even along the path that aborts.
     #[test]
     fn aborted_search_leaves_the_history_stack_as_it_found_it() {
         let board = Board::start_pos();
-        // Arbitrary non-matching hashes, not real positions on this board's own
-        // path: this test only cares about the seed's *length* surviving an
-        // abort, not about triggering (or avoiding) a real repetition.
         let seed_history = vec![0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444];
 
         let mut probe = Search::new(seed_history.clone());
@@ -1043,42 +1023,15 @@ mod tests {
         let mut bounded = Search::new(seed_history.clone()).with_max_nodes(unbounded.nodes / 2);
         bounded.search(&board, 4);
 
-        assert_eq!(
-            bounded.history.len(),
-            seed_history.len(),
-            "an aborted search must leave `history` exactly as it found it: every \
-             push this search made must have a matching pop, even along the path \
-             that hit the abort"
-        );
+        assert_eq!(bounded.history.len(), seed_history.len());
     }
 
-    /// `negamax` stores a node's bound derived from the `alpha` it was *called*
-    /// with (saved as `original_alpha` before the move loop runs), not `alpha` as
-    /// the loop itself narrows it while searching moves. Comparing against the
-    /// narrowed value instead is a classic quiet mistake: it produces entries
-    /// that look exactly as valid as a correct one and would cause wrong cutoffs
-    /// later, with nothing failing at the point of the mistake itself.
+    /// `negamax` stores using the alpha the node was *called* with, not the
+    /// alpha its own move loop narrows while searching moves.
     ///
-    /// Tested through the public `Tt`/`Entry` API rather than by reading back
-    /// `bound`/`score`, both private on `Entry`: `Entry::cutoff_score`
-    /// with a probing window wider than any real score (`Score::MIN..=Score::MAX`)
-    /// only ever returns `Some` for `Bound::Exact`. `Bound::UpperBound` and
-    /// `Bound::LowerBound` each need their own score-vs-window check to pass
-    /// first (`score <= alpha` / `score >= beta`), which an astronomically wide
-    /// window can never satisfy for an ordinary score, so either of those bounds
-    /// comes back `None` here instead.
-    ///
-    /// `capture_and_quiet_position` at depth 2 is deliberately not a forced mate
-    /// and not close to one: this call's own `beta` is `MATE`, so a position
-    /// anywhere near that score would risk a real beta cutoff (`alpha >= beta`)
-    /// partway through the move loop, an edge case this test isn't trying to
-    /// cover. What it needs is just some move beating `alpha` (`-MATE`, trivially
-    /// true for any ordinary position), which is what makes the loop narrow
-    /// `alpha` upward at all: the loop always narrows `alpha` to match the final
-    /// `max` exactly once any move has beaten the call's starting `alpha`, so a
-    /// regression that stored against the narrowed value would store
-    /// `Bound::UpperBound` here (narrowed `alpha` == returned `score`, so
-    /// `score <= alpha` always holds), and this assertion would flip to `None`.
+    /// `Entry::cutoff_score` with a window wider than any real score only
+    /// returns `Some` for `Bound::Exact`, which is what lets this assert
+    /// through the public API without exposing `Entry`'s private fields.
     #[test]
     fn negamax_stores_the_bound_using_the_alpha_this_node_was_called_with() {
         let board = capture_and_quiet_position();
@@ -1095,10 +1048,7 @@ mod tests {
             .expect("depth 2 always reaches the store");
         assert_eq!(
             entry.cutoff_score(2, Score::MIN, Score::MAX, 0),
-            Some(score),
-            "a node whose real score clears the alpha it was called with must \
-             store Bound::Exact, derived from that original alpha, not the \
-             alpha its own move loop later narrowed to"
+            Some(score)
         );
     }
 }

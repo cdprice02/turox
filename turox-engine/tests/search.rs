@@ -422,32 +422,15 @@ fn find_move(board: &Board, from: Square, to: Square) -> Move {
         .expect("move must be legal in this position")
 }
 
-/// The transposition table's key carries no halfmove clock, so two positions
-/// identical in everything else but how close they are to a fifty-move draw
-/// share an entry. `far` and `near` are the same King+Queen-vs-King position
-/// (decisively winning, so a leaked score is easy to tell apart from a real
-/// one) at two different clocks: `far` nowhere near the boundary, `near` four
-/// half-moves short of it. Searching `near` alone finds the real draw once
-/// its own subtree reaches the boundary; searching `far` first and reusing
-/// that table for `near` instead serves `near` a stale, decisively-winning
-/// score for a node that should have scored a draw, because some ancestor's
-/// entry was stored while `far`'s own clock was nowhere near the threshold.
-///
-/// Depth 4 is the shallowest depth at which `near`'s own subtree can reach
-/// its clock's 100-halfmove boundary at all (`96 + 4 == 100`), and is already
-/// enough for the leaked entry to reach an ancestor the two searches share.
-///
-/// This is a correctness gap, not a bug in this test: the transposition
-/// table's key carries no halfmove clock at all, by design, and fixing it
-/// properly is out of scope for what this test is pinning down. `#[ignore]`d
-/// because the assertion is what *should* hold, not what does; it documents
-/// the gap so the day someone closes it, this flips to passing instead of
-/// silently staying green through a real fix.
+/// `far`/`near` are the same King+Queen-vs-King position at two different
+/// halfmove clocks: `far` nowhere near a fifty-move draw, `near` four
+/// half-moves short of it (depth 4 is the shallowest depth that reaches the
+/// `96 + 4 == 100` boundary at all). The table's key carries no halfmove
+/// clock, so searching `far` first and reusing that table for `near` can
+/// serve `near` a stale, decisively-winning score instead of the real draw.
 #[test]
-#[ignore = "documents an accepted transposition-table correctness gap: the \
-            key carries no halfmove clock, so a shared table can serve a \
-            stale score across two positions differing only in how close \
-            they are to a fifty-move draw"]
+#[ignore = "documents an accepted transposition-table correctness gap: no \
+            halfmove clock in the key"]
 fn shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
     use turox_engine::search::tt::Tt;
 
@@ -468,11 +451,5 @@ fn shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
         .with_tt(&mut fresh_tt)
         .search(&near, depth);
 
-    assert_eq!(
-        near_shared.score, near_fresh.score,
-        "searching `near` must find the same score whether or not the table \
-         was already populated by a search of `far`; a real fifty-move draw \
-         four half-moves away must not be masked by a stale entry from a \
-         position that was nowhere near the boundary"
-    );
+    assert_eq!(near_shared.score, near_fresh.score);
 }

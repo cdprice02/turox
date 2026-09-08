@@ -460,14 +460,11 @@ fn uci_advertises_the_randomize_option() {
     );
 }
 
-/// Builds the input for a session that plays `moves` one at a time, resending
-/// the whole growing move list on every `position` command (a real GUI's
-/// normal behavior, and the only way `session::run`'s own history sampling,
-/// one hash per `position` command, sees each ply at all) and running `go
-/// depth depth` after each. `clear_between_every_go` interleaves
-/// `ucinewgame` before every `position`, wiping the transposition table (and
-/// `history`) each time without changing which position is ever searched:
-/// the control run this test compares the normal, table-reusing run against.
+/// Plays `moves` one at a time, resending the whole growing move list on
+/// every `position` command and running `go depth depth` after each.
+/// `clear_between_every_go` interleaves `ucinewgame` before every `position`,
+/// wiping the transposition table without changing which position is
+/// searched.
 fn ghi_probe_script(moves: &[&str], depth: u8, clear_between_every_go: bool) -> String {
     use std::fmt::Write as _;
 
@@ -490,10 +487,7 @@ fn ghi_probe_script(moves: &[&str], depth: u8, clear_between_every_go: bool) -> 
 }
 
 /// The final (deepest-iteration) `score cp` reported for each `go` in
-/// `output`, in order. Splitting on `bestmove` first, then taking the last
-/// `score cp` in each chunk, is what "final" means here: `go depth N` streams
-/// one `info depth` line per completed iteration, and only the last one
-/// before `bestmove` reflects the full requested depth.
+/// `output`, in order.
 fn final_scores(output: &str) -> Vec<i32> {
     output
         .split("bestmove")
@@ -504,35 +498,14 @@ fn final_scores(output: &str) -> Vec<i32> {
         .collect()
 }
 
-/// The transposition table's key carries no record of the path that reached
-/// a position, so an entry stored while resolving one line of play can be
-/// probed and trusted by a completely different line that happens to reach
-/// the same board state, even when a repetition was available on one path
-/// and not the other. `session::run` only samples one history hash per
-/// `position` command, so the repetition has to be visible across separate
-/// `position`/`go` pairs to matter here, not just within one search tree.
-///
-/// A decisively-winning King+Queen-vs-King position (rather than something
-/// closer to balanced) makes a leaked score easy to tell apart from a real
-/// one, and a king and queen both shuffling back and forth gives the
-/// position genuine repetitions to find without any pawn move or capture
-/// ever resetting anything that would mask them. Depth 7 is empirically the
-/// shallowest depth at which this particular shuffle produces a real,
-/// reproducible divergence; shallower depths never search deep enough for a
-/// speculative in-tree repetition from one `go` to leave an entry that a
-/// later `go`, reached by real play rather than search, goes on to reuse.
-///
-/// This is a correctness gap, not a bug in this test: the transposition
-/// table's key deliberately carries no path information, and fixing that
-/// properly is out of scope for what this test is pinning down. `#[ignore]`d
-/// because the assertion is what *should* hold, not what does; it documents
-/// the gap so the day someone closes it, this flips to passing instead of
-/// silently staying green through a real fix.
+/// A king and queen both shuffling back and forth gives this decisively-won
+/// position genuine repetitions without a pawn move or capture ever masking
+/// them by resetting anything. Depth 7 is empirically the shallowest depth at
+/// which this shuffle produces a reproducible divergence between reusing the
+/// table across every `go` and clearing it before each one.
 #[test]
-#[ignore = "documents an accepted transposition-table correctness gap: the \
-            key carries no path information, so a table shared across go \
-            commands can serve a score computed under a different game's \
-            worth of repetition history than the one actually being played"]
+#[ignore = "documents an accepted transposition-table correctness gap: no \
+            path information in the key"]
 fn shared_table_leaks_a_repetition_tainted_score_across_go_commands() {
     let moves = [
         "h1h2", "h8g8", "h2h1", "g8h8", "h1h2", "h8g8", "h2h1", "g8h8",
@@ -542,12 +515,5 @@ fn shared_table_leaks_a_repetition_tainted_score_across_go_commands() {
     let shared = run_session(&ghi_probe_script(&moves, depth, false));
     let cleared = run_session(&ghi_probe_script(&moves, depth, true));
 
-    assert_eq!(
-        final_scores(&shared),
-        final_scores(&cleared),
-        "reusing the transposition table across every go in this game must \
-         find the same scores a table cleared before each go would; a real \
-         line of play must not be scored using an entry another, unplayed \
-         line's search left behind"
-    );
+    assert_eq!(final_scores(&shared), final_scores(&cleared));
 }
