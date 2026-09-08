@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use turox_engine::board::Board;
 use turox_engine::move_gen::legal::legal_moves;
-use turox_engine::search::{Search, MATE};
+use turox_engine::search::{is_mate_score, Search, MATE, MAX_QUIESCENCE_DEPTH};
 use turox_engine::{Move, Square};
 
 // ---- Concrete mate puzzles ----
@@ -452,4 +452,103 @@ fn shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
         .search(&near, depth);
 
     assert_eq!(near_shared.score, near_fresh.score);
+}
+
+// ---- Quiescence in check ----
+//
+// `quiescence` only ever generates captures today, with `evaluate(board)` as
+// an unconditional stand-pat floor, regardless of whether the side to move is
+// in check. Both scenarios below reach a position through one real search
+// move so quiescence sees it directly (not `negamax`, which already handles
+// its own board's terminal case before ever calling `quiescence`); the bug
+// only lives in what `quiescence` itself does with a board it's handed.
+//
+// `expected_quiescence` computes the score the fix owes these positions:
+// generate evasions and recurse without a depth cap while in check (an
+// unbounded check extension, matching the stated design), fall back to the
+// existing capture-only, depth-capped stand-pat search otherwise. It calls
+// the real `evaluate`, so both tests below assert an exact match against
+// `Search::search`, not a hand-computed number that eval retuning could
+// silently invalidate.
+
+fn expected_quiescence(board: &Board, ply: u8, qdepth: u8) -> i16 {
+    use turox_engine::eval::evaluate;
+    use turox_engine::move_gen::attacks::in_check;
+
+    if in_check(board, board.side_to_move()) {
+        let evasions = legal_moves(board);
+        if evasions.is_empty() {
+            return i16::from(ply) - MATE;
+        }
+        return evasions
+            .as_slice()
+            .iter()
+            .map(|&m| -expected_quiescence(&board.make_move(m), ply + 1, qdepth))
+            .max()
+            .expect("evasions is non-empty");
+    }
+
+    let mut best = evaluate(board);
+    if qdepth > 0 {
+        let mut captures = legal_moves(board);
+        captures.retain(|m| m.flags().is_capture());
+        for &m in captures.as_slice() {
+            let score = -expected_quiescence(&board.make_move(m), ply + 1, qdepth - 1);
+            best = best.max(score);
+        }
+    }
+    best
+}
+
+/// White's only reasonable move, `Rxa4` (winning a whole rook while also
+/// checking), leaves a king whose lone legal reply, `Ka8-b8`, is not a
+/// capture: today's capture-only filter leaves quiescence nothing to search
+/// there and it stands pat on the check itself instead. Winning the rook
+/// makes `Rxa4` the reported best move regardless of whether the reply gets
+/// explored, so this isolates the evasion bug's own score contribution
+/// rather than needing it to also decide which move `search` reports.
+#[test]
+fn quiescence_finds_a_forced_non_capture_evasion() {
+    let root = Board::try_from_fen("k7/1p6/8/8/r6R/8/8/7K w - - 0 1").expect("valid FEN");
+    let rxa4 = find_move(&root, Square::H4, Square::A4);
+    let after_rxa4 = root.make_move(rxa4);
+
+    let mut search = Search::new(Vec::new());
+    let result = search.search(&root, 1);
+
+    assert_eq!(result.best_move, Some(rxa4));
+    assert_eq!(
+        result.score,
+        -expected_quiescence(&after_rxa4, 1, MAX_QUIESCENCE_DEPTH)
+    );
+}
+
+/// Every black root move here is equally hopeless: White's queen captures a
+/// pawn on `g7` (`Qxg7`) next regardless of which one Black plays, a plain
+/// capture quiescence already explores today, and that capture is
+/// checkmate. The bug is what happens at that point, one ply deeper in
+/// quiescence's own recursion where `negamax` never looks again: today's
+/// code stands pat on it with an ordinary material score instead of the
+/// mate it actually is. Deliberately not asserting *which* black move gets
+/// reported (every legal one leads to the identical mate, so nothing pins
+/// that choice down); `expected_quiescence` is checked against whichever one
+/// `search` actually picks.
+#[test]
+fn quiescence_finds_a_mate_inside_its_own_recursion() {
+    let root = Board::try_from_fen("1n5k/6pp/7B/8/8/8/8/Q3K3 b - - 0 1").expect("valid FEN");
+
+    let mut search = Search::new(Vec::new());
+    let result = search.search(&root, 1);
+
+    let chosen_move = result.best_move.expect("Black has legal moves here");
+    let after_chosen_move = root.make_move(chosen_move);
+    assert_eq!(
+        result.score,
+        -expected_quiescence(&after_chosen_move, 1, MAX_QUIESCENCE_DEPTH)
+    );
+    assert!(
+        is_mate_score(result.score),
+        "a mate found two plies deep inside quiescence must still report as a mate score, got {}",
+        result.score
+    );
 }
