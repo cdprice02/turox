@@ -496,7 +496,7 @@ impl<'a> Search<'a> {
         // probably not necessary, but is technically possible by definition of depth being a u32 (it could be 0 even on this root step)
         if depth == 0 {
             return self
-                .quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves))
+                .quiescence(board, alpha, beta, 0, MAX_QUIESCENCE_DEPTH, Some(moves))
                 .map_or(RootOutcome::Aborted { best_so_far: None }, |score| {
                     RootOutcome::Completed(score, None)
                 });
@@ -608,7 +608,7 @@ impl<'a> Search<'a> {
         }
 
         if depth == 0 {
-            return self.quiescence(board, alpha, beta, MAX_QUIESCENCE_DEPTH, Some(moves));
+            return self.quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
         let tt_move = tt_entry
@@ -650,41 +650,84 @@ impl<'a> Search<'a> {
         Some(max)
     }
 
-    /// Quiescence search: like `negamax`, but only ever considers captures,
-    /// with "stand pat" (`evaluate(board)`) as the floor score, so a
-    /// position with no good captures isn't forced into playing one. Same
-    /// fail-soft alpha-beta and abort propagation as `negamax`. Deliberately
-    /// out of scope: mate detection (an actual checkmate mid-quiescence
-    /// just falls back to its, in that case misleading, stand-pat score)
-    /// and repetition detection (captures are irreversible, so a genuine
-    /// repetition inside a pure-capture line can't occur); neither is an
-    /// oversight.
+    /// Quiescence search: like `negamax`, but only ever considers captures
+    /// while not in check, with "stand pat" (`evaluate(board)`) as the floor
+    /// score, so a position with no good captures isn't forced into playing
+    /// one. While in check, stand pat does not apply at all: every legal
+    /// reply is a forced evasion by definition, and a static score can't
+    /// tell a merely-bad position from a lost one, so this searches all of
+    /// them instead, with no `qdepth` cap (a check has to be resolved
+    /// regardless of how deep quiescence has already gone; see `qdepth`'s
+    /// own doc below), and returns [`MATE`]'s formula outright when none
+    /// exist rather than a misleading material score for what is actually
+    /// checkmate. Same fail-soft alpha-beta and abort propagation as
+    /// `negamax` either way. Deliberately still out of scope: repetition
+    /// detection. Captures can never repeat a position, but evasions (plain
+    /// king or blocking moves) now can; `self.history` isn't threaded into
+    /// this function; a real repetition reachable only through an evasion
+    /// line is a narrower version of the same path-dependence gap the
+    /// transposition table already accepts elsewhere, not a new one this
+    /// change introduces.
+    ///
+    /// `ply` is `negamax`'s own distance-from-root, passed through so an
+    /// empty evasion list scores `Score::from(ply) - MATE`, the identical
+    /// formula `negamax` uses for its own terminal case rather than a second
+    /// copy of it.
     ///
     /// `qdepth` counts down from [`MAX_QUIESCENCE_DEPTH`] and is unrelated
-    /// to `negamax`'s own `ply`: it bounds how many more plies of captures
-    /// this call will still resolve, not the distance from the root. At
-    /// `qdepth == 0`, this behaves as if no captures were available,
-    /// falling back to `stand_pat`.
+    /// to `ply`: it bounds how many more plies of *captures* this call will
+    /// still resolve while not in check, not the distance from the root. At
+    /// `qdepth == 0`, this behaves as if no captures were available, falling
+    /// back to `stand_pat`. Passed through unchanged (not decremented) on
+    /// the evasion path, since that path ignores it entirely.
     ///
     /// `moves`: `Some` when the caller (`negamax`/`search_root`) already
     /// generated the full move list for its own mate/stalemate check, so
     /// this doesn't generate the same board's moves twice; `None` (this
     /// function's own recursive calls, where `board` is a fresh child)
-    /// generates here instead.
-    ///
-    /// No `self.history` push/pop, unlike `negamax`: this function never
-    /// calls `is_draw`, so a capture-only line has nothing to need it for.
+    /// generates here instead. On the evasion path, `moves` (once generated)
+    /// already *is* the evasion list: every legal move while in check
+    /// resolves that check by definition, so no further filtering is
+    /// needed or correct here.
     fn quiescence(
         &mut self,
         board: &Board,
         mut alpha: Score,
         beta: Score,
+        ply: u8,
         qdepth: u8,
         moves: Option<MoveList>,
     ) -> Option<Score> {
         self.nodes += 1;
         if self.should_abort() {
             return None;
+        }
+
+        if in_check(board, board.side_to_move()) {
+            let mut evasions = moves.unwrap_or_else(|| legal_moves(board));
+            if evasions.is_empty() {
+                return Some(Score::from(ply) - MATE);
+            }
+
+            order_moves(board, &mut evasions, None);
+            let mut max = Score::MIN;
+            for &m in &evasions {
+                let child = board.make_move(m);
+                let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth, None);
+
+                let score = -score?;
+                if score > max {
+                    max = score;
+                }
+
+                if max > alpha {
+                    alpha = max;
+                }
+                if alpha >= beta {
+                    break;
+                }
+            }
+            return Some(max);
         }
 
         let stand_pat = evaluate(board);
@@ -696,15 +739,14 @@ impl<'a> Search<'a> {
         }
 
         let mut max = stand_pat;
-
         if qdepth > 0 {
-            let mut moves = moves.unwrap_or_else(|| legal_moves(board));
-            moves.retain(|m| m.flags().is_capture());
+            let mut captures = moves.unwrap_or_else(|| legal_moves(board));
+            captures.retain(|m| m.flags().is_capture());
 
-            order_moves(board, &mut moves, None);
-            for m in &moves {
-                let child = board.make_move(*m);
-                let score = self.quiescence(&child, -beta, -alpha, qdepth - 1, None);
+            order_moves(board, &mut captures, None);
+            for &m in &captures {
+                let child = board.make_move(m);
+                let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth - 1, None);
 
                 let score = -score?;
                 if score > max {
