@@ -155,6 +155,24 @@ proptest! {
         let result_b = Search::new(Vec::new()).search(&board, depth);
         prop_assert_eq!(result_a, result_b);
     }
+
+    /// `CutoffStats::record` always increments `fail_high_nodes` and exactly
+    /// one bucket of `cutoff_index` together, so the histogram summing to the
+    /// counter is true by construction; this is the property that would catch
+    /// a future edit breaking that pairing (a bucket incremented without the
+    /// counter, or vice versa), for negamax and quiescence both.
+    #[test]
+    fn cutoff_histogram_sums_to_its_own_fail_high_counter(board in any_board_with_legal_move(), depth in 1u8..=2) {
+        let result = Search::new(Vec::new()).search(&board, depth);
+        prop_assert_eq!(
+            result.negamax_cutoffs.cutoff_index.iter().sum::<u64>(),
+            result.negamax_cutoffs.fail_high_nodes
+        );
+        prop_assert_eq!(
+            result.quiescence_cutoffs.cutoff_index.iter().sum::<u64>(),
+            result.quiescence_cutoffs.fail_high_nodes
+        );
+    }
 }
 
 // A separate `proptest!` block: this one needs its own (larger) case count

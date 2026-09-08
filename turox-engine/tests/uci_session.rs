@@ -367,6 +367,45 @@ fn go_emits_time_nps_and_hashfull_on_every_info_line() {
     }
 }
 
+/// The cutoff-index histogram (move-ordering quality) is a diagnostic no
+/// GUI has a field for, so it goes out as a free-form `info string` line
+/// rather than a `Response::Info` field; this is what proves it actually
+/// reaches a real session's output, not only `SearchResult` in a unit test.
+/// Sent once per `go`, right before `bestmove`, covering both negamax's and
+/// quiescence's own separate counts.
+#[test]
+fn go_emits_a_cutoff_stats_info_string_before_bestmove() {
+    let output = run_session("position startpos\ngo depth 4\n");
+
+    let lines: Vec<&str> = output.lines().collect();
+    let info_string_index = lines
+        .iter()
+        .position(|line| line.starts_with("info string cutoffs "))
+        .unwrap_or_else(|| panic!("expected an info string cutoffs line, output: {output:?}"));
+    let bestmove_index = lines
+        .iter()
+        .position(|line| line.starts_with("bestmove "))
+        .unwrap_or_else(|| panic!("expected a bestmove line, output: {output:?}"));
+
+    let info_string = lines[info_string_index];
+    for field in [
+        "negamax",
+        "quiescence",
+        "fail_high=",
+        "first_move_rate=",
+        "index=",
+    ] {
+        assert!(
+            info_string.contains(field),
+            "info string is missing {field:?}: {info_string:?}"
+        );
+    }
+    assert!(
+        info_string_index < bestmove_index,
+        "the cutoff-stats info string must arrive before bestmove, output: {output:?}"
+    );
+}
+
 /// UCI's field order is conventional rather than enforced, but a GUI parsing
 /// positionally is a real thing, and `pv` in particular must stay last: it is
 /// the one variable-length field, so anything after it would be swallowed into

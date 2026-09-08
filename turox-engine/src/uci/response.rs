@@ -48,6 +48,10 @@ pub enum Response {
     /// no move to make (the position `search` was given was already
     /// checkmate or stalemate).
     BestMove(Option<Move>),
+    /// `info string <text>`: UCI's free-form diagnostic line, for anything a
+    /// GUI has no dedicated field for. `text` is whatever the caller already
+    /// formatted; this variant doesn't interpret it.
+    InfoString(String),
     /// `info depth <d> score cp <s>|mate <n> nodes <n> [pv <move> ...]`.
     /// `pv` is whatever principal variation the caller has on hand, not
     /// something this type computes; an empty `pv` omits that field from
@@ -165,6 +169,7 @@ impl fmt::Display for Response {
                     Some(m) => write!(f, "{}", m.to_uci()),
                 }
             }
+            Self::InfoString(text) => write!(f, "info string {text}"),
             Self::Info {
                 depth,
                 score,
