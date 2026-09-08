@@ -459,3 +459,61 @@ fn uci_advertises_the_randomize_option() {
         "expected the Randomize option in the uci block, got: {output:?}"
     );
 }
+
+/// Plays `moves` one at a time, resending the whole growing move list on
+/// every `position` command and running `go depth depth` after each.
+/// `clear_between_every_go` interleaves `ucinewgame` before every `position`,
+/// wiping the transposition table without changing which position is
+/// searched.
+fn ghi_probe_script(moves: &[&str], depth: u8, clear_between_every_go: bool) -> String {
+    use std::fmt::Write as _;
+
+    let mut input = String::from("setoption name Randomize value false\n");
+    let mut played = String::new();
+    for m in moves {
+        played.push(' ');
+        played.push_str(m);
+        if clear_between_every_go {
+            input.push_str("ucinewgame\n");
+        }
+        let _ = writeln!(
+            input,
+            "position fen 7k/8/8/8/8/8/8/K6Q w - - 0 1 moves{played}"
+        );
+        let _ = writeln!(input, "go depth {depth}");
+    }
+    input.push_str("quit\n");
+    input
+}
+
+/// The final (deepest-iteration) `score cp` reported for each `go` in
+/// `output`, in order.
+fn final_scores(output: &str) -> Vec<i32> {
+    output
+        .split("bestmove")
+        .filter_map(|chunk| {
+            let start = chunk.rfind("score cp ")? + "score cp ".len();
+            chunk.get(start..)?.split_whitespace().next()?.parse().ok()
+        })
+        .collect()
+}
+
+/// A king and queen both shuffling back and forth gives this decisively-won
+/// position genuine repetitions without a pawn move or capture ever masking
+/// them by resetting anything. Depth 7 is empirically the shallowest depth at
+/// which this shuffle produces a reproducible divergence between reusing the
+/// table across every `go` and clearing it before each one.
+#[test]
+#[ignore = "documents an accepted transposition-table correctness gap: no \
+            path information in the key"]
+fn shared_table_leaks_a_repetition_tainted_score_across_go_commands() {
+    let moves = [
+        "h1h2", "h8g8", "h2h1", "g8h8", "h1h2", "h8g8", "h2h1", "g8h8",
+    ];
+    let depth = 7;
+
+    let shared = run_session(&ghi_probe_script(&moves, depth, false));
+    let cleared = run_session(&ghi_probe_script(&moves, depth, true));
+
+    assert_eq!(final_scores(&shared), final_scores(&cleared));
+}

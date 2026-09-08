@@ -421,3 +421,35 @@ fn find_move(board: &Board, from: Square, to: Square) -> Move {
         .find(|m| m.from() == from && m.to() == to)
         .expect("move must be legal in this position")
 }
+
+/// `far`/`near` are the same King+Queen-vs-King position at two different
+/// halfmove clocks: `far` nowhere near a fifty-move draw, `near` four
+/// half-moves short of it (depth 4 is the shallowest depth that reaches the
+/// `96 + 4 == 100` boundary at all). The table's key carries no halfmove
+/// clock, so searching `far` first and reusing that table for `near` can
+/// serve `near` a stale, decisively-winning score instead of the real draw.
+#[test]
+#[ignore = "documents an accepted transposition-table correctness gap: no \
+            halfmove clock in the key"]
+fn shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
+    use turox_engine::search::tt::Tt;
+
+    let far = Board::try_from_fen("7k/8/8/8/8/8/8/K6Q w - - 0 60").expect("valid FEN");
+    let near = Board::try_from_fen("7k/8/8/8/8/8/8/K6Q w - - 96 60").expect("valid FEN");
+    let depth = 4;
+
+    let mut shared_tt = Tt::new(16);
+    Search::new(Vec::new())
+        .with_tt(&mut shared_tt)
+        .search(&far, depth);
+    let near_shared = Search::new(Vec::new())
+        .with_tt(&mut shared_tt)
+        .search(&near, depth);
+
+    let mut fresh_tt = Tt::new(16);
+    let near_fresh = Search::new(Vec::new())
+        .with_tt(&mut fresh_tt)
+        .search(&near, depth);
+
+    assert_eq!(near_shared.score, near_fresh.score);
+}
