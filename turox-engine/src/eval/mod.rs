@@ -1,6 +1,7 @@
 //! Static position evaluation: material (below), piece-square tables
-//! (`pst`), and pawn structure (`pawn_structure`), returned from the
-//! side-to-move's perspective via `evaluate`.
+//! (`pst`), pawn structure (`pawn_structure`), and king safety
+//! (`king_safety`), returned from the side-to-move's perspective via
+//! `evaluate`.
 //!
 //! `eval_white_pov` is the absolute (White-relative) sum of terms;
 //! `evaluate` is the side-to-move-relative wrapper negamax search wants.
@@ -14,6 +15,7 @@ use crate::eval::pst::{pst_value, pst_value_eg};
 use crate::types::Color;
 use crate::Piece;
 
+mod king_safety;
 mod pawn_structure;
 mod phase;
 pub mod pst;
@@ -77,6 +79,8 @@ pub fn eval_white_pov(board: &Board) -> Score {
     }
     score += pawn_structure::pawn_structure_score(board, Color::White);
     score -= pawn_structure::pawn_structure_score(board, Color::Black);
+    score += king_safety::king_safety_score(board, Color::White);
+    score -= king_safety::king_safety_score(board, Color::Black);
     phase::interpolate(score, phase::game_phase(board))
 }
 
