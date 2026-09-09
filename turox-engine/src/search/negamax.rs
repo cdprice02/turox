@@ -640,6 +640,14 @@ impl<'a> Search<'a> {
             return Some(0);
         }
 
+        let hash = board.hash();
+        let tt_entry = self.tt.as_deref().and_then(|tt| tt.probe(hash));
+        if let Some(entry) = tt_entry {
+            if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
+                return Some(score);
+            }
+        }
+
         let mut moves = legal_moves(board);
         if moves.is_empty() {
             return if in_check(board, board.side_to_move()) {
@@ -649,21 +657,11 @@ impl<'a> Search<'a> {
             };
         }
 
-        let hash = board.hash();
-        let tt_entry = self.tt.as_deref().and_then(|tt| tt.probe(hash));
-        if let Some(entry) = tt_entry {
-            if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
-                return Some(score);
-            }
-        }
-
         if depth == 0 {
             return self.quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
-        let tt_move = tt_entry
-            .map(|entry| Move::from_bits(entry.mv))
-            .filter(|m| moves.as_slice().contains(m));
+        let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
 
         let original_alpha = alpha;
         let mut max = Score::MIN;

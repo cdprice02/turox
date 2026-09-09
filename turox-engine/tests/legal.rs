@@ -58,14 +58,42 @@ fn pinned_rook_can_still_move_along_the_pin_line() {
 
 #[test]
 fn en_passant_capture_that_discovers_a_rank_check_is_illegal() {
-    // The textbook case: White king a5, White pawn e5, Black pawn d5 (just
+    // The textbook case: White king a5, White pawn c5, Black pawn d5 (just
     // double-pushed, ep target d6), Black rook h5. Capturing en passant
-    // (e5xd6) removes the d5 pawn from the board, the one piece blocking the
+    // (c5xd6) removes the d5 pawn from the board, the one piece blocking the
     // rook's rank check on the king, so it must NOT appear as legal, even
     // though it's a perfectly ordinary pseudolegal en passant capture.
     let board = Board::try_from_fen("8/8/8/K1Pp3r/8/8/8/8 w - d6 0 1").expect("valid FEN");
     let moves = legal_moves(&board);
-    assert!(!contains(&moves, Square::E5, Square::D6));
+    assert!(!contains(&moves, Square::C5, Square::D6));
+}
+
+#[test]
+fn en_passant_capture_that_discovers_a_rank_check_is_illegal_for_black_too() {
+    // Color-flipped mirror of the case above: Black king a4, Black pawn c4,
+    // White pawn d4 (just double-pushed from d2, ep target d3), White rook
+    // h4. Capturing en passant (c4xd3) removes the d4 pawn, the one piece
+    // blocking the rook's rank check on the Black king. A fix that only
+    // handles White's capture direction (destination one rank *above* the
+    // capturing pawn) would pass the test above and still get this one
+    // wrong, since Black's capture direction is one rank *below*.
+    let board = Board::try_from_fen("8/8/8/8/k1pP3R/8/8/8 b - d3 0 1").expect("valid FEN");
+    let moves = legal_moves(&board);
+    assert!(!contains(&moves, Square::C4, Square::D3));
+}
+
+#[test]
+fn en_passant_capture_that_discovers_a_rank_check_is_illegal_with_king_on_the_other_side() {
+    // Direction-flipped mirror of the first case, same color: White king h5
+    // (the high-file end this time), White pawn f5, Black pawn e5 (just
+    // double-pushed from e7, ep target e6), Black rook a5 (the low-file end).
+    // Capturing en passant (f5xe6) removes the e5 pawn and opens the whole
+    // rank from the rook up to the king. A fix that only scans from the king
+    // toward higher files (the shape of the first case, king on the low end)
+    // would miss this one, where the exposed ray runs the other way.
+    let board = Board::try_from_fen("8/8/8/r3pP1K/8/8/8/8 w - e6 0 1").expect("valid FEN");
+    let moves = legal_moves(&board);
+    assert!(!contains(&moves, Square::F5, Square::E6));
 }
 
 #[test]
@@ -78,6 +106,19 @@ fn king_moving_off_a_sliders_ray_is_still_in_check() {
     let board = Board::try_from_fen("4r3/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
     let moves = legal_moves(&board);
     assert!(!contains(&moves, Square::E1, Square::E2));
+}
+
+#[test]
+fn en_passant_capturing_the_checking_pawn_resolves_check() {
+    // White king e4, in check from a Black pawn that just double-pushed d7-d5
+    // (d5 attacks e4). Capturing it en passant (e5xd6) removes the checker,
+    // but the destination square, d6, is neither the checker's own square
+    // (d5) nor between it and the king: a check-response mask built only from
+    // the checker's and king's squares would wrongly call this illegal.
+    let board = Board::try_from_fen("k7/8/8/3pP3/4K3/8/8/8 w - d6 0 1").expect("valid FEN");
+    assert!(in_check(&board, board.side_to_move()));
+    let moves = legal_moves(&board);
+    assert!(contains(&moves, Square::E5, Square::D6));
 }
 
 #[test]

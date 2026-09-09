@@ -14,14 +14,20 @@
 //! concrete-test job. All concrete tests (double-push blocking, en
 //! passant, promotion, castling, the full aggregate) live in
 //! `tests/pseudo_legal.rs`; this file is proptest only.
+//!
+//! `is_pseudo_legal` (#113) gets its own proptest further down: its contract is
+//! membership in `pseudo_legal_moves`'s own output, so it's checked directly against
+//! that generator rather than against a fourth independent naive reference.
 
 mod common;
 
-use common::any_board;
+use common::{any_board, any_square};
 use proptest::prelude::*;
 use turox_engine::board::Board;
 use turox_engine::move_gen::move_list::MoveList;
-use turox_engine::move_gen::pseudo_legal::{king_moves, knight_moves, pawn_moves, slider_moves};
+use turox_engine::move_gen::pseudo_legal::{
+    is_pseudo_legal, king_moves, knight_moves, pawn_moves, pseudo_legal_moves, slider_moves,
+};
 use turox_engine::{Color, Move, MoveFlags, Piece, Rank};
 
 const fn move_key(m: Move) -> (u8, u8, MoveFlags) {
@@ -205,6 +211,66 @@ fn naive_pawn_moves(board: &Board) -> Vec<Move> {
         }
     }
     moves
+}
+
+// ---- `is_pseudo_legal` (#113) ----
+//
+// Its contract is membership in `pseudo_legal_moves`'s own output, checked from both
+// directions: every move that generator actually produces must be accepted, and an
+// arbitrary `(from, to, flags)` triple must be rejected unless it happens to coincide
+// with a real one. The second direction is the one a shortcut implementation (e.g.
+// "is there a piece of the right color on `from`") would fail silently on: a stale or
+// hash-collided TT move has to be caught here, not waved through.
+
+const ALL_MOVE_FLAGS: [MoveFlags; 14] = [
+    MoveFlags::Quiet,
+    MoveFlags::DoublePawnPush,
+    MoveFlags::KingCastle,
+    MoveFlags::QueenCastle,
+    MoveFlags::Capture,
+    MoveFlags::EnPassant,
+    MoveFlags::PromoteKnight,
+    MoveFlags::PromoteBishop,
+    MoveFlags::PromoteRook,
+    MoveFlags::PromoteQueen,
+    MoveFlags::PromoteCaptureKnight,
+    MoveFlags::PromoteCaptureBishop,
+    MoveFlags::PromoteCaptureRook,
+    MoveFlags::PromoteCaptureQueen,
+];
+
+fn any_move_flags() -> impl Strategy<Value = MoveFlags> {
+    proptest::sample::select(&ALL_MOVE_FLAGS[..])
+}
+
+proptest! {
+    #[test]
+    fn is_pseudo_legal_accepts_every_move_pseudo_legal_moves_produces(board in any_board()) {
+        let mut list = MoveList::new();
+        pseudo_legal_moves(&board, &mut list);
+        for &m in &list {
+            prop_assert!(
+                is_pseudo_legal(&board, m),
+                "is_pseudo_legal rejected {:?}, which pseudo_legal_moves produced", m
+            );
+        }
+    }
+
+    #[test]
+    fn is_pseudo_legal_rejects_arbitrary_moves_not_in_pseudo_legal_moves(
+        board in any_board(), from in any_square(), to in any_square(), flags in any_move_flags(),
+    ) {
+        let mut list = MoveList::new();
+        pseudo_legal_moves(&board, &mut list);
+        let m = Move::new(from, to, flags);
+        let is_real = list.contains(&m);
+
+        prop_assert_eq!(
+            is_pseudo_legal(&board, m),
+            is_real,
+            "is_pseudo_legal disagreed with pseudo_legal_moves membership for {:?}", m
+        );
+    }
 }
 
 proptest! {

@@ -11,8 +11,10 @@
 
 use turox_engine::board::Board;
 use turox_engine::move_gen::move_list::MoveList;
-use turox_engine::move_gen::pseudo_legal::{castling_moves, pawn_moves, pseudo_legal_moves};
-use turox_engine::{MoveFlags, Square};
+use turox_engine::move_gen::pseudo_legal::{
+    castling_moves, is_pseudo_legal, pawn_moves, pseudo_legal_moves,
+};
+use turox_engine::{Move, MoveFlags, Square};
 
 fn contains(list: &MoveList, from: Square, to: Square, flags: MoveFlags) -> bool {
     list.iter()
@@ -418,4 +420,33 @@ fn start_pos_has_exactly_twenty_pseudo_legal_moves() {
     let mut list = MoveList::new();
     pseudo_legal_moves(&board, &mut list);
     assert_eq!(list.len(), 20);
+}
+
+// ---- is_pseudo_legal (#113): cases pseudo_legal_moves membership alone
+// wouldn't catch, since these are hand-built `Move`s that never came out of
+// that generator. ----
+
+#[test]
+fn capture_flag_onto_a_square_held_by_your_own_piece_is_not_pseudo_legal() {
+    // White knight b1, White pawn d2: Nb1 attacks d2 geometrically, but d2
+    // holds White's own piece, so nonpawn_moves would only ever emit this as
+    // a Quiet or Capture toward an *enemy* occupant, never toward this one.
+    // A predicate that checks "d2 is occupied" without checking *whose*
+    // piece is there would wrongly accept this.
+    let board = Board::try_from_fen("8/8/8/8/8/8/3P4/1N2K2k w - - 0 1").expect("valid FEN");
+    let m = Move::new(Square::B1, Square::D2, MoveFlags::Capture);
+    assert!(!is_pseudo_legal(&board, m));
+}
+
+#[test]
+fn double_pawn_push_blocked_on_the_intermediate_square_is_not_pseudo_legal() {
+    // White pawn e2, White knight e3 blocking, e4 empty. The final square is
+    // clear and two ranks forward on the right rank, but pawn_pushes builds
+    // the double push by shifting the *already-empty-filtered* single push
+    // (tests/pseudo_legal.rs's own `white_double_push_blocked_by_piece_on_intermediate_square`
+    // pins this down for the generator); a predicate that only checks e4's
+    // occupancy and skips e3 would wrongly accept this.
+    let board = Board::try_from_fen("8/8/8/8/8/4N3/4P3/4K2k w - - 0 1").expect("valid FEN");
+    let m = Move::new(Square::E2, Square::E4, MoveFlags::DoublePawnPush);
+    assert!(!is_pseudo_legal(&board, m));
 }
