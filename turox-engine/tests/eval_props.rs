@@ -57,6 +57,13 @@ const NAIVE_DOUBLED_PENALTY: (i32, i32) = (-10, -20);
 const NAIVE_ISOLATED_PENALTY: (i32, i32) = (-10, -10);
 const NAIVE_PASSED_BONUS: (i32, i32) = (10, 20);
 
+/// Independent of `eval::king_safety`'s own constants (also private to
+/// `eval`), for the same reason as the pawn-structure constants above.
+const NAIVE_SHELTER_PENALTY: i32 = -15;
+const NAIVE_OPEN_FILE_PENALTY: i32 = -25;
+const NAIVE_STORM_PENALTY: i32 = -10;
+const NAIVE_STORM_RANGE: usize = 3;
+
 /// Mailbox walk over `board.piece_at`, reproducing `eval::phase::game_phase`
 /// without calling it: sums `NAIVE_PHASE_WEIGHT` for every non-pawn,
 /// non-king piece found, subtracts from `NAIVE_TOTAL_PHASE`, clamps to
@@ -173,6 +180,84 @@ fn naive_pawn_structure_mg_eg(board: &Board, color: Color) -> (i32, i32) {
     (mg, eg)
 }
 
+/// Mailbox-only reference for `color`'s king-safety contribution: shelter,
+/// open-file, and storm penalties (see `eval::king_safety`'s own doc for
+/// the exact contract each is scored against), returned as an unblended
+/// `(mg, eg)` pair for the same reason `naive_pawn_structure_mg_eg` is.
+/// `eg` is always `0`: every real king-safety term lives in the midgame
+/// lane only, so this doesn't even track a separate endgame total.
+///
+/// Shares no bitboard tricks with `eval::king_safety`: zone files and the
+/// storm cone are both plain index arithmetic over `File`/`Rank` indices,
+/// not `Bitboard::shift`/`file_fill`.
+fn naive_king_safety_mg_eg(board: &Board, color: Color) -> (i32, i32) {
+    let Some(king_sq) = Square::ALL
+        .into_iter()
+        .find(|&sq| matches!(board.piece_at(sq), Some(cp) if cp.color() == color && cp.piece() == Piece::King))
+    else {
+        return (0, 0);
+    };
+
+    let mut own_pawn_files = [false; 8];
+    let mut enemy_pawn_files = [false; 8];
+    for sq in Square::ALL {
+        if let Some(cp) = board.piece_at(sq) {
+            if cp.piece() == Piece::Pawn {
+                if cp.color() == color {
+                    own_pawn_files[sq.file().index()] = true;
+                } else {
+                    enemy_pawn_files[sq.file().index()] = true;
+                }
+            }
+        }
+    }
+
+    let king_file = king_sq.file().index();
+    let zone_files: Vec<usize> = [
+        king_file.checked_sub(1),
+        Some(king_file),
+        king_file.checked_add(1),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|&f| f < 8)
+    .collect();
+
+    let mut mg = 0i32;
+    for &file in &zone_files {
+        if !own_pawn_files[file] {
+            mg += NAIVE_SHELTER_PENALTY;
+        }
+        if !own_pawn_files[file] && !enemy_pawn_files[file] {
+            mg += NAIVE_OPEN_FILE_PENALTY;
+        }
+    }
+
+    let king_rank = i32::try_from(king_sq.rank().index()).expect("rank index fits i32");
+    for sq in Square::ALL {
+        let Some(cp) = board.piece_at(sq) else {
+            continue;
+        };
+        if cp.piece() != Piece::Pawn
+            || cp.color() == color
+            || !zone_files.contains(&sq.file().index())
+        {
+            continue;
+        }
+        let sq_rank = i32::try_from(sq.rank().index()).expect("rank index fits i32");
+        let ranks_ahead = match color {
+            Color::White => sq_rank - king_rank,
+            Color::Black => king_rank - sq_rank,
+        };
+        let storm_range = i32::try_from(NAIVE_STORM_RANGE).expect("STORM_RANGE fits i32");
+        if (1..=storm_range).contains(&ranks_ahead) {
+            mg += NAIVE_STORM_PENALTY;
+        }
+    }
+
+    (mg, 0)
+}
+
 /// The total number of pawns (both colors) on `board`: the scale the
 /// pawn-structure deviation bound below is measured against.
 fn total_pawn_count(board: &Board) -> i32 {
@@ -203,22 +288,56 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (black_mg, black_eg) = naive_pawn_structure_mg_eg(board, Color::Black);
     mg += white_mg - black_mg;
     eg += white_eg - black_eg;
-    let phase = naive_game_phase(board);
+    let (white_ks_mg, white_ks_eg) = naive_king_safety_mg_eg(board, Color::White);
+    let (black_ks_mg, black_ks_eg) = naive_king_safety_mg_eg(board, Color::Black);
+    mg += white_ks_mg - black_ks_mg;
+    eg += white_ks_eg - black_ks_eg;
+    blend(mg, eg, naive_game_phase(board))
+}
+
+/// The standard tapered-eval blend, `(mg * (256 - phase) + eg * phase) /
+/// 256`, factored out of `naive_eval_white_pov` and every "one term
+/// switched off" baseline below it: each of those differs from the others
+/// only in which `mg_eg` terms it sums before reaching this, not in how
+/// the blend itself works, so sharing this one formula keeps that the only
+/// difference visible at each call site.
+fn blend(mg: i32, eg: i32, phase: i32) -> Score {
     let blended = (mg * (256 - phase) + eg * phase) / 256;
     Score::try_from(blended)
         .expect("eval magnitudes stay well under i16::MAX, per eval::Score's own invariant")
 }
 
-/// `naive_material_and_pst_mg_eg`, blended the same way
-/// `naive_eval_white_pov` blends its own totals: the "pawn structure
-/// switched off" baseline `eval_white_pov`'s deviation is measured
-/// against below.
-fn naive_material_and_pst_white_pov(board: &Board) -> Score {
-    let (mg, eg) = naive_material_and_pst_mg_eg(board);
-    let phase = naive_game_phase(board);
-    let blended = (mg * (256 - phase) + eg * phase) / 256;
-    Score::try_from(blended)
-        .expect("eval magnitudes stay well under i16::MAX, per eval::Score's own invariant")
+/// Material, PST, and king safety, pawn structure switched off: the
+/// baseline `eval_white_pov`'s deviation is measured against to isolate
+/// pawn structure's own contribution, now that king safety is also live
+/// and would otherwise show up as unexplained deviation in that bound.
+#[allow(
+    clippy::similar_names,
+    reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
+)]
+fn naive_material_pst_and_king_safety_white_pov(board: &Board) -> Score {
+    let (mut mg, mut eg) = naive_material_and_pst_mg_eg(board);
+    let (white_mg, white_eg) = naive_king_safety_mg_eg(board, Color::White);
+    let (black_mg, black_eg) = naive_king_safety_mg_eg(board, Color::Black);
+    mg += white_mg - black_mg;
+    eg += white_eg - black_eg;
+    blend(mg, eg, naive_game_phase(board))
+}
+
+/// Material, PST, and pawn structure, king safety switched off: the mirror
+/// image of `naive_material_pst_and_king_safety_white_pov`, isolating king
+/// safety's own contribution instead.
+#[allow(
+    clippy::similar_names,
+    reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
+)]
+fn naive_material_pst_and_pawn_structure_white_pov(board: &Board) -> Score {
+    let (mut mg, mut eg) = naive_material_and_pst_mg_eg(board);
+    let (white_mg, white_eg) = naive_pawn_structure_mg_eg(board, Color::White);
+    let (black_mg, black_eg) = naive_pawn_structure_mg_eg(board, Color::Black);
+    mg += white_mg - black_mg;
+    eg += white_eg - black_eg;
+    blend(mg, eg, naive_game_phase(board))
 }
 
 proptest! {
@@ -272,6 +391,17 @@ proptest! {
     // structural guarantee independent of the data the way the material-only
     // version of this property was. Worth re-checking if the tables are
     // ever retuned with more extreme values.
+    //
+    // King safety adds one more way this could, in principle, break: a
+    // removed black pawn can be the only thing keeping one of *White's own*
+    // zone files from reading as open (`open_file_penalty` needs both
+    // colors' pawns absent), so removing it can cost White up to
+    // `OPEN_FILE_PENALTY` (25 mg) on that one file. That's smaller than a
+    // pawn's own material value (100), so it can't flip the sign by itself,
+    // but it's a real, bounded-not-structural reason, same as the PST note
+    // above. Worth re-checking again if `eval::king_safety`'s constants are
+    // ever tuned past a pawn's value (#57 documents them as first-pass
+    // placeholders, pending #39's SPRT harness).
     #[test]
     fn removing_a_black_piece_strictly_increases_white_pov(board in any_board()) {
         let target = Square::ALL.into_iter().find(|&sq| {
@@ -302,13 +432,34 @@ proptest! {
     // regularly generates.
     #[test]
     fn pawn_structure_contribution_is_bounded_by_pawn_count(board in any_board()) {
-        let deviation =
-            i32::from(eval_white_pov(&board)) - i32::from(naive_material_and_pst_white_pov(&board));
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_material_pst_and_king_safety_white_pov(&board));
         let bound = 50 * total_pawn_count(&board);
         prop_assert!(
             deviation.abs() <= bound,
             "pawn-structure deviation {deviation} exceeds the {bound}-centipawn bound for {} pawns",
             total_pawn_count(&board)
+        );
+    }
+
+    // The same discipline as `pawn_structure_contribution_is_bounded_by_pawn_count`,
+    // but a fixed bound rather than one scaled by pawn count: king safety's
+    // zone is capped at 3 files regardless of how many pawns are on the
+    // board, so its maximum contribution per king is a fixed constant, not
+    // a linear function of piece count. Per king: 3 files x
+    // `SHELTER_PENALTY` (15) + 3 files x `OPEN_FILE_PENALTY` (25) + 9
+    // storm-cone squares x `STORM_PENALTY` (10) = 210. Every term here is
+    // `mg`-only, and `interpolate` never blends outside the span of `mg`
+    // and `eg` it's given, so 210 bounds the blended contribution too, not
+    // just the raw `mg` sum. Doubled for two kings.
+    #[test]
+    fn king_safety_contribution_is_bounded_by_a_fixed_amount(board in any_board()) {
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_material_pst_and_pawn_structure_white_pov(&board));
+        let bound = 2 * (3 * 15 + 3 * 25 + 9 * 10);
+        prop_assert!(
+            deviation.abs() <= bound,
+            "king-safety deviation {deviation} exceeds the {bound}-centipawn bound"
         );
     }
 }
