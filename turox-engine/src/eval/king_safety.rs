@@ -1,12 +1,14 @@
-//! King-safety evaluation: the pawn-only half (#57). Shelter, storm, and
-//! open/semi-open files near the king, each its own scoring function in the
-//! same shape `pawn_structure` uses for doubled/isolated/passed pawns.
+//! King safety: shelter, storm, and open/semi-open files near the king,
+//! each its own scoring function in the same shape `pawn_structure` uses
+//! for doubled/isolated/passed pawns. The attacker-count half (mobility
+//! and king-zone attack units) lives elsewhere, once a shared attack pass
+//! exists to feed it cheaply.
 //!
-//! Every constant in this module packs a zero `eg`: #83 found the endgame
-//! king PST already pays +40 for a centralized king, and a king-safety term
-//! active in the endgame lane too would fight that exactly where it
-//! matters most, a king still under attack in a position that reads as
-//! partway toward the endgame on `game_phase`'s blend.
+//! Every constant here packs a zero `eg`: the endgame king PST already
+//! pays for a centralized king, and a king-safety term active in the
+//! endgame lane too would fight that exactly where it matters most, a
+//! king still under attack in a position that reads as partway toward the
+//! endgame on `game_phase`'s blend.
 
 use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
@@ -29,18 +31,15 @@ const SHELTER_PENALTY: Tapered = pack(-15, 0);
 const OPEN_FILE_PENALTY: Tapered = pack(-25, 0);
 
 /// `king_sq`'s own file plus one file adjacent to it on either side, each
-/// the full 8-square file. Always 3 entries, `const fn`-friendly (a fixed
-/// size a `while` loop can index): a corner king's missing third file
-/// comes back as `Bitboard::EMPTY` from `shift`'s own wrap-safety (an
-/// a-file king's `shift(West)` lands off the board rather than wrapping to
-/// the h-file) rather than being dropped, since there's no allocation-free
-/// way for a `const fn` to return a variably-sized collection.
+/// the full 8-square file. Always 3 entries, never 2: a `const fn` can't
+/// return a variably-sized collection without allocating, so a corner
+/// king's missing third file comes back as `Bitboard::EMPTY` (from
+/// `shift`'s own wrap-safety) instead of being dropped.
 ///
 /// Every caller must check `is_empty()` on each entry before testing its
 /// own predicate against it: `Bitboard::EMPTY.and(pawns)` is trivially
 /// empty regardless of `pawns`, which reads as "a real, pawnless file"
-/// instead of "no such file" if left unguarded, the same corner-king bug
-/// `shelter_penalty` hit once already.
+/// instead of "no such file" if left unguarded.
 const fn zone_files(king_sq: Square) -> [Bitboard; 3] {
     let king_file = king_sq.file().bitboard();
     [
@@ -50,11 +49,9 @@ const fn zone_files(king_sq: Square) -> [Bitboard; 3] {
     ]
 }
 
-/// `SHELTER_PENALTY` once for every one of `king_sq`'s zone files with no
-/// bit of `pawns` on it, checked by presence anywhere on the file rather
-/// than distance from the king: a pushed-but-not-traded shield pawn still
-/// counts as cover for this first pass, sizing refinements are a tuning
-/// question for later.
+/// Checks presence anywhere on the file, not distance from the king: a
+/// pushed-but-not-traded shield pawn still counts as cover for this first
+/// pass. Sizing refinements are a tuning question for later.
 const fn shelter_penalty(pawns: Bitboard, king_sq: Square) -> Tapered {
     let files = zone_files(king_sq);
     let mut missing: u32 = 0;
@@ -69,11 +66,9 @@ const fn shelter_penalty(pawns: Bitboard, king_sq: Square) -> Tapered {
     missing.cast_signed() * SHELTER_PENALTY
 }
 
-/// `OPEN_FILE_PENALTY` once for every one of `king_sq`'s zone files with no
-/// bit of `pawns` *and* no bit of `enemy_pawns` on it: a file a pawn of
-/// either color still occupies isn't open, even if that pawn belongs to
-/// the attacker rather than the defender (that half-open case is already
-/// priced by `shelter_penalty`, on its own).
+/// See `OPEN_FILE_PENALTY`'s own doc for why a file held by only the enemy
+/// doesn't count as open here: that half is already priced by
+/// `shelter_penalty`.
 const fn open_file_penalty(pawns: Bitboard, enemy_pawns: Bitboard, king_sq: Square) -> Tapered {
     let occupied = pawns.or(enemy_pawns);
     let files = zone_files(king_sq);
@@ -98,27 +93,22 @@ const STORM_PENALTY: Tapered = pack(-10, 0);
 /// How many ranks deep `storm_zone` reaches in front of the king: a pawn
 /// still this close to its own back rank hasn't threatened anything yet,
 /// every real game's pawns start there. First-pass placeholder, same as
-/// every other magnitude in this module, tunable once #39's SPRT harness
-/// can measure it against real games rather than reasoning about it.
+/// every other magnitude in this module, sized by reasoning rather than by
+/// measured games and expected to move once self-play can score it.
 const STORM_RANGE: u8 = 3;
 
 /// The three-file, `STORM_RANGE`-rank cone strictly ahead of `king_sq`,
 /// from `color`'s own forward direction: the region an enemy pawn has to
 /// reach before it counts as storming rather than just existing somewhere
-/// on the board.
+/// on the board. Widens to three files first, then advances a fixed
+/// number of single wrap-safe `shift`s rather than filling to the board
+/// edge like `front_attack_span` does, since the cone needs to stop after
+/// `STORM_RANGE` ranks rather than run to the end of the board.
 ///
-/// Built the same way `pawn_structure::isolani`/`zone_files` stay
-/// edge-safe: `shift(Direction::East)`/`shift(Direction::West)` widen the
-/// king's own square to three files *before* pushing forward, and every
-/// step forward is a single wrap-safe `shift`, not a fill, so the cone
-/// stops after `STORM_RANGE` ranks instead of running to the board edge
-/// the way `front_attack_span` does.
-///
-/// Takes `color` explicitly rather than reading it off a `Board`: this is
-/// the one function in the module where getting White and Black's forward
-/// direction backwards would silently look correct (empty zone either way
-/// on a fresh board), the exact `{Color}x{direction}` shape this repo's
-/// history says to test explicitly rather than trust by inspection.
+/// Takes `color` explicitly rather than reading it off a `Board`: getting
+/// White and Black's forward direction backwards here would silently look
+/// correct on an empty board either way, so it needs to be visible at the
+/// call site and testable on its own, not folded into a board lookup.
 const fn storm_zone(king_sq: Square, color: Color) -> Bitboard {
     let forward = color.forward();
     let mut zone = king_sq.bitboard().shift(forward);

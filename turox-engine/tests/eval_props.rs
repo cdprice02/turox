@@ -399,9 +399,9 @@ proptest! {
     // `OPEN_FILE_PENALTY` (25 mg) on that one file. That's smaller than a
     // pawn's own material value (100), so it can't flip the sign by itself,
     // but it's a real, bounded-not-structural reason, same as the PST note
-    // above. Worth re-checking again if `eval::king_safety`'s constants are
-    // ever tuned past a pawn's value (#57 documents them as first-pass
-    // placeholders, pending #39's SPRT harness).
+    // above. `eval::king_safety`'s constants are first-pass placeholders
+    // sized by reasoning rather than measured games; worth re-checking
+    // again if they're ever tuned past a pawn's value.
     #[test]
     fn removing_a_black_piece_strictly_increases_white_pov(board in any_board()) {
         let target = Square::ALL.into_iter().find(|&sq| {
