@@ -222,9 +222,15 @@ printf 'games:       %s\n\n' "$pgnout"
 # information; `twosided=true` on resignation means both engines have to
 # agree the position is lost, which matters when the whole point of the match
 # is that their evaluations differ.
+#
+# `test` is listed before `base` deliberately, not alphabetically or by
+# habit: fastchess computes `-sprt`'s elo0/elo1/H0/H1 relative to whichever
+# engine is given first, not automatically relative to "the candidate". With
+# `base` first, a genuine improvement in `test` reports as base losing,
+# which reads as a regression unless the reader already knows to invert it.
 exec "$fastchess" \
-    -engine "cmd=$base_bin" "name=base" \
     -engine "cmd=$test_bin" "name=test" \
+    -engine "cmd=$base_bin" "name=base" \
     -each "$budget" "timemargin=$timemargin" proto=uci \
     -openings "file=$openings" format=epd order=random \
     -srand "$seed" \
