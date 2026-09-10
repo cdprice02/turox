@@ -1,0 +1,17 @@
+[toolchain]
+# Pinned, not floating: `dtolnay/rust-toolchain@stable` in CI used to resolve
+# to whatever was newest at run time, with nothing here to match it against
+# locally. `clippy::nursery` lints are explicitly unstable and can change
+# behavior between releases, so an unpinned toolchain means CI can turn red
+# with no code change behind it, and local `cargo clippy` can quietly
+# disagree with what CI actually runs. Nightly rather than stable so pedantic
+# and nursery lint refinements show up here before they land on stable,
+# which is worth having deliberately as long as it's a controlled date, not
+# a second floating channel that drifts even faster than the first one did.
+#
+# Bump by editing this date and `.github/workflows/rust-ci.yml`'s matching
+# `toolchain:` inputs together, in the same commit: whatever new lints the
+# bump surfaces are that commit's problem to fix, not a surprise on some
+# unrelated later PR.
+channel = "nightly-2026-08-09"
+components = ["clippy", "rustfmt"]
