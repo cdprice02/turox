@@ -1,15 +1,15 @@
 //! Micro-benchmarks for `move_gen`'s generators: per-piece pseudolegal
-//! generation, the combined `pseudo_legal_moves`, and the check-filtered
-//! `legal_moves` on top of it.
+//! generation, the combined `pseudo_legal_moves`, and two check-aware filters
+//! on top of it, `legal_moves` (the pin-set implementation) and
+//! `legal_moves_naive` (make-move-and-rescan), benchmarked side by side on
+//! the same corpus so the pin-set rewrite has a direct before/after number.
 //!
-//! The gap between `pseudo_legal_moves` and `legal_moves` on the same corpus
-//! is the cost of the check filter itself (one `make_move` + `in_check` per
-//! pseudolegal move). Before routing `in_check` through `attackers_of` instead
-//! of a full `attacked_by` scan, and filtering `legal_moves` in place instead
-//! of copying into a second `MoveList`, that gap measured `legal_moves` at
-//! 80.3µs against `pseudo_legal_moves`'s 6.3µs on this corpus; after both
-//! changes, `legal_moves` measures 43.6-46.9µs, a 42-45% drop, confirmed by
-//! Criterion's own before/after comparison against a saved baseline.
+//! Historical note on `legal_moves_naive`: before routing its own `in_check`
+//! check through `attackers_of` instead of a full `attacked_by` scan, and
+//! filtering in place instead of copying into a second `MoveList`, it
+//! measured 80.3µs against `pseudo_legal_moves`'s 6.3µs on this corpus; after
+//! both changes, 43.6-46.9µs, a 42-45% drop, confirmed by Criterion's own
+//! before/after comparison against a saved baseline.
 //!
 //! Same anti-const-folding shape as `benches/bitboard.rs`/`benches/magic.rs`:
 //! every benchmark drives over a precomputed corpus and `black_box`es both
@@ -23,7 +23,7 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
 use turox_engine::board::Board;
-use turox_engine::move_gen::legal::legal_moves;
+use turox_engine::move_gen::legal::{legal_moves, legal_moves_naive};
 use turox_engine::move_gen::move_list::MoveList;
 use turox_engine::move_gen::pseudo_legal::{
     castling_moves, king_moves, knight_moves, pawn_moves, pseudo_legal_moves, slider_moves,
@@ -102,6 +102,13 @@ fn legal(c: &mut Criterion) {
         b.iter(|| {
             for board in &boards {
                 black_box(legal_moves(black_box(board)).len());
+            }
+        });
+    });
+    group.bench_function("legal_moves_naive", |b| {
+        b.iter(|| {
+            for board in &boards {
+                black_box(legal_moves_naive(black_box(board)).len());
             }
         });
     });
