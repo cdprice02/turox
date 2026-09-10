@@ -31,8 +31,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-08-09
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -82,8 +83,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-08-09
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -121,7 +123,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
@@ -155,7 +159,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
@@ -191,8 +197,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-08-09
           components: llvm-tools-preview
 
       - name: Cache cargo registry and build artifacts
@@ -230,7 +237,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
