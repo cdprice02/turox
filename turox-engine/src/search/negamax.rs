@@ -15,6 +15,9 @@ use crate::rng::xorshift64star;
 use crate::search::draw::is_draw;
 use crate::search::tt::Tt;
 use crate::types::Move;
+use crate::MoveFlags;
+use crate::Piece;
+use std::cmp::Reverse;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -790,11 +793,11 @@ impl<'a> Search<'a> {
 
         let mut max = stand_pat;
         if qdepth > 0 {
-            let mut captures = moves.unwrap_or_else(|| legal_moves(board));
-            captures.retain(|m| m.flags().is_capture());
+            let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
+            qmoves.retain(|m| m.flags().is_capture());
 
-            order_moves(board, &mut captures, None);
-            for (i, &m) in captures.as_slice().iter().enumerate() {
+            order_moves(board, &mut qmoves, None);
+            for (i, &m) in qmoves.as_slice().iter().enumerate() {
                 let child = board.make_move(m);
                 let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth - 1, None);
 
@@ -818,10 +821,10 @@ impl<'a> Search<'a> {
 
 /// Orders `moves` in place, most promising first, so alpha-beta prunes more
 /// of the tree: MVV-LVA (most valuable victim, least valuable attacker)
-/// among captures, ahead of quiet moves, since a capture that wins the most
-/// material with the cheapest piece is most likely to hold up and cause a
-/// beta cutoff early. `tt_move`, when `Some`, ranks ahead of all of that; see
-/// [`move_priority`].
+/// among captures, promotions interleaved onto that same material scale,
+/// ahead of quiet moves, since a capture or promotion that wins the most
+/// material is most likely to hold up and cause a beta cutoff early.
+/// `tt_move`, when `Some`, ranks ahead of all of that; see [`move_priority`].
 ///
 /// En passant's victim isn't actually on `m.to()`; scored as `0` (an
 /// equal-value trade) rather than looking up the true victim square, an
@@ -834,64 +837,98 @@ fn order_moves(board: &Board, moves: &mut MoveList, tt_move: Option<Move>) {
     moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move));
 }
 
-/// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on a
-/// fieldless enum compares by declaration order, so this list *is* the
-/// ranking, not a lookup table alongside it. The hand-written version this
-/// replaced computed the same order through a separate `rank()` match
-/// function called on every sort comparison; `benches/search.rs` found no
-/// measurable throughput difference between the two at depth 6, so this
-/// isn't a performance change, just removing a lookup table that a typo
-/// could silently desync from this declaration.
+/// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on the
+/// enum compares by declaration order first, then by field data for two
+/// values of the same variant, so this declaration *is* the ranking, not a
+/// lookup table alongside it. `WinningCapture`/`LosingCapture` carry their
+/// material gain wrapped in `Reverse` rather than negated by hand: gain is
+/// stored as the real, un-negated victim-minus-attacker (or promotion)
+/// delta, and `Reverse` flips the field comparison so a bigger real gain
+/// still sorts first, the same direction the ascending derive already
+/// applies to the surrounding tiers. `EqualCapture` stays a bare unit
+/// variant because its gain is exactly `0` by definition and no promotion
+/// ever lands there (see `move_priority`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(
     dead_code,
-    reason = "PrincipalVariation, KillerCapture, MateKiller, and Killer have no producer yet \
-              (real PV tracking needs PVS's triangular PV table, killers need a per-ply killer-move \
-              table; both are #38, not this issue) but the ranking scheme is designed to be complete \
-              for when they land, rather than needing to be reshuffled later"
+    reason = "PrincipalVariation, MateKiller, and Killer have no producer yet (real PV \
+              tracking needs PVS's triangular PV table, killers need a per-ply killer-move \
+              table; both are #38, not this issue) but the ranking scheme is designed to be \
+              complete for when they land, rather than needing to be reshuffled later"
 )]
 enum MovePriority {
     PrincipalVariation,
     Hash,
-    KillerCapture,
-    WinningCapture,
+    WinningCapture(Reverse<Score>),
     EqualCapture,
     MateKiller,
     Killer,
-    LosingCapture,
     Quiet,
+    LosingCapture(Reverse<Score>),
 }
 
+/// Captures and promotions interleave on one material-gain scale rather than
+/// promotions getting a fixed rank: a capturing promotion (e.g. a pawn
+/// taking a rook while queening) is worth strictly more than the same
+/// promotion alone, by the captured piece's value, and only a shared scale
+/// can express that. `PIECE_VALUES` gives every promotion piece strictly
+/// more value than a pawn (the smallest gain, to a knight, is still 220), so
+/// `gain` can never be zero or negative for a promotion: it always resolves
+/// to `WinningCapture`, never `EqualCapture` or `LosingCapture`, and because
+/// that check happens before any killer-table lookup, a promotion can never
+/// fall through to `Quiet`, `Killer`, or `MateKiller` either, with or
+/// without a capture attached.
 fn move_priority(board: &Board, m: Move, tt_move: Option<Move>) -> MovePriority {
     if Some(m) == tt_move {
-        MovePriority::Hash
-    } else if m.flags().is_capture() {
-        if m.flags().is_en_passant() {
-            return MovePriority::EqualCapture;
-        }
-        let attacker = board
-            .piece_at(m.from())
-            .expect("capture has an attacker")
-            .piece();
+        return MovePriority::Hash;
+    }
+
+    let flags = m.flags();
+    let promotion_delta = || {
+        PIECE_VALUES[flags
+            .promotion_piece()
+            .expect("move is a promotion")
+            .index()]
+            - PIECE_VALUES[Piece::Pawn.index()]
+    };
+    let capture_delta = || {
+        let attacker = board.piece_at(m.from()).expect("move has a piece").piece();
         let victim = board
             .piece_at(m.to())
             .expect("capture has a victim")
             .piece();
-        let score = PIECE_VALUES[victim.index()] - PIECE_VALUES[attacker.index()];
-        match score.cmp(&0) {
-            std::cmp::Ordering::Greater => MovePriority::WinningCapture,
-            std::cmp::Ordering::Equal => MovePriority::EqualCapture,
-            std::cmp::Ordering::Less => MovePriority::LosingCapture,
+        PIECE_VALUES[victim.index()] - PIECE_VALUES[attacker.index()]
+    };
+    let score_delta = match flags {
+        MoveFlags::Quiet
+        | MoveFlags::DoublePawnPush
+        | MoveFlags::KingCastle
+        | MoveFlags::QueenCastle => {
+            return MovePriority::Quiet;
         }
-    } else {
-        MovePriority::Quiet
+        MoveFlags::Capture => capture_delta(),
+        MoveFlags::EnPassant => 0,
+        MoveFlags::PromoteKnight
+        | MoveFlags::PromoteBishop
+        | MoveFlags::PromoteRook
+        | MoveFlags::PromoteQueen => promotion_delta(),
+        MoveFlags::PromoteCaptureKnight
+        | MoveFlags::PromoteCaptureBishop
+        | MoveFlags::PromoteCaptureRook
+        | MoveFlags::PromoteCaptureQueen => capture_delta() + promotion_delta(),
+    };
+    match score_delta.cmp(&0) {
+        std::cmp::Ordering::Greater => MovePriority::WinningCapture(Reverse(score_delta)),
+        std::cmp::Ordering::Equal => MovePriority::EqualCapture,
+        std::cmp::Ordering::Less => MovePriority::LosingCapture(Reverse(score_delta)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Square;
+    use crate::types::{Piece, Square};
+    use std::cmp::Reverse;
 
     /// `move_priority` is private to this module, and so is `order_moves`;
     /// both are pure enough (no board mutation, no search recursion) to test
@@ -916,29 +953,43 @@ mod tests {
             .unwrap_or_else(|| panic!("{from:?}{to:?} must be a legal move in this position"))
     }
 
-    /// Every variant, in the exact order the hand-written `rank` closure in
-    /// `Ord for MovePriority` intends. This is what actually pins the
-    /// ranking down: `rank`'s match arms are a hand-written lookup table
-    /// (a shape this project has repeatedly gotten wrong elsewhere via a
-    /// copy-paste or off-by-one in similar tables), and a typo'd or
-    /// duplicated number there wouldn't fail to compile, it would just
-    /// silently misorder two variants relative to each other.
+    /// `find_move` alone is ambiguous for a promotion square: a pawn reaching the
+    /// back rank has up to four legal moves sharing the same `from`/`to`, one per
+    /// promotion piece, so the piece has to be part of the match.
+    fn find_promotion_move(board: &Board, from: Square, to: Square, piece: Piece) -> Move {
+        *legal_moves(board)
+            .as_slice()
+            .iter()
+            .find(|m| {
+                m.from() == from && m.to() == to && m.flags().promotion_piece() == Some(piece)
+            })
+            .unwrap_or_else(|| {
+                panic!("{from:?}{to:?}={piece:?} must be a legal promotion in this position")
+            })
+    }
+
+    /// Every variant, in the exact order the intended hierarchy requires:
+    /// `#[derive(Ord)]` on the enum compares by declaration order, so this list
+    /// *is* the ranking, not a lookup table alongside it. A typo'd or reordered
+    /// variant here wouldn't fail to compile, it would just silently misorder two
+    /// tiers relative to each other. `WinningCapture`/`LosingCapture` carry a
+    /// same-magnitude tiebreak value in this test since only cross-variant order
+    /// is being checked; within-tier ordering has its own tests below.
     #[test]
     fn move_priority_rank_order_matches_the_intended_hierarchy() {
         use MovePriority::{
-            EqualCapture, Hash, Killer, KillerCapture, LosingCapture, MateKiller,
-            PrincipalVariation, Quiet, WinningCapture,
+            EqualCapture, Hash, Killer, LosingCapture, MateKiller, PrincipalVariation, Quiet,
+            WinningCapture,
         };
         let ranked_best_to_worst = [
             PrincipalVariation,
             Hash,
-            KillerCapture,
-            WinningCapture,
+            WinningCapture(Reverse(0)),
             EqualCapture,
             MateKiller,
             Killer,
-            LosingCapture,
             Quiet,
+            LosingCapture(Reverse(0)),
         ];
         for pair in ranked_best_to_worst.windows(2) {
             assert!(
@@ -963,15 +1014,18 @@ mod tests {
     // comparatively unpromising. `WinningCapture`/`LosingCapture` need to
     // land on the *correct side* of that distinction, not just land on two
     // different variants (a naming swap between the two would still produce
-    // "two distinct variants" and could still pass a looser test).
+    // "two distinct variants" and could still pass a looser test). Pinning
+    // the exact `Reverse` value, not just the variant, also catches the
+    // tiebreak's sign getting negated relative to the raw victim-minus-
+    // attacker delta: `Reverse` should carry that delta un-negated.
     #[test]
     fn move_priority_classifies_a_small_attacker_taking_a_big_victim_as_winning() {
         let board = Board::try_from_fen("4k3/8/8/8/3q4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
         let pawn_takes_queen = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
             move_priority(&board, pawn_takes_queen, None),
-            MovePriority::WinningCapture,
-            "a pawn capturing a queen is the textbook winning capture"
+            MovePriority::WinningCapture(Reverse(800)),
+            "a pawn capturing a queen is the textbook winning capture, gain = 900 - 100"
         );
     }
 
@@ -981,9 +1035,9 @@ mod tests {
         let queen_takes_pawn = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
             move_priority(&board, queen_takes_pawn, None),
-            MovePriority::LosingCapture,
+            MovePriority::LosingCapture(Reverse(-800)),
             "a queen capturing an undefended pawn is comparatively unpromising, \
-             the opposite end of the scale from a pawn capturing a queen"
+             the opposite end of the scale from a pawn capturing a queen, gain = 100 - 900"
         );
     }
 
@@ -994,6 +1048,53 @@ mod tests {
         assert_eq!(
             move_priority(&board, rook_takes_rook, None),
             MovePriority::EqualCapture
+        );
+    }
+
+    /// The issue's own testing note: `RxQ` and `PxN` are both winning captures
+    /// under the old fieldless enum, and a fieldless `Ord` sees them as equal,
+    /// throwing away MVV-LVA's whole point. Embedding the material delta on
+    /// `WinningCapture` has to actually break that tie, not just happen to
+    /// leave both moves in the same broad tier.
+    #[test]
+    fn move_priority_does_not_conflate_two_different_winning_captures() {
+        let rxq_board = Board::try_from_fen("q5k1/8/8/8/8/8/8/R3K3 w - - 0 1").expect("valid FEN");
+        let rook_takes_queen = find_move(&rxq_board, Square::A1, Square::A8);
+
+        let pxn_board =
+            Board::try_from_fen("6k1/8/8/8/8/2n5/1P6/4K3 w - - 0 1").expect("valid FEN");
+        let pawn_takes_knight = find_move(&pxn_board, Square::B2, Square::C3);
+
+        let rxq_priority = move_priority(&rxq_board, rook_takes_queen, None);
+        let pxn_priority = move_priority(&pxn_board, pawn_takes_knight, None);
+
+        assert_ne!(
+            rxq_priority, pxn_priority,
+            "RxQ (gain 400) and PxN (gain 220) must not compare equal"
+        );
+        assert!(
+            rxq_priority < pxn_priority,
+            "RxQ must outrank PxN: rook-for-queen is a bigger material swing \
+             than pawn-for-knight, even though both are winning captures"
+        );
+        assert_eq!(rxq_priority, MovePriority::WinningCapture(Reverse(400)));
+        assert_eq!(pxn_priority, MovePriority::WinningCapture(Reverse(220)));
+    }
+
+    /// The issue's own testing note: a losing capture must sort behind a
+    /// quiet move, not ahead of it. This is the reordering `LosingCapture`'s
+    /// declaration position exists to fix; it's harmless under today's
+    /// fieldless enum only because every quiet move ties with every other
+    /// quiet move regardless of where `LosingCapture` sits.
+    #[test]
+    fn move_priority_ranks_a_losing_capture_behind_a_quiet_move() {
+        let board = capture_and_quiet_position();
+        let losing_capture = find_move(&board, Square::E4, Square::D5);
+        let quiet = find_move(&board, Square::E1, Square::D1);
+
+        assert!(
+            move_priority(&board, quiet, None) < move_priority(&board, losing_capture, None),
+            "a losing capture must sort behind a quiet move, not ahead of it"
         );
     }
 
@@ -1099,6 +1200,92 @@ mod tests {
                 hint,
                 "hint move {hint:?} must land at index 0 regardless of whether \
                  it's a capture or a quiet move"
+            );
+        }
+    }
+
+    /// A lone pawn one push from queening, nothing else on the board that
+    /// could capture: the only loud move available is the promotion itself.
+    fn promotion_no_capture_position() -> Board {
+        Board::try_from_fen("7k/4P3/8/8/8/8/8/K7 w - - 0 1").expect("valid FEN")
+    }
+
+    /// Same pawn, same promotion square, but a rook sits on the capture
+    /// diagonal so every promotion piece has a capturing and a non-capturing
+    /// counterpart to compare against.
+    fn promotion_with_capture_position() -> Board {
+        Board::try_from_fen("5r1k/4P3/8/8/8/8/8/K7 w - - 0 1").expect("valid FEN")
+    }
+
+    #[test]
+    fn move_priority_classifies_a_non_capture_promotion_as_a_winning_capture() {
+        let board = promotion_no_capture_position();
+        let queen_promo = find_promotion_move(&board, Square::E7, Square::E8, Piece::Queen);
+        assert_eq!(
+            move_priority(&board, queen_promo, None),
+            MovePriority::WinningCapture(Reverse(800)),
+            "a non-capture queen promotion must outrank quiet moves, not tie with \
+             them: gain = 900 - 100, the same tier a good capture lands in"
+        );
+    }
+
+    /// The reason to interleave promotions with captures on one material
+    /// scale, rather than giving promotions their own fixed tier: a
+    /// promotion that also captures a piece is worth strictly more than the
+    /// same promotion alone, by exactly the captured piece's value.
+    #[test]
+    fn move_priority_ranks_a_capturing_promotion_above_a_plain_promotion_of_the_same_piece() {
+        let plain_board = promotion_no_capture_position();
+        let plain_promo = find_promotion_move(&plain_board, Square::E7, Square::E8, Piece::Queen);
+
+        let capture_board = promotion_with_capture_position();
+        let capturing_promo =
+            find_promotion_move(&capture_board, Square::E7, Square::F8, Piece::Queen);
+
+        let plain_priority = move_priority(&plain_board, plain_promo, None);
+        let capturing_priority = move_priority(&capture_board, capturing_promo, None);
+
+        assert!(
+            capturing_priority < plain_priority,
+            "capturing a rook while promoting must outrank promoting alone"
+        );
+        assert_eq!(plain_priority, MovePriority::WinningCapture(Reverse(800)));
+        assert_eq!(
+            capturing_priority,
+            MovePriority::WinningCapture(Reverse(1200)),
+            "gain = (900 - 100) promotion + (500 - 100) capture"
+        );
+    }
+
+    /// `PIECE_VALUES` gives every promotion piece strictly more value than a
+    /// pawn (the smallest promotion gain, to a knight, is still 220), so
+    /// `move_priority`'s combined gain can never be zero or negative for a
+    /// promotion. That's what lets the branch order check material gain
+    /// before any killer-table lookup: a promotion can never fall through to
+    /// `Quiet`, `Killer`, or `MateKiller`, with or without a capture attached,
+    /// and this is a fact about the value table, not about any one FEN.
+    #[test]
+    fn every_promotion_piece_classifies_as_winning_never_quiet() {
+        let plain_board = promotion_no_capture_position();
+        let capture_board = promotion_with_capture_position();
+
+        for piece in [Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen] {
+            let plain = find_promotion_move(&plain_board, Square::E7, Square::E8, piece);
+            assert!(
+                matches!(
+                    move_priority(&plain_board, plain, None),
+                    MovePriority::WinningCapture(_)
+                ),
+                "{piece:?} promotion alone must classify as WinningCapture, never Quiet"
+            );
+
+            let capturing = find_promotion_move(&capture_board, Square::E7, Square::F8, piece);
+            assert!(
+                matches!(
+                    move_priority(&capture_board, capturing, None),
+                    MovePriority::WinningCapture(_)
+                ),
+                "{piece:?} promotion with a capture must classify as WinningCapture, never Quiet"
             );
         }
     }
