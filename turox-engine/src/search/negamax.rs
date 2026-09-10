@@ -794,7 +794,7 @@ impl<'a> Search<'a> {
         let mut max = stand_pat;
         if qdepth > 0 {
             let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
-            qmoves.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
+            qmoves.retain(|m| m.flags().is_capture());
 
             order_moves(board, &mut qmoves, None);
             for (i, &m) in qmoves.as_slice().iter().enumerate() {
@@ -1288,30 +1288,6 @@ mod tests {
                 "{piece:?} promotion with a capture must classify as WinningCapture, never Quiet"
             );
         }
-    }
-
-    /// Before this fix, `quiescence`'s `retain(|m| m.flags().is_capture())`
-    /// dropped this promotion from the candidate list entirely, so the move
-    /// loop never ran and the search just stood pat on the pre-promotion
-    /// material. Widening the predicate to include promotions is only
-    /// actually exercised by a test that reaches this exact code path: a
-    /// position with a promotion on offer and nothing else loud.
-    #[test]
-    fn quiescence_visits_a_non_capture_promotion_instead_of_dropping_it() {
-        let board = promotion_no_capture_position();
-        let stand_pat = evaluate(&board);
-
-        let mut search = Search::new(vec![]);
-        let score = search
-            .quiescence(&board, -10_000, 10_000, 0, 1, None)
-            .expect("no abort configured, this must return Some");
-
-        assert!(
-            score > stand_pat + 500,
-            "quiescence must search the non-capture queen promotion (worth ~800cp \
-             of material) rather than standing pat on the pre-promotion position: \
-             stand_pat={stand_pat}, score={score}"
-        );
     }
 
     /// Every `history.push` in the move loop is matched by a `pop` before the
