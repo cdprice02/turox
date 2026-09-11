@@ -393,6 +393,7 @@ fn go_emits_a_cutoff_stats_info_string_before_bestmove() {
         "quiescence",
         "fail_high=",
         "first_move_rate=",
+        "killers=",
         "index=",
     ] {
         assert!(
