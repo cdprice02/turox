@@ -440,10 +440,13 @@ fn find_move(board: &Board, from: Square, to: Square) -> Move {
 /// `96 + 4 == 100` boundary at all). The table's key carries no halfmove
 /// clock, so searching `far` first and reusing that table for `near` can
 /// serve `near` a stale, decisively-winning score instead of the real draw.
+/// Expected to fail: the `accepted_gap_` prefix keeps it out of the default
+/// run and hands it to the `accepted-gaps` nextest profile, which reports
+/// rather than gates. It asserts the behaviour the engine *owes* this
+/// position, not the behaviour it has, so the day it passes is the day the
+/// halfmove clock reached the key and the ADR recording that gap is stale.
 #[test]
-#[ignore = "documents an accepted transposition-table correctness gap: no \
-            halfmove clock in the key"]
-fn shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
+fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
     use turox_engine::search::tt::Tt;
 
     let far = Board::try_from_fen("7k/8/8/8/8/8/8/K6Q w - - 0 60").expect("valid FEN");

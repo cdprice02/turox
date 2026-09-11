@@ -74,6 +74,17 @@ jobs:
       - name: Check that benchmarks still compile
         run: cargo bench --workspace --no-run --locked
 
+      # `turox-fuzz` opts itself out of the workspace, so every `--workspace`
+      # command above skips it and it can rot without anyone noticing: its
+      # dependency on turox-engine pointed at the virtual workspace manifest
+      # rather than the package for long enough that `cargo fuzz run fen`,
+      # which the README documents as working, did not build at all. `check`
+      # rather than `build` because linking the libFuzzer runtime needs the
+      # sanitizer setup `cargo fuzz` brings, and compiling is the part that
+      # catches the drift.
+      - name: Check that the fuzz targets still compile
+        run: cargo check --locked --manifest-path turox-fuzz/Cargo.toml
+
   lint-and-format:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -113,6 +124,12 @@ jobs:
   # matter least; this is what actually runs them, on the schedule above or
   # on demand, rather than leaving them to whoever remembers to run
   # `--run-ignored all` locally.
+  #
+  # `--run-ignored all` means this job runs everything, so a test that is
+  # expected to fail would fail-fast it and the deep depths below would never
+  # execute. That is why expected-to-fail tests are not `#[ignore]`d at all;
+  # they carry an `accepted_gap_` prefix and the default nextest filter
+  # excludes them. See `.config/nextest.toml` and the `accepted-gaps` job.
   deep-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -137,6 +154,38 @@ jobs:
 
       - name: Run ignored tests in release mode
         run: cargo nextest run --workspace --release --run-ignored all --locked
+
+  # The accepted-gap tests, which are expected to fail: each one asserts the
+  # behaviour the engine owes a position rather than the behaviour it has,
+  # pinning a correctness gap that an ADR has consciously accepted. Reported
+  # and never gating, like the mutants job below, because a failure here is
+  # the documented status quo. The result worth watching is a *pass*: that
+  # means the gap closed and the ADR describing it has gone stale.
+  accepted-gaps:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-09
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: accepted-gaps
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run the accepted-gap tests in release mode
+        run: cargo nextest run --workspace --release --profile accepted-gaps --locked
 
   # Mutation testing: introduces small deliberate bugs (flip a comparison,
   # drop a negation, ...) and checks the test suite actually catches each

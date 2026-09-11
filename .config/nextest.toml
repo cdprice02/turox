@@ -1,9 +1,31 @@
 # cargo-nextest configuration. See .github/workflows/rust-ci.yml, which runs
 # `cargo nextest run --workspace --profile ci` as the test-failure gate.
 
+[profile.default]
+# `#[ignore]` means one thing in this repo: too slow to run on every push.
+# It does not mean "known-failing", because the weekly deep job runs
+# `--run-ignored all` and cannot tell the two apart: a test ignored for being
+# slow and a test ignored for failing by design look identical to it, so one
+# expected failure fail-fasts the run and the deep perft depths never execute.
+#
+# Tests whose whole purpose is to fail, pinning an accepted correctness gap
+# so that closing the gap is noticed, carry an `accepted_gap_` prefix and are
+# excluded here instead. The `accepted-gaps` profile below runs exactly those,
+# informationally. A test that is both slow and expected to fail takes the
+# prefix, not the attribute.
+default-filter = "not test(/^accepted_gap_/)"
+
 [profile.ci]
 retries = 0
 fail-fast = false
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# Runs only the accepted-gap tests, which are expected to fail today. Its
+# value is the day one of them passes: that means a gap documented in an ADR
+# has been closed, and the ADR plus the test owe an update. Reported, never
+# gating, for the same reason the mutants job isn't.
+[profile.accepted-gaps]
+default-filter = "test(/^accepted_gap_/)"
+fail-fast = false
