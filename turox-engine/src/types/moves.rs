@@ -53,6 +53,19 @@ impl MoveFlags {
         matches!(self, Self::EnPassant)
     }
 
+    /// True for `Quiet`, `DoublePawnPush`, `KingCastle`, or `QueenCastle`:
+    /// no capture, no promotion, nothing that changes material on the
+    /// board. Named around what the move *does* rather than reusing
+    /// `Quiet`, the variant: a killer or history table cares about this
+    /// broader class (every move `move_priority` sorts into `Quiet` or
+    /// `Killer`), not literally the `Quiet` variant alone, and a method
+    /// called `is_quiet` sitting next to a variant called `Quiet` would
+    /// leave it ambiguous which one a reader means.
+    #[must_use]
+    pub const fn is_material_neutral(self) -> bool {
+        !self.is_capture() && !self.is_promotion()
+    }
+
     /// The piece a promotion variant promotes to, or `None` for non-promotions.
     #[must_use]
     pub const fn promotion_piece(self) -> Option<Piece> {

@@ -189,10 +189,12 @@ fn cutoff_info_string(result: &SearchResult) -> Response {
     ))
 }
 
-/// `fail_high=<n> first_move_rate=<pct>% index=<histogram>` for one
-/// `CutoffStats`. `first_move_rate` is 0% on a stats with no cutoffs at all
-/// (rather than dividing by zero) since there's nothing to rate yet, not
-/// because ordering failed.
+/// `fail_high=<n> first_move_rate=<pct>% killers=<n> index=<histogram>` for
+/// one `CutoffStats`. `first_move_rate` is 0% on a stats with no cutoffs at
+/// all (rather than dividing by zero) since there's nothing to rate yet, not
+/// because ordering failed. `killers` is `killer_cutoffs`: the pre-SPRT
+/// sanity check that the killer table is actually being consulted, not just
+/// populated; see that field's own doc.
 fn cutoff_summary(stats: &CutoffStats) -> String {
     let first_move_rate = if stats.fail_high_nodes == 0 {
         0.0
@@ -207,8 +209,8 @@ fn cutoff_summary(stats: &CutoffStats) -> String {
         rate
     };
     format!(
-        "fail_high={} first_move_rate={first_move_rate:.1}% index={:?}",
-        stats.fail_high_nodes, stats.cutoff_index
+        "fail_high={} first_move_rate={first_move_rate:.1}% killers={} index={:?}",
+        stats.fail_high_nodes, stats.killer_cutoffs, stats.cutoff_index
     )
 }
 

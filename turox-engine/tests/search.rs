@@ -211,31 +211,43 @@ fn interrupted_first_iteration_still_returns_a_partial_bestmove() {
 /// not a deeper iteration's partial one. `with_max_nodes` makes this
 /// deterministic and repeatable: a wall-clock deadline can't reliably land
 /// mid-iteration in a test.
+///
+/// Depth 4, not depth 3: `should_abort`'s once-per-2048-nodes sampling (see
+/// the sibling test above) means a budget only trips if the search's total
+/// node count actually crosses a 2048 checkpoint. Move-ordering
+/// improvements keep shrinking how many nodes a fixed shallow depth costs
+/// from the start position (depth 3 dropped under 2048 entirely once killer
+/// moves landed, which is what turned this test flaky), so the budget below
+/// is derived from `unbounded.nodes / 2`, the same halfway trick and guard
+/// assertion the sibling test uses, rather than a fixed offset from a
+/// smaller, faster-shrinking depth.
 #[test]
 fn interrupted_iteration_keeps_the_last_completed_result() {
     let board = Board::try_from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
         .expect("valid FEN");
 
-    let unbounded = Search::new(Vec::new()).search(&board, 1);
+    let unbounded = Search::new(Vec::new()).search(&board, 4);
     assert_eq!(
-        unbounded.depth, 1,
-        "sanity check: an unbounded depth-1 search must complete depth 1"
+        unbounded.depth, 4,
+        "sanity check: an unbounded depth-4 search must complete depth 4"
+    );
+    assert!(
+        unbounded.nodes > 2048,
+        "this test relies on depth 4's own tree crossing at least one \
+         2048-node checkpoint past the halfway budget below; got {} nodes",
+        unbounded.nodes
     );
 
-    // A budget past depth 1's node count but comfortably short of depth 3's:
-    // exercised directly against `unbounded.nodes` rather than a guessed
-    // constant, so this stays correct if node-counting or move ordering
-    // changes how many nodes depth 1 costs.
-    let mut bounded = Search::new(Vec::new()).with_max_nodes(unbounded.nodes + 1);
-    let result = bounded.search(&board, 3);
+    let mut bounded = Search::new(Vec::new()).with_max_nodes(unbounded.nodes / 2);
+    let result = bounded.search(&board, 4);
 
     assert!(
-        result.depth < 3,
+        result.depth < 4,
         "a tiny node budget must not reach the full requested depth"
     );
     assert!(
         result.best_move.is_some(),
-        "the depth-1 iteration completed before the budget tripped, so its move must survive"
+        "an earlier iteration completed before the budget tripped, so its move must survive"
     );
 }
 
@@ -584,5 +596,40 @@ fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
     assert!(
         first_move_rate >= 0.9,
         "first-move cutoff rate regressed to {first_move_rate:.3}, below the 0.9 floor"
+    );
+}
+
+// ---- Killer-move instrumentation ----
+
+/// `killer_cutoffs` on `CutoffStats` is the pre-SPRT sanity check that the
+/// killer table is actually being consulted from inside a real search, not
+/// just correct in isolation: it's entirely possible for the table to be
+/// wired up, populated, and never once actually looked at by a live move
+/// loop, and the existing `first_move_rate` floor above wouldn't catch that
+/// on its own since plenty of other ordering already gets a search most of
+/// the way to a well-ordered first move.
+///
+/// Same position and depth as the first-move-rate floor above, for the same
+/// reason: it's already known to produce a search deep enough to exercise
+/// real ordering, rather than picking a second position and having to
+/// re-establish that.
+///
+/// This asserts only `> 0`, not a specific count or rate: exactly how often
+/// a killer fires depends on the replacement policy and where in the tree it
+/// happens to land, which is what the unit-level `record_killer`/
+/// `move_priority` tests pin down precisely. This test's only job is
+/// proving the feature engages at all in a real tree.
+#[test]
+fn killer_table_is_consulted_during_a_real_search() {
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+    let result = Search::new(Vec::new()).search(&board, 6);
+
+    assert!(
+        result.negamax_cutoffs.killer_cutoffs > 0,
+        "a depth-6 search of a position this open must cause at least one beta cutoff \
+         on a move that was already sitting in a killer slot, or the table isn't being \
+         consulted from the real move loop"
     );
 }
