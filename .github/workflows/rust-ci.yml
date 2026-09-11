@@ -247,8 +247,15 @@ jobs:
       # -j 2, not 4: ubuntu-latest has 4 vCPUs, but each mutant's own build
       # already uses cargo's own parallelism, so running 4 mutants at once
       # would oversubscribe rather than actually parallelize.
+      # `--test-tool=nextest` is load-bearing, not a speed tweak. cargo-mutants
+      # defaults to plain `cargo test`, which understands neither nextest
+      # profiles nor the default filter that keeps the accepted-gap tests out
+      # of ordinary runs, so it would run them, watch them fail, and abort on
+      # a failing baseline before testing a single mutant. Unifying both
+      # runners on nextest keeps that filter the single place the exclusion
+      # is expressed, rather than restating it per tool.
       - name: Run mutation testing
-        run: cargo mutants -p turox-engine -j 2
+        run: cargo mutants -p turox-engine --test-tool=nextest -j 2
 
       - name: Upload mutants report
         if: always()
