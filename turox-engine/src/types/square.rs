@@ -207,6 +207,12 @@ impl Square {
         Rank::from_u8(self.to_u8() / 8).expect("a u8 < 64, divided by 8, is always < 8")
     }
 
+    /// Whether this square is a light square (a1 is dark, h1 is light).
+    #[must_use]
+    pub const fn is_light(self) -> bool {
+        !(self.file().to_u8() + self.rank().to_u8()).is_multiple_of(2)
+    }
+
     /// This square's single-bit mask within a `Bitboard`.
     #[must_use]
     pub const fn bitboard(self) -> Bitboard {

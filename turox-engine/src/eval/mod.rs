@@ -16,6 +16,7 @@ use crate::eval::pst::{pst_value, pst_value_eg};
 use crate::types::Color;
 use crate::Piece;
 
+mod endgame_scale;
 mod king_safety;
 mod pawn_structure;
 mod phase;
@@ -82,7 +83,8 @@ pub fn eval_white_pov(board: &Board) -> Score {
     score -= pawn_structure::pawn_structure_score(board, Color::Black);
     score += king_safety::king_safety_score(board, Color::White);
     score -= king_safety::king_safety_score(board, Color::Black);
-    phase::interpolate(score, phase::game_phase(board))
+    let score = phase::interpolate(score, phase::game_phase(board));
+    endgame_scale::scale(score, board)
 }
 
 /// Side-to-move-relative score: positive means the side to move is ahead.

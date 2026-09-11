@@ -440,3 +440,110 @@ fn storm_direction_mirrors_for_black_kings_not_just_white_ones() {
     let expected = pawn_pst_delta + 10;
     assert_eq!(eval_white_pov(&close) - eval_white_pov(&far), expected);
 }
+
+// ---- Endgame scale factors ----
+//
+// Every position below keeps the two kings on asymmetric squares (one
+// centralized, one cornered) rather than mirroring each other: a
+// self-mirror-symmetric position already scores 0 on its own (per
+// `start_position_is_exactly_zero`'s reasoning), which would pass even if
+// `endgame_scale::scale` did nothing at all. Forcing a real, otherwise
+// nonzero, king-PST or material asymmetry down to exactly 0 is what
+// actually exercises the scale factor.
+
+#[test]
+fn bare_kings_score_exactly_zero_despite_asymmetric_king_placement() {
+    let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/8 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), 0);
+}
+
+#[test]
+fn a_lone_knight_cannot_escape_the_draw_score() {
+    let white_up_a_knight =
+        Board::try_from_fen("7k/8/8/8/4K3/8/8/N7 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&white_up_a_knight), 0);
+
+    // The asymmetric case this repo's {Color}x{side} history says to write
+    // explicitly: the same signature with Black holding the extra knight,
+    // not just White's own case mirrored.
+    let black_up_a_knight =
+        Board::try_from_fen("4k3/8/8/8/8/8/8/n6K w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&black_up_a_knight), 0);
+}
+
+#[test]
+fn a_lone_bishop_cannot_escape_the_draw_score() {
+    let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/B7 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), 0);
+}
+
+#[test]
+fn a_pair_of_knights_cannot_escape_the_draw_score() {
+    let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/NN6 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), 0);
+}
+
+// a1 and c1 are the same square color (both dark): `(0+0)` and `(2+0)` are
+// both even under `Square::is_light`'s file+rank parity.
+#[test]
+fn same_colored_bishops_cannot_escape_the_draw_score() {
+    let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/B1B5 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), 0);
+}
+
+// The boundary same_colored_bishops_cannot_escape_the_draw_score sits next
+// to: a1 and b1 are opposite square colors (`0` even, `1` odd), and a real
+// king-and-two-opposite-coloured-bishops position is one of the four basic
+// forced checkmates, not a draw. `hard_draw_scale` must leave this one
+// alone rather than treating "two bishops, one side" as a single case.
+#[test]
+fn opposite_colored_bishops_on_one_side_are_not_scaled_to_a_draw() {
+    let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/BB6 w - - 0 1").expect("valid FEN");
+    assert!(eval_white_pov(&board) > 600); // two bishops' worth of material, roughly
+}
+
+// The other combination that can force mate despite being "only two
+// minors": a knight and a bishop together, unlike either alone.
+#[test]
+fn a_knight_and_bishop_pair_are_not_scaled_to_a_draw() {
+    let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/BN6 w - - 0 1").expect("valid FEN");
+    assert!(eval_white_pov(&board) > 600);
+}
+
+// White's bishop on b1 (file 1 + rank 0 = odd, light) and Black's on b8
+// (file 1 + rank 7 = odd... file 1 + rank 7 = 8, even, dark): opposite
+// colors, one each side, the classic fortress case. White's extra d4 pawn
+// would be worth a full 100 centipawns plus its own positional terms
+// unscaled; `soft_draw_scale` should leave White still (barely) ahead, but
+// nowhere near a full pawn's worth.
+#[test]
+fn opposite_colored_bishops_with_an_extra_pawn_score_well_below_a_pawn() {
+    let board = Board::try_from_fen("1b2k3/8/8/8/3P4/8/8/1B2K3 w - - 0 1").expect("valid FEN");
+    let score = eval_white_pov(&board);
+    assert!(
+        (0..50).contains(&score),
+        "expected a small, positive, well-below-a-pawn score, got {score}"
+    );
+
+    // Same position, Black's own extra pawn instead of White's: the
+    // {Color}x{side} check this repo's history says to write explicitly,
+    // not just White's own case mirrored via `mirrored()`.
+    let black_extra_pawn =
+        Board::try_from_fen("1b2k3/8/8/3p4/8/8/8/1B2K3 w - - 0 1").expect("valid FEN");
+    let black_score = eval_white_pov(&black_extra_pawn);
+    assert!(
+        (-50..0).contains(&black_score),
+        "expected a small, negative, well-below-a-pawn score, got {black_score}"
+    );
+}
+
+// The boundary the position above sits next to: same shape, but both
+// bishops on the same square color (b1 and a8 are both light: `1+0=1` and
+// `0+7=7`, both odd), so this isn't the opposite-coloured-bishops fortress
+// at all. White's extra pawn should show through close to its full value,
+// not scaled down.
+#[test]
+fn same_colored_bishops_with_an_extra_pawn_are_not_scaled_down() {
+    let board = Board::try_from_fen("b3k3/8/8/8/3P4/8/8/1B2K3 w - - 0 1").expect("valid FEN");
+    assert!(eval_white_pov(&board) > 80);
+}
