@@ -64,6 +64,141 @@ const NAIVE_OPEN_FILE_PENALTY: i32 = -25;
 const NAIVE_STORM_PENALTY: i32 = -10;
 const NAIVE_STORM_RANGE: usize = 3;
 
+/// Independent of `eval::endgame_scale::SOFT_DRAW_SCALE_FACTOR` (private to
+/// `eval`, unreachable from this integration-test crate anyway): the same
+/// flat divisor, transcribed again here for the same reason the other
+/// `NAIVE_*` constants are.
+const NAIVE_SOFT_DRAW_SCALE_FACTOR: Score = 16;
+
+/// Whether `sq` is a light square, rederived from file/rank parity rather
+/// than calling `Square::is_light`: unlike the PST tables, this is a
+/// one-line formula, not a large lookup table transcribing it independently
+/// costs nothing and keeps this file from sharing control-flow logic with
+/// the code under test.
+const fn naive_is_light(sq: Square) -> bool {
+    (sq.file().index() + sq.rank().index()) % 2 == 1
+}
+
+/// Whether exactly two squares are given and they share a square colour.
+/// Shared by both the same-side (`KBBK`) and cross-side (opposite-coloured
+/// bishops) checks below, the same way `eval::endgame_scale`'s own
+/// `same_colored_bishops` serves both callers.
+const fn naive_same_colored_bishops(squares: &[Square]) -> bool {
+    match squares {
+        [a, b] => naive_is_light(*a) == naive_is_light(*b),
+        _ => false,
+    }
+}
+
+/// Mailbox reference for `eval::endgame_scale::hard_draw_scale`: whether
+/// the non-bare side's minors alone (a single knight, a knight pair, a
+/// single bishop, or two same-coloured bishops) still can't force mate.
+const fn naive_hard_draw_scale(score: Score, knight_count: u32, bishops: &[Square]) -> Score {
+    let is_drawn = match (knight_count, bishops.len()) {
+        (1 | 2, 0) | (0, 1) => true,
+        (0, 2) => naive_same_colored_bishops(bishops),
+        _ => false,
+    };
+    if is_drawn {
+        0
+    } else {
+        score
+    }
+}
+
+/// Mailbox reference for `eval::endgame_scale::soft_draw_scale`: one bishop
+/// per side, no knights, opposite-coloured squares.
+const fn naive_soft_draw_scale(
+    score: Score,
+    white_knights: u32,
+    black_knights: u32,
+    white_bishops: &[Square],
+    black_bishops: &[Square],
+) -> Score {
+    let is_ocb = white_knights == 0
+        && black_knights == 0
+        && white_bishops.len() == 1
+        && black_bishops.len() == 1
+        && !naive_same_colored_bishops(&[white_bishops[0], black_bishops[0]]);
+    if is_ocb {
+        score / NAIVE_SOFT_DRAW_SCALE_FACTOR
+    } else {
+        score
+    }
+}
+
+/// Mailbox reference for `eval::endgame_scale::scale` as a whole: a
+/// `Square::ALL` walk counting pawns/rooks/queens (any of which disqualifies
+/// every signature below) and collecting each side's knight count and
+/// bishop squares, then the same bare-side dispatch the real implementation
+/// uses. Shares no bitboard tricks with it: no `Bitboard::is_empty`/`.or`,
+/// just plain counters and a `Vec` of squares.
+fn naive_endgame_scale(board: &Board, score: Score) -> Score {
+    let mut white_knights = 0u32;
+    let mut black_knights = 0u32;
+    let mut white_bishops: Vec<Square> = Vec::new();
+    let mut black_bishops: Vec<Square> = Vec::new();
+    let mut pawn_count = 0u32;
+    let mut rook_count = 0u32;
+    let mut queen_count = 0u32;
+
+    for sq in Square::ALL {
+        let Some(cp) = board.piece_at(sq) else {
+            continue;
+        };
+        match (cp.piece(), cp.color()) {
+            (Piece::Pawn, _) => pawn_count += 1,
+            (Piece::Rook, _) => rook_count += 1,
+            (Piece::Queen, _) => queen_count += 1,
+            (Piece::Knight, Color::White) => white_knights += 1,
+            (Piece::Knight, Color::Black) => black_knights += 1,
+            (Piece::Bishop, Color::White) => white_bishops.push(sq),
+            (Piece::Bishop, Color::Black) => black_bishops.push(sq),
+            (Piece::King, _) => {}
+        }
+    }
+
+    if rook_count > 0 || queen_count > 0 {
+        return score;
+    }
+
+    let white_bare = white_knights == 0 && white_bishops.is_empty();
+    let black_bare = black_knights == 0 && black_bishops.is_empty();
+
+    if !white_bare && !black_bare {
+        return naive_soft_draw_scale(
+            score,
+            white_knights,
+            black_knights,
+            &white_bishops,
+            &black_bishops,
+        );
+    }
+
+    if pawn_count > 0 {
+        return score;
+    }
+
+    if white_bare && black_bare {
+        return 0;
+    }
+    if white_bare {
+        naive_hard_draw_scale(score, black_knights, &black_bishops)
+    } else {
+        naive_hard_draw_scale(score, white_knights, &white_bishops)
+    }
+}
+
+/// Whether `board`'s material matches any `naive_endgame_scale` signature
+/// (hard or soft). Probes with the sentinel score `1`: every signature that
+/// actually changes the score maps `1` to something other than `1` (`0` for
+/// a hard draw, `1 / 16 == 0` for the soft one), while every "leave `score`
+/// alone" path returns the probe unchanged. Cheaper than re-deriving the
+/// same piece counts a second time with their own name.
+fn triggers_endgame_scale(board: &Board) -> bool {
+    naive_endgame_scale(board, 1) != 1
+}
+
 /// Mailbox walk over `board.piece_at`, reproducing `eval::phase::game_phase`
 /// without calling it: sums `NAIVE_PHASE_WEIGHT` for every non-pawn,
 /// non-king piece found, subtracts from `NAIVE_TOTAL_PHASE`, clamps to
@@ -292,7 +427,7 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (black_ks_mg, black_ks_eg) = naive_king_safety_mg_eg(board, Color::Black);
     mg += white_ks_mg - black_ks_mg;
     eg += white_ks_eg - black_ks_eg;
-    blend(mg, eg, naive_game_phase(board))
+    naive_endgame_scale(board, blend(mg, eg, naive_game_phase(board)))
 }
 
 /// The standard tapered-eval blend, `(mg * (256 - phase) + eg * phase) /
@@ -321,7 +456,7 @@ fn naive_material_pst_and_king_safety_white_pov(board: &Board) -> Score {
     let (black_mg, black_eg) = naive_king_safety_mg_eg(board, Color::Black);
     mg += white_mg - black_mg;
     eg += white_eg - black_eg;
-    blend(mg, eg, naive_game_phase(board))
+    naive_endgame_scale(board, blend(mg, eg, naive_game_phase(board)))
 }
 
 /// Material, PST, and pawn structure, king safety switched off: the mirror
@@ -337,7 +472,7 @@ fn naive_material_pst_and_pawn_structure_white_pov(board: &Board) -> Score {
     let (black_mg, black_eg) = naive_pawn_structure_mg_eg(board, Color::Black);
     mg += white_mg - black_mg;
     eg += white_eg - black_eg;
-    blend(mg, eg, naive_game_phase(board))
+    naive_endgame_scale(board, blend(mg, eg, naive_game_phase(board)))
 }
 
 proptest! {
@@ -402,6 +537,20 @@ proptest! {
     // above. `eval::king_safety`'s constants are first-pass placeholders
     // sized by reasoning rather than measured games; worth re-checking
     // again if they're ever tuned past a pawn's value.
+    //
+    // `eval::endgame_scale` breaks this property outright for boards it
+    // touches, in either direction, not just down to a tie: `K+N vs K+P`
+    // (a pawn on the board, so no signature matches, score passes through
+    // unscaled) can score *better* for White than the `K+N vs K` left after
+    // removing that pawn (a real known draw, scored exactly `0`), because
+    // the unscaled pre-removal score has no way to express "that pawn was
+    // never going to matter anyway." That's not a bug to chase: it's the
+    // same plateau-and-cliff shape the whole feature is built on, just
+    // visible from the removal side instead of the comparison side. So
+    // this property is restricted to the boards the feature doesn't touch,
+    // where it's exactly as strict as it was before `endgame_scale`
+    // existed, via `triggers_endgame_scale` on both the position being
+    // reduced and the result of reducing it.
     #[test]
     fn removing_a_black_piece_strictly_increases_white_pov(board in any_board()) {
         let target = Square::ALL.into_iter().find(|&sq| {
@@ -413,6 +562,9 @@ proptest! {
         };
         let mut reduced = board;
         reduced.remove(sq);
+        if triggers_endgame_scale(&board) || triggers_endgame_scale(&reduced) {
+            return Ok(());
+        }
         prop_assert!(eval_white_pov(&reduced) > eval_white_pov(&board));
     }
 
