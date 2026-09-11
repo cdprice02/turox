@@ -10,7 +10,7 @@ why each of these exists; this file is the lookup.
 | test              | `cargo nextest run --workspace`, then `cargo test --doc --workspace`  |
 | test one          | `cargo nextest run -E 'test(NAME)'`                                   |
 | test, deep        | `cargo nextest run --workspace --release --run-ignored all`           |
-| test, accepted gaps | `cargo nextest run --workspace --release --profile accepted-gaps`   |
+| test, accepted gaps | `cargo nextest run --workspace --release --profile accepted-gaps --run-ignored all` |
 | watch             | `bacon` (clippy on save), `bacon nextest` (tests)                     |
 | typecheck         | `cargo check --all-targets`                                           |
 | lint              | `cargo clippy --all-targets --all-features -- -D warnings`            |
@@ -20,7 +20,7 @@ why each of these exists; this file is the lookup.
 | bench vs baseline | `cargo bench -p turox-engine -- --save-baseline before`, then `-- --baseline before` |
 | self-play A/B     | `tools/selfplay/sprt.sh --base main --test my-branch`                 |
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
-| mutants           | `cargo mutants -p turox-engine --test-tool=nextest`                   |
+| mutants           | `cargo mutants -p turox-engine`                                       |
 | coverage          | `cargo llvm-cov --workspace`                                          |
 
 ## Gotchas
@@ -45,19 +45,20 @@ why each of these exists; this file is the lookup.
   also insists on a directory named exactly `fuzz` under the workspace root,
   so every invocation needs `--fuzz-dir turox-fuzz`; `cd`ing into the crate
   does not help, since it walks back up to the root regardless.
-- **`#[ignore]` means "too slow for every push", and nothing else.** Tests
-  that are *expected to fail*, pinning a correctness gap an ADR has
-  consciously accepted, carry an `accepted_gap_` prefix instead and are
-  excluded by the default filter in `.config/nextest.toml`. That split
-  exists because the deep job runs `--run-ignored all` and cannot otherwise
-  tell "slow" from "known-failing": one expected failure used to fail-fast
-  the run, so the deep perft depths never executed. The weekly
-  `accepted-gaps` job runs exactly those tests and inverts the result, so it
-  goes red when one *passes*, meaning a gap closed and its ADR is stale.
-- **`cargo mutants` needs `--test-tool=nextest`.** It defaults to plain
-  `cargo test`, which knows nothing about nextest profiles or the filter
-  above, so it runs the accepted-gap tests, sees them fail, and aborts on a
-  failing baseline before testing a single mutant.
+- **`#[ignore]` means "not in a default run"; the name says why.** Most
+  ignored tests here are simply too slow for every push. Tests that are
+  *expected to fail*, pinning a correctness gap an ADR has consciously
+  accepted, carry an `accepted_gap_` prefix as well, and are excluded twice
+  over: by `#[ignore]`, and by the default filter in `.config/nextest.toml`.
+  Both are needed, and neither is redundant. The deep job runs
+  `--run-ignored all`, which defeats the attribute, so only the filter
+  excludes them there; `cargo llvm-cov` and `cargo mutants` shell out to
+  plain `cargo test`, which never sees a nextest profile, so only the
+  attribute excludes them there. Removing either one breaks a real job, and
+  both failure modes were observed rather than predicted. The weekly
+  `accepted-gaps` job runs exactly these tests (`--run-ignored all` plus the
+  profile) and inverts the result, so it goes red when one *passes*, meaning
+  a gap closed and its ADR is stale.
 - **Clippy runs `pedantic` and `nursery`, plus a hand-picked set of
   restriction lints** (`unwrap_used`, `unreachable`, `wildcard_enum_match_arm`,
   `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `dbg_macro`,

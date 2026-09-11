@@ -125,11 +125,11 @@ jobs:
   # on demand, rather than leaving them to whoever remembers to run
   # `--run-ignored all` locally.
   #
-  # `--run-ignored all` means this job runs everything, so a test that is
-  # expected to fail would fail-fast it and the deep depths below would never
-  # execute. That is why expected-to-fail tests are not `#[ignore]`d at all;
-  # they carry an `accepted_gap_` prefix and the default nextest filter
-  # excludes them. See `.config/nextest.toml` and the `accepted-gaps` job.
+  # `--run-ignored all` deliberately defeats `#[ignore]`, so that attribute
+  # alone cannot keep an expected-to-fail test out of this job: one such
+  # failure used to fail-fast the run and the deep depths below never
+  # executed. The `accepted_gap_` prefix and the default filter in
+  # `.config/nextest.toml` are what actually exclude them here.
   deep-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -194,7 +194,7 @@ jobs:
       - name: Run the accepted-gap tests in release mode
         run: |
           set +e
-          cargo nextest run --workspace --release --profile accepted-gaps --locked
+          cargo nextest run --workspace --release --profile accepted-gaps --run-ignored all --locked
           code=$?
           set -e
           case $code in
@@ -247,15 +247,8 @@ jobs:
       # -j 2, not 4: ubuntu-latest has 4 vCPUs, but each mutant's own build
       # already uses cargo's own parallelism, so running 4 mutants at once
       # would oversubscribe rather than actually parallelize.
-      # `--test-tool=nextest` is load-bearing, not a speed tweak. cargo-mutants
-      # defaults to plain `cargo test`, which understands neither nextest
-      # profiles nor the default filter that keeps the accepted-gap tests out
-      # of ordinary runs, so it would run them, watch them fail, and abort on
-      # a failing baseline before testing a single mutant. Unifying both
-      # runners on nextest keeps that filter the single place the exclusion
-      # is expressed, rather than restating it per tool.
       - name: Run mutation testing
-        run: cargo mutants -p turox-engine --test-tool=nextest -j 2
+        run: cargo mutants -p turox-engine -j 2
 
       - name: Upload mutants report
         if: always()
