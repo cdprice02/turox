@@ -17,7 +17,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 
 [dependencies.turox-engine]
-path = ".."
+path = "../turox-engine"
 
 [[bin]]
 name = "fen"

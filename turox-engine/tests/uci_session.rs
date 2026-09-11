@@ -543,10 +543,14 @@ fn final_scores(output: &str) -> Vec<i32> {
 /// them by resetting anything. Depth 7 is empirically the shallowest depth at
 /// which this shuffle produces a reproducible divergence between reusing the
 /// table across every `go` and clearing it before each one.
+/// Expected to fail, on the same footing as the fifty-move-boundary gap in
+/// `tests/search.rs`, and excluded the same two ways. It asserts that reusing
+/// the table across every `go` scores identically to clearing it between each
+/// one, which is what path information in the key would buy.
 #[test]
-#[ignore = "documents an accepted transposition-table correctness gap: no \
-            path information in the key"]
-fn shared_table_leaks_a_repetition_tainted_score_across_go_commands() {
+#[ignore = "expected to fail; pins an accepted transposition-table gap, run \
+            via the accepted-gaps nextest profile"]
+fn accepted_gap_shared_table_leaks_a_repetition_tainted_score_across_go_commands() {
     let moves = [
         "h1h2", "h8g8", "h2h1", "g8h8", "h1h2", "h8g8", "h2h1", "g8h8",
     ];

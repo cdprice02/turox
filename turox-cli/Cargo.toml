@@ -11,9 +11,8 @@ workspace = true
 [dependencies]
 # Not `workspace.dependencies`: turox-engine takes zero runtime dependencies
 # (see its Cargo.toml), so these are turox-cli's alone, not shared with
-# anything else in the workspace. A library returning `anyhow::Error` also
-# denies callers the ability to match on failure, so `anyhow` belongs at this
-# binary boundary specifically, not any lower in the dependency graph.
-anyhow = "1.0"
+# anything else in the workspace. `clap` earns its place here for `--help`
+# and `--version` alone; the UCI protocol itself arrives on stdin, so there
+# are no flags to parse beyond those two.
 clap = { version = "4.5.37", features = ["derive"] }
 turox-engine = { path = "../turox-engine" }

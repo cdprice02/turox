@@ -440,10 +440,18 @@ fn find_move(board: &Board, from: Square, to: Square) -> Move {
 /// `96 + 4 == 100` boundary at all). The table's key carries no halfmove
 /// clock, so searching `far` first and reusing that table for `near` can
 /// serve `near` a stale, decisively-winning score instead of the real draw.
+/// Expected to fail. It asserts the behaviour the engine *owes* this
+/// position, not the behaviour it has, so the day it passes is the day the
+/// halfmove clock reached the key and the ADR recording that gap is stale.
+///
+/// Kept out of ordinary runs twice over, because no single mechanism reaches
+/// every runner: the `accepted_gap_` prefix is what the nextest default
+/// filter excludes, and `#[ignore]` is what `cargo test` honours, which is
+/// what `cargo llvm-cov` and `cargo mutants` actually shell out to.
 #[test]
-#[ignore = "documents an accepted transposition-table correctness gap: no \
-            halfmove clock in the key"]
-fn shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
+#[ignore = "expected to fail; pins an accepted transposition-table gap, run \
+            via the accepted-gaps nextest profile"]
+fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() {
     use turox_engine::search::tt::Tt;
 
     let far = Board::try_from_fen("7k/8/8/8/8/8/8/K6Q w - - 0 60").expect("valid FEN");

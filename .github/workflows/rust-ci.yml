@@ -74,6 +74,17 @@ jobs:
       - name: Check that benchmarks still compile
         run: cargo bench --workspace --no-run --locked
 
+      # `turox-fuzz` opts itself out of the workspace, so every `--workspace`
+      # command above skips it and it can rot without anyone noticing: its
+      # dependency on turox-engine pointed at the virtual workspace manifest
+      # rather than the package for long enough that `cargo fuzz run fen`,
+      # which the README documents as working, did not build at all. `check`
+      # rather than `build` because linking the libFuzzer runtime needs the
+      # sanitizer setup `cargo fuzz` brings, and compiling is the part that
+      # catches the drift.
+      - name: Check that the fuzz targets still compile
+        run: cargo check --locked --manifest-path turox-fuzz/Cargo.toml
+
   lint-and-format:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -113,6 +124,12 @@ jobs:
   # matter least; this is what actually runs them, on the schedule above or
   # on demand, rather than leaving them to whoever remembers to run
   # `--run-ignored all` locally.
+  #
+  # `--run-ignored all` deliberately defeats `#[ignore]`, so that attribute
+  # alone cannot keep an expected-to-fail test out of this job: one such
+  # failure used to fail-fast the run and the deep depths below never
+  # executed. The `accepted_gap_` prefix and the default filter in
+  # `.config/nextest.toml` are what actually exclude them here.
   deep-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -137,6 +154,62 @@ jobs:
 
       - name: Run ignored tests in release mode
         run: cargo nextest run --workspace --release --run-ignored all --locked
+
+  # The accepted-gap tests, which are expected to fail: each one asserts the
+  # behaviour the engine owes a position rather than the behaviour it has,
+  # pinning a correctness gap that an ADR has consciously accepted.
+  #
+  # The step below inverts the result deliberately, so red means "something
+  # changed" rather than "status quo". Leaving the job to report its raw
+  # failure would recreate, one level up, the exact ambiguity this whole
+  # change removes: a permanently-red job teaches everyone to ignore it, and
+  # then it cannot tell anyone the one thing it exists to say.
+  accepted-gaps:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-09
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: accepted-gaps
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # nextest exits 100 for "tests failed" specifically, and other nonzero
+      # codes for build or harness errors. Distinguishing them matters: a
+      # blanket `|| true` would report green on a fuzz-target-style breakage
+      # where the test binary never built, which is the failure mode this job
+      # is least able to afford.
+      - name: Run the accepted-gap tests in release mode
+        run: |
+          set +e
+          cargo nextest run --workspace --release --profile accepted-gaps --run-ignored all --locked
+          code=$?
+          set -e
+          case $code in
+            100)
+              echo "Accepted-gap tests still fail. That is the documented status quo."
+              ;;
+            0)
+              echo "::error::An accepted-gap test PASSED. A correctness gap that an ADR consciously accepted has been closed: update the ADR, then rename the test out of the accepted_gap_ prefix so it joins the normal suite and stays closed."
+              exit 1
+              ;;
+            *)
+              echo "::error::nextest exited $code, which is a build or harness failure rather than a test result. The accepted-gap tests did not run."
+              exit $code
+              ;;
+          esac
 
   # Mutation testing: introduces small deliberate bugs (flip a comparison,
   # drop a negation, ...) and checks the test suite actually catches each
