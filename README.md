@@ -182,15 +182,20 @@ bounds.
 ## Fuzzing
 
 ```sh
-cd turox-fuzz
-cargo fuzz run fen
+cargo fuzz run fen --fuzz-dir turox-fuzz
 ```
+
+`--fuzz-dir` is required, and running from inside `turox-fuzz/` is not a
+substitute for it: `cargo fuzz` walks up to the workspace root and then looks
+for a directory named exactly `fuzz`, so without it the command fails on a
+missing `fuzz/Cargo.toml` no matter where it is invoked from.
 
 Coverage-guided fuzzing of `Board::try_from_fen`, via
 [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) (`cargo install
 cargo-fuzz`; needs a nightly toolchain for its sanitizer instrumentation,
-which `turox-fuzz/rust-toolchain.toml` selects automatically, so this isn't
-part of the stable CI job, and runs on demand instead). `try_from_fen` is
+which `turox-fuzz/rust-toolchain.toml` pins to the same nightly as the repo
+root, so this isn't part of the stable CI job and runs on demand instead; CI
+does `cargo check` it on every push, so it cannot silently stop building). `try_from_fen` is
 the one place the engine takes untrusted input directly off the wire,
 since UCI's `position fen <...>` command resolves through it: `Err` is a
 correct outcome for a malformed string, a panic is not.

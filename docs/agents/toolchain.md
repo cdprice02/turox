@@ -10,6 +10,7 @@ why each of these exists; this file is the lookup.
 | test              | `cargo nextest run --workspace`, then `cargo test --doc --workspace`  |
 | test one          | `cargo nextest run -E 'test(NAME)'`                                   |
 | test, deep        | `cargo nextest run --workspace --release --run-ignored all`           |
+| test, accepted gaps | `cargo nextest run --workspace --release --profile accepted-gaps`   |
 | watch             | `bacon` (clippy on save), `bacon nextest` (tests)                     |
 | typecheck         | `cargo check --all-targets`                                           |
 | lint              | `cargo clippy --all-targets --all-features -- -D warnings`            |
@@ -18,8 +19,8 @@ why each of these exists; this file is the lookup.
 | bench             | `cargo bench -p turox-engine`                                         |
 | bench vs baseline | `cargo bench -p turox-engine -- --save-baseline before`, then `-- --baseline before` |
 | self-play A/B     | `tools/selfplay/sprt.sh --base main --test my-branch`                 |
-| fuzz              | `cd turox-fuzz && cargo fuzz run fen`                                  |
-| mutants           | `cargo mutants -p turox-engine`                                       |
+| fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
+| mutants           | `cargo mutants -p turox-engine --test-tool=nextest`                   |
 | coverage          | `cargo llvm-cov --workspace`                                          |
 
 ## Gotchas
@@ -39,7 +40,24 @@ why each of these exists; this file is the lookup.
   run to run for the numbers to mean anything. A weekly scheduled job
   runs them for real, informationally, alongside mutants and coverage.
 - **`turox-fuzz` is outside the workspace** and needs nightly, so
-  `--workspace` commands don't touch it.
+  `--workspace` commands don't touch it. CI `cargo check`s it separately for
+  that reason, because nothing else would notice it breaking. `cargo fuzz`
+  also insists on a directory named exactly `fuzz` under the workspace root,
+  so every invocation needs `--fuzz-dir turox-fuzz`; `cd`ing into the crate
+  does not help, since it walks back up to the root regardless.
+- **`#[ignore]` means "too slow for every push", and nothing else.** Tests
+  that are *expected to fail*, pinning a correctness gap an ADR has
+  consciously accepted, carry an `accepted_gap_` prefix instead and are
+  excluded by the default filter in `.config/nextest.toml`. That split
+  exists because the deep job runs `--run-ignored all` and cannot otherwise
+  tell "slow" from "known-failing": one expected failure used to fail-fast
+  the run, so the deep perft depths never executed. The weekly
+  `accepted-gaps` job runs exactly those tests and inverts the result, so it
+  goes red when one *passes*, meaning a gap closed and its ADR is stale.
+- **`cargo mutants` needs `--test-tool=nextest`.** It defaults to plain
+  `cargo test`, which knows nothing about nextest profiles or the filter
+  above, so it runs the accepted-gap tests, sees them fail, and aborts on a
+  failing baseline before testing a single mutant.
 - **Clippy runs `pedantic` and `nursery`, plus a hand-picked set of
   restriction lints** (`unwrap_used`, `unreachable`, `wildcard_enum_match_arm`,
   `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `dbg_macro`,
