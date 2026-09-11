@@ -50,6 +50,15 @@ pub const MAX_MATE_PLY: Score = 512;
 /// bounds; see `Search::killer_slots`.
 const MAX_KILLER_PLY: usize = 512;
 
+/// Killer slots per ply: the single place that number is spelled out, so
+/// every array shaped by it (`Search::killers`, `move_priority`'s and
+/// `order_moves`'s `killers` parameter, `record_killer`'s slots) resizes
+/// together. Raising this to 3 still needs `record_killer`'s replacement
+/// policy rewritten by hand (a shift-by-one over N slots is a different,
+/// not-yet-written algorithm from the two-slot one below), so this constant
+/// makes the *type* generic, not the *policy*.
+const KILLER_SLOTS: usize = 2;
+
 /// Whether `score` encodes a forced mate rather than an ordinary evaluation.
 ///
 /// The single definition of that boundary. It used to be answered in two
@@ -107,11 +116,11 @@ pub struct CutoffStats {
     /// Nodes whose move loop hit a beta cutoff (`alpha >= beta`) at all.
     pub fail_high_nodes: u64,
     /// Of those, how many were caused by a move already sitting in a killer
-    /// slot for that ply. A pre-SPRT sanity check, not part of the gate
-    /// itself: `fail_high_nodes`/`cutoff_index` answer whether ordering is
-    /// good, this answers the narrower question of whether the killer table
-    /// specifically is being consulted at all from a real move loop, rather
-    /// than sitting there populated and unused.
+    /// slot for that ply: how often the killer table's own prediction was
+    /// the one that paid off, as distinct from `fail_high_nodes`/
+    /// `cutoff_index`, which measure move-ordering quality overall and say
+    /// nothing about whether this specific table is the thing doing the
+    /// work.
     pub killer_cutoffs: u64,
     /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
     /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
@@ -258,15 +267,19 @@ pub struct Search<'a> {
     /// actually copied in), so it survives across the separate `Search` a later `go` call
     /// rebuilds, rather than starting cold every time.
     tt: Option<&'a mut Tt>,
-    /// Two killer-move slots per ply: quiet moves that caused a beta cutoff
-    /// at some earlier sibling of this ply, tried after the hash move and
+    /// Killer-move slots per ply: quiet moves that caused a beta cutoff at
+    /// some earlier sibling of this ply, tried after the hash move and
     /// winning captures but before the remaining quiets, on the theory that
     /// a refutation at one sibling often refutes the next. Indexed by ply,
-    /// not depth, and by design never cleared mid-search: see ADR-0003 for
-    /// why this lives on `Search` rather than at the session level (unlike
-    /// `tt`), and why it's allowed to persist across the iterative-deepening
-    /// iterations within one `go` rather than resetting every depth.
-    killers: [[Option<Move>; 2]; MAX_KILLER_PLY],
+    /// not depth. Lives here rather than at the session level like `tt`
+    /// does: a killer is a refutation specific to *this* search tree's
+    /// shape, not a fact about a position that's still true the next time
+    /// `go` runs, so nothing is lost by starting this fresh every call the
+    /// way `tt` deliberately doesn't. By the same reasoning it isn't reset
+    /// between iterative-deepening iterations within one `go`: those share
+    /// the same tree, just re-explored at increasing depth, so a killer
+    /// found at iteration 3 is still valid information for iteration 4.
+    killers: [[Option<Move>; KILLER_SLOTS]; MAX_KILLER_PLY],
     /// xorshift64* state when root move randomization is on, `None` when it is
     /// off (the default, so every existing test and bench stays deterministic
     /// without knowing this exists).
@@ -298,7 +311,7 @@ impl<'a> Search<'a> {
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
-            killers: [[None; 2]; MAX_KILLER_PLY],
+            killers: [[None; KILLER_SLOTS]; MAX_KILLER_PLY],
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
@@ -421,7 +434,7 @@ impl<'a> Search<'a> {
     /// `ply` past the table's bound (only reachable through quiescence's
     /// uncapped in-check evasion recursion; see that function's own doc)
     /// reads the last slot instead of panicking.
-    fn killer_slots(&self, ply: u8) -> [Option<Move>; 2] {
+    fn killer_slots(&self, ply: u8) -> [Option<Move>; KILLER_SLOTS] {
         self.killers[usize::from(ply).min(MAX_KILLER_PLY - 1)]
     }
 
@@ -883,16 +896,16 @@ impl<'a> Search<'a> {
 
 /// The two-slot replacement policy: `m` becomes the new first slot, and
 /// whatever was in the first slot shifts into the second, unless `m`
-/// already occupies the first slot, in which case nothing changes; per
-/// CPW's requirement that the slots stay distinct, shifting on a repeat of
-/// slot 0 would otherwise duplicate `m` into both slots.
+/// already occupies the first slot, in which case nothing changes. The
+/// slots must stay distinct: shifting on a repeat of slot 0 would otherwise
+/// duplicate `m` into both.
 ///
 /// Only slot 0 needs checking, not slot 1: a repeat of slot 1 still takes
 /// the shift branch (`slots[0] != m` holds, since slot 0 and slot 1 are
 /// never simultaneously `Some` of the same move), which moves the old slot
 /// 0 down and puts `m` in front, exactly the promotion a slot-1 repeat is
 /// supposed to produce, with no separate case needed for it.
-fn record_killer(mut slots: [Option<Move>; 2], m: Move) -> [Option<Move>; 2] {
+fn record_killer(mut slots: [Option<Move>; KILLER_SLOTS], m: Move) -> [Option<Move>; KILLER_SLOTS] {
     let m = Some(m);
     if slots[0] != m {
         slots[1] = slots[0];
@@ -921,7 +934,7 @@ fn order_moves(
     board: &Board,
     moves: &mut MoveList,
     tt_move: Option<Move>,
-    killers: [Option<Move>; 2],
+    killers: [Option<Move>; KILLER_SLOTS],
 ) {
     moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move, killers));
 }
@@ -972,7 +985,7 @@ fn move_priority(
     board: &Board,
     m: Move,
     tt_move: Option<Move>,
-    killers: [Option<Move>; 2],
+    killers: [Option<Move>; KILLER_SLOTS],
 ) -> MovePriority {
     if Some(m) == tt_move {
         return MovePriority::Hash;
@@ -999,7 +1012,7 @@ fn move_priority(
         | MoveFlags::DoublePawnPush
         | MoveFlags::KingCastle
         | MoveFlags::QueenCastle => {
-            if killers[0] == Some(m) || killers[1] == Some(m) {
+            if killers.contains(&Some(m)) {
                 return MovePriority::Killer;
             }
             return MovePriority::Quiet;
