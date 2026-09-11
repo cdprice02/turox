@@ -157,15 +157,17 @@ jobs:
 
   # The accepted-gap tests, which are expected to fail: each one asserts the
   # behaviour the engine owes a position rather than the behaviour it has,
-  # pinning a correctness gap that an ADR has consciously accepted. Reported
-  # and never gating, like the mutants job below, because a failure here is
-  # the documented status quo. The result worth watching is a *pass*: that
-  # means the gap closed and the ADR describing it has gone stale.
+  # pinning a correctness gap that an ADR has consciously accepted.
+  #
+  # The step below inverts the result deliberately, so red means "something
+  # changed" rather than "status quo". Leaving the job to report its raw
+  # failure would recreate, one level up, the exact ambiguity this whole
+  # change removes: a permanently-red job teaches everyone to ignore it, and
+  # then it cannot tell anyone the one thing it exists to say.
   accepted-gaps:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
 
     steps:
       - name: Checkout repo
@@ -184,8 +186,30 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      # nextest exits 100 for "tests failed" specifically, and other nonzero
+      # codes for build or harness errors. Distinguishing them matters: a
+      # blanket `|| true` would report green on a fuzz-target-style breakage
+      # where the test binary never built, which is the failure mode this job
+      # is least able to afford.
       - name: Run the accepted-gap tests in release mode
-        run: cargo nextest run --workspace --release --profile accepted-gaps --locked
+        run: |
+          set +e
+          cargo nextest run --workspace --release --profile accepted-gaps --locked
+          code=$?
+          set -e
+          case $code in
+            100)
+              echo "Accepted-gap tests still fail. That is the documented status quo."
+              ;;
+            0)
+              echo "::error::An accepted-gap test PASSED. A correctness gap that an ADR consciously accepted has been closed: update the ADR, then rename the test out of the accepted_gap_ prefix so it joins the normal suite and stays closed."
+              exit 1
+              ;;
+            *)
+              echo "::error::nextest exited $code, which is a build or harness failure rather than a test result. The accepted-gap tests did not run."
+              exit $code
+              ;;
+          esac
 
   # Mutation testing: introduces small deliberate bugs (flip a comparison,
   # drop a negation, ...) and checks the test suite actually catches each
