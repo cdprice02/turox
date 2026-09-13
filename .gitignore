@@ -18,6 +18,11 @@
 *.so
 *.dylib
 *.out
+
+# cargo-mutants writes `mutants.out`, which `*.out` above already covers, and
+# rotates the previous run to `mutants.out.old`, which it does not: the suffix
+# is no longer `.out`. 1.9MB of mutation output reached a commit that way once.
+mutants.out*/
 *.log
 
 # === Coverage ===
