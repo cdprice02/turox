@@ -224,6 +224,62 @@ enum RootOutcome {
     Aborted { best_so_far: Option<(Score, Move)> },
 }
 
+/// Which cutoff histogram an [`Search::alpha_beta_loop`] call reports to.
+///
+/// An enum rather than a `&mut CutoffStats` parameter because the loop already
+/// holds `&mut self`, and handing it a second mutable borrow into the same
+/// struct would not borrow-check.
+#[derive(Clone, Copy)]
+enum CutoffSink {
+    /// `search_root` and interior `negamax`, which share one histogram.
+    Negamax,
+    /// Both of `quiescence`'s loops, evasions and captures alike.
+    Quiescence,
+}
+
+/// The non-move inputs to one [`Search::alpha_beta_loop`] call.
+///
+/// A struct rather than five more parameters: the loop already takes a closure
+/// and a move list, and the pruning techniques queued behind this seam (late
+/// move reductions, futility margins, a principal-variation flag) each want to
+/// add another knob here. Growing a named struct is the difference between
+/// that staying readable and the signature becoming positional guesswork.
+///
+/// `Copy` because every field is: it is passed by value so the loop can
+/// destructure and shadow `alpha` without the caller losing its own copy,
+/// which is exactly what `negamax` relies on to keep `original_alpha`.
+#[derive(Clone, Copy)]
+struct LoopCtx {
+    /// Distance from the root, for the killer table and the mate formula.
+    ply: u8,
+    /// Lower bound on entry. The loop raises its own copy as moves improve on
+    /// it; the caller's value is untouched, which is what lets `negamax` keep
+    /// the original for its transposition-table bound classification.
+    alpha: Score,
+    /// Upper bound. Never modified: a cutoff is `alpha >= beta`.
+    beta: Score,
+    /// The score to beat. `Score::MIN` everywhere except quiescence's capture
+    /// loop, where standing pat is already a floor no capture has to beat.
+    initial_max: Score,
+    /// Which histogram this loop's cutoffs belong to.
+    sink: CutoffSink,
+}
+
+/// What one [`Search::alpha_beta_loop`] call produced.
+struct LoopOutcome {
+    /// Fail-soft: the real best score found, not a clamped bound.
+    max: Score,
+    /// The move that produced `max`, `None` if no move improved on
+    /// `initial_max`. Quiescence computes this and ignores it, which costs an
+    /// `Option<Move>` write per improvement and keeps one loop instead of two.
+    best_move: Option<Move>,
+    /// Whether `search_child` returned `None` partway through. `max` and
+    /// `best_move` then describe the moves that *did* resolve, which is what
+    /// the root reports as its partial result; every other caller propagates
+    /// the abort instead.
+    aborted: bool,
+}
+
 /// Mutable search state threaded through one [`Search::search`] call: the node counter
 /// and abort conditions the periodic check reads, and the repetition hash stack.
 ///
@@ -574,7 +630,14 @@ impl<'a> Search<'a> {
     /// separate small loop rather than a `ply == 0` special case buried
     /// inside `negamax`.
     ///
-    /// Diverges from `negamax` in exactly one place: when the position is
+    /// The move loop itself is shared with `negamax` and both quiescence
+    /// paths (see [`Search::alpha_beta_loop`]); what remains here is the
+    /// handful of things the root genuinely does differently, which this doc
+    /// previously undercounted as "exactly one place". There are four. It
+    /// scores mate as `-MATE` rather than `Score::from(ply) - MATE`, since
+    /// `ply` is zero here by definition. It neither probes nor stores the
+    /// transposition table. It shuffles the move list before ordering, when
+    /// randomization is on. And when the position is
     /// already a draw, an interior node can just return `0` and stop (see
     /// `negamax`'s own doc), but the root still needs a real move to hand
     /// back to UCI so play can continue, so it generates and orders the
@@ -587,6 +650,79 @@ impl<'a> Search<'a> {
     /// returns a real score, never from a partially-searched one, so
     /// whatever `max`/`best_move` hold at the moment of abort are still
     /// trustworthy minimax values; only the one move that was mid-flight
+    /// The alpha-beta move loop, shared by all four places that run one:
+    /// the root, interior `negamax`, and quiescence's evasion and capture
+    /// paths. Before this existed each kept its own copy of the same twenty
+    /// lines, and they had already drifted apart in ways their doc comments
+    /// denied.
+    ///
+    /// `search_child` receives `&mut Self` rather than capturing it, which is
+    /// what lets a closure own the parts that genuinely differ (which
+    /// function to recurse into, and whether the repetition stack is
+    /// maintained across it) while the loop keeps the parts that must not:
+    /// fail-soft score comparison, alpha raising, the cutoff test, and
+    /// recording the cutoff to the killer table and the histogram. The
+    /// window is passed in already negated, so the caller never repeats
+    /// negamax's sign convention either.
+    ///
+    /// Generic over `F` rather than taking `&mut dyn FnMut`: this is the
+    /// innermost loop of the entire engine, so it monomorphizes per call
+    /// site and inlines exactly as the hand-written copies did.
+    fn alpha_beta_loop<F>(
+        &mut self,
+        moves: &MoveList,
+        ctx: LoopCtx,
+        mut search_child: F,
+    ) -> LoopOutcome
+    where
+        F: FnMut(&mut Self, Move, Score, Score) -> Option<Score>,
+    {
+        let LoopCtx {
+            ply,
+            mut alpha,
+            beta,
+            initial_max,
+            sink,
+        } = ctx;
+
+        let mut max = initial_max;
+        let mut best_move = None;
+
+        for (i, &m) in moves.as_slice().iter().enumerate() {
+            let Some(score) = search_child(self, m, -beta, -alpha) else {
+                return LoopOutcome {
+                    max,
+                    best_move,
+                    aborted: true,
+                };
+            };
+
+            let score = -score;
+            if score > max {
+                max = score;
+                best_move = Some(m);
+            }
+
+            if max > alpha {
+                alpha = max;
+            }
+            if alpha >= beta {
+                let is_killer_hit = self.note_cutoff_move(ply, m);
+                match sink {
+                    CutoffSink::Negamax => self.negamax_cutoffs.record(i, is_killer_hit),
+                    CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, is_killer_hit),
+                }
+                break;
+            }
+        }
+
+        LoopOutcome {
+            max,
+            best_move,
+            aborted: false,
+        }
+    }
+
     /// when the abort hit is genuinely unknown, hence `best_so_far` reports
     /// the finished moves' result rather than discarding it wholesale.
     fn search_root(&mut self, board: &Board, depth: u8) -> RootOutcome {
@@ -613,10 +749,13 @@ impl<'a> Search<'a> {
             };
         }
 
-        let mut alpha = -MATE;
+        let alpha = -MATE;
         let beta = MATE;
 
-        // probably not necessary, but is technically possible by definition of depth being a u32 (it could be 0 even on this root step)
+        // Unreachable from `search`, whose iterative deepening starts at 1,
+        // but `depth` is a plain `u8` with no type-level floor, so a future
+        // caller could pass 0. Handing that to quiescence is the honest
+        // answer rather than searching a zero-depth tree.
         if depth == 0 {
             return self
                 .quiescence(board, alpha, beta, 0, MAX_QUIESCENCE_DEPTH, Some(moves))
@@ -625,42 +764,36 @@ impl<'a> Search<'a> {
                 });
         }
 
-        let mut max = Score::MIN;
-        let mut best_move = None;
         // Before ordering, not after: `order_moves` sorts by a coarse priority
         // class, so shuffling first is what decides which of several moves
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
         order_moves(board, &mut moves, None, self.killer_slots(0));
-        for (i, &m) in moves.as_slice().iter().enumerate() {
-            self.history.push(board.hash());
 
-            let child = board.make_move(m);
-            let score = self.negamax(&child, depth - 1, 1, -beta, -alpha);
+        let outcome = self.alpha_beta_loop(
+            &moves,
+            LoopCtx {
+                ply: 0,
+                alpha,
+                beta,
+                initial_max: Score::MIN,
+                sink: CutoffSink::Negamax,
+            },
+            |s, m, a, b| {
+                s.history.push(board.hash());
+                let child = board.make_move(m);
+                let score = s.negamax(&child, depth - 1, 1, a, b);
+                s.history.pop();
+                score
+            },
+        );
 
-            self.history.pop();
-
-            let Some(score) = score else {
-                let best_so_far = best_move.map(|m| (max, m));
-                return RootOutcome::Aborted { best_so_far };
-            };
-            let score = -score;
-            if score > max {
-                max = score;
-                best_move = Some(m);
-            }
-
-            if max > alpha {
-                alpha = max;
-            }
-            if alpha >= beta {
-                let is_killer_hit = self.note_cutoff_move(0, m);
-                self.negamax_cutoffs.record(i, is_killer_hit);
-                break;
-            }
+        if outcome.aborted {
+            let best_so_far = outcome.best_move.map(|m| (outcome.max, m));
+            return RootOutcome::Aborted { best_so_far };
         }
-        RootOutcome::Completed(max, best_move)
+        RootOutcome::Completed(outcome.max, outcome.best_move)
     }
 
     /// Fail-soft negamax with alpha-beta pruning: on a beta cutoff, returns
@@ -703,7 +836,7 @@ impl<'a> Search<'a> {
         board: &Board,
         depth: u8,
         ply: u8,
-        mut alpha: Score,
+        alpha: Score,
         beta: Score,
     ) -> Option<Score> {
         self.nodes += 1;
@@ -739,40 +872,46 @@ impl<'a> Search<'a> {
         let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
 
         let original_alpha = alpha;
-        let mut max = Score::MIN;
-        let mut best_move = None;
         order_moves(board, &mut moves, tt_move, self.killer_slots(ply));
-        for (i, &m) in moves.as_slice().iter().enumerate() {
-            self.history.push(board.hash());
 
-            let child = board.make_move(m);
-            let score = self.negamax(&child, depth - 1, ply + 1, -beta, -alpha);
+        let outcome = self.alpha_beta_loop(
+            &moves,
+            LoopCtx {
+                ply,
+                alpha,
+                beta,
+                initial_max: Score::MIN,
+                sink: CutoffSink::Negamax,
+            },
+            |s, m, a, b| {
+                s.history.push(board.hash());
+                let child = board.make_move(m);
+                let score = s.negamax(&child, depth - 1, ply + 1, a, b);
+                s.history.pop();
+                score
+            },
+        );
 
-            self.history.pop();
-
-            let score = -score?;
-            if score > max {
-                max = score;
-                best_move = Some(m);
-            }
-
-            if max > alpha {
-                alpha = max;
-            }
-            if alpha >= beta {
-                let is_killer_hit = self.note_cutoff_move(ply, m);
-                self.negamax_cutoffs.record(i, is_killer_hit);
-                break;
-            }
+        if outcome.aborted {
+            return None;
         }
 
         if let Some(tt) = self.tt.as_deref_mut() {
-            let best_move =
-                best_move.expect("moves is non-empty, so the loop always finds a best move");
-            tt.store(hash, ply, depth, max, original_alpha, beta, best_move);
+            let best_move = outcome
+                .best_move
+                .expect("moves is non-empty, so the loop always finds a best move");
+            tt.store(
+                hash,
+                ply,
+                depth,
+                outcome.max,
+                original_alpha,
+                beta,
+                best_move,
+            );
         }
 
-        Some(max)
+        Some(outcome.max)
     }
 
     /// Quiescence search: like `negamax`, but only ever considers captures
@@ -835,26 +974,26 @@ impl<'a> Search<'a> {
             }
 
             order_moves(board, &mut evasions, None, self.killer_slots(ply));
-            let mut max = Score::MIN;
-            for (i, &m) in evasions.as_slice().iter().enumerate() {
-                let child = board.make_move(m);
-                let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth, None);
 
-                let score = -score?;
-                if score > max {
-                    max = score;
-                }
+            let outcome = self.alpha_beta_loop(
+                &evasions,
+                LoopCtx {
+                    ply,
+                    alpha,
+                    beta,
+                    initial_max: Score::MIN,
+                    sink: CutoffSink::Quiescence,
+                },
+                |s, m, a, b| {
+                    let child = board.make_move(m);
+                    s.quiescence(&child, a, b, ply + 1, qdepth, None)
+                },
+            );
 
-                if max > alpha {
-                    alpha = max;
-                }
-                if alpha >= beta {
-                    let is_killer_hit = self.note_cutoff_move(ply, m);
-                    self.quiescence_cutoffs.record(i, is_killer_hit);
-                    break;
-                }
+            if outcome.aborted {
+                return None;
             }
-            return Some(max);
+            return Some(outcome.max);
         }
 
         let stand_pat = evaluate(board);
@@ -865,32 +1004,34 @@ impl<'a> Search<'a> {
             alpha = stand_pat;
         }
 
-        let mut max = stand_pat;
-        if qdepth > 0 {
-            let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
-            qmoves.retain(|m| m.flags().is_capture());
-
-            order_moves(board, &mut qmoves, None, self.killer_slots(ply));
-            for (i, &m) in qmoves.as_slice().iter().enumerate() {
-                let child = board.make_move(m);
-                let score = self.quiescence(&child, -beta, -alpha, ply + 1, qdepth - 1, None);
-
-                let score = -score?;
-                if score > max {
-                    max = score;
-                }
-
-                if max > alpha {
-                    alpha = max;
-                }
-                if alpha >= beta {
-                    let is_killer_hit = self.note_cutoff_move(ply, m);
-                    self.quiescence_cutoffs.record(i, is_killer_hit);
-                    break;
-                }
-            }
+        if qdepth == 0 {
+            return Some(stand_pat);
         }
-        Some(max)
+
+        let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
+        qmoves.retain(|m| m.flags().is_capture());
+
+        order_moves(board, &mut qmoves, None, self.killer_slots(ply));
+
+        let outcome = self.alpha_beta_loop(
+            &qmoves,
+            LoopCtx {
+                ply,
+                alpha,
+                beta,
+                initial_max: stand_pat,
+                sink: CutoffSink::Quiescence,
+            },
+            |s, m, a, b| {
+                let child = board.make_move(m);
+                s.quiescence(&child, a, b, ply + 1, qdepth - 1, None)
+            },
+        );
+
+        if outcome.aborted {
+            return None;
+        }
+        Some(outcome.max)
     }
 }
 
