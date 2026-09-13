@@ -119,7 +119,11 @@ impl Entry {
 /// A fixed-size, always-replace transposition table.
 #[derive(Debug)]
 pub struct Tt {
+    /// The table itself. Length is always a power of two so `mask` can replace
+    /// a modulo on the hot probe path.
     entries: Vec<Option<Entry>>,
+    /// `entries.len() - 1`, used to fold a Zobrist key onto an index with a
+    /// single `&`.
     mask: u64,
 }
 

@@ -221,7 +221,10 @@ enum RootOutcome {
     /// before the interruption, if any had; `None` when the abort landed before the
     /// move loop could report anything (the top-of-function check, or the depth-0
     /// quiescence-only path, which has no per-move loop to have made progress in).
-    Aborted { best_so_far: Option<(Score, Move)> },
+    Aborted {
+        /// See this variant's own doc above.
+        best_so_far: Option<(Score, Move)>,
+    },
 }
 
 /// Which cutoff histogram an [`Search::alpha_beta_loop`] call reports to.
@@ -291,6 +294,8 @@ struct LoopOutcome {
 /// nothing at most call sites; Rust infers it from context the same way it always does
 /// for an unused generic parameter.
 pub struct Search<'a> {
+    /// Every node visited by this search, across all iterative-deepening
+    /// iterations. Drives `max_nodes` as well as being reported.
     nodes: u64,
     /// Hashes of every position on the path leading up to (but not
     /// including) the position currently being searched, per
@@ -302,6 +307,8 @@ pub struct Search<'a> {
     /// node's children, but never the node's own hash while checking the
     /// node itself.
     history: Vec<u64>,
+    /// Wall-clock abort point, checked periodically rather than per node. See
+    /// `max_nodes` for the deterministic counterpart used by tests.
     deadline: Option<Instant>,
     /// A deterministic alternative to `deadline`: aborts once `nodes`
     /// reaches this count. A wall-clock deadline makes "iterative deepening
@@ -1107,13 +1114,27 @@ fn order_moves(
     )
 )]
 enum MovePriority {
+    /// The previous iteration's best line. No producer yet; PVS supplies one.
     PrincipalVariation,
+    /// The transposition table's stored move for this position: already proved
+    /// best by a deeper or equal search, so nothing cheaper predicts better.
     Hash,
+    /// A capture winning material, ordered by how much. `Reverse` so the
+    /// derived ascending `Ord` puts the *largest* gain first.
     WinningCapture(Reverse<Score>),
+    /// An even trade. Gain is exactly `0` by definition, so unlike the winning
+    /// and losing tiers it carries no payload to sort within.
     EqualCapture,
+    /// A quiet move that refuted a sibling *with a mate score*. Ranked above
+    /// ordinary killers because a forced mate is worth more than material. No
+    /// producer yet.
     MateKiller,
+    /// A quiet move that caused a beta cutoff at a sibling of this ply.
     Killer,
+    /// Everything not otherwise classified.
     Quiet,
+    /// A capture losing material, ordered by how much. Below `Quiet` because a
+    /// move that hangs a piece is worse than an untried ordinary move.
     LosingCapture(Reverse<Score>),
 }
 

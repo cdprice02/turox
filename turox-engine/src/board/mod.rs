@@ -28,13 +28,32 @@ pub use error::InvalidFenError;
 /// (a niche in the 12..=255 range) instead of 2, halving this array from 128 bytes.
 #[derive(Clone, Copy, Eq)]
 pub struct Board {
+    /// Occupancy per side, indexed by `Color::index`. Intersected with
+    /// `by_piece` to answer "where are White's rooks"; neither array alone
+    /// identifies a piece.
     by_color: [Bitboard; 2],
+    /// Occupancy per piece kind, indexed by `Piece::index`, colour-blind on its
+    /// own. See `by_color`.
     by_piece: [Bitboard; 6],
+    /// The redundant square-indexed view, kept in step with the bitboards on
+    /// every `place`/`remove`. See this struct's own doc for why paying 64
+    /// bytes for it is worth an O(1) `piece_at`.
     mailbox: [Option<ColoredPiece>; 64],
+    /// Whose turn it is. Part of the Zobrist key, so flipping it changes
+    /// `hash`.
     side_to_move: Color,
+    /// Which castles remain legal *by right*: a set bit says the king and rook
+    /// have not moved, not that castling is legal from this position right now
+    /// (that also depends on occupancy and attacks, which `move_gen` checks).
     castling: CastlingRights,
+    /// The square a pawn just double-stepped *over*, not the square it landed
+    /// on: that is the square a capturing pawn moves to.
     en_passant: Option<Square>,
+    /// Half-moves since the last capture or pawn move, for the fifty-move rule.
+    /// Counts plies, so the rule triggers at 100, not 50.
     halfmove_clock: u8,
+    /// The move number a chess scoresheet would show. Increments after Black
+    /// moves, and is never used by search; it exists so FEN round-trips.
     fullmove_number: u16,
     /// This position's Zobrist hash (`zobrist`), maintained incrementally by
     /// `place`/`remove`/`from_parts`/`make_move`. Deliberately excluded from
@@ -101,6 +120,8 @@ impl Board {
         Self::START_POS
     }
 
+    /// The standard opening position, built once at compile time so
+    /// `start_pos` is a copy rather than 32 `place` calls.
     const START_POS: Self = Self::build_start_pos();
 
     /// The actual placement loop backing `Self::START_POS`. A `while` loop

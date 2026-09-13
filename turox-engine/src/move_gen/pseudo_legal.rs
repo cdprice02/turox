@@ -320,6 +320,9 @@ pub fn slider_moves(board: &Board, list: &mut MoveList) {
     nonpawn_moves(board, list, Piece::Queen);
 }
 
+/// Appends every pseudo-legal move for one non-pawn piece kind. Separate from
+/// the pawn path because pawns are the only piece whose moves depend on
+/// direction, promotion, and en passant rather than purely on an attack set.
 fn nonpawn_moves(board: &Board, list: &mut MoveList, piece: Piece) {
     let color = board.side_to_move();
     let pieces = board.pieces(color, piece);

@@ -104,7 +104,9 @@ fn nps(nodes: u64, time: Duration) -> u64 {
 /// mated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScoreKind {
+    /// An ordinary centipawn evaluation.
     Cp(Score),
+    /// A forced mate, carrying the distance in *moves*; see this enum's doc.
     Mate(Score),
 }
 

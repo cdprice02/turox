@@ -214,6 +214,9 @@ fn cutoff_summary(stats: &CutoffStats) -> String {
     )
 }
 
+/// Writes one response and flushes immediately. A GUI blocks waiting on
+/// lines like `readyok` and `bestmove`, so buffering them until some later
+/// write would look like the engine hanging.
 fn send(writer: &mut impl Write, response: &Response) {
     // A GUI is actively waiting on most of these (`uciok`, `readyok`,
     // `bestmove`); an unflushed line sitting in a buffer never reaching it
@@ -289,21 +292,6 @@ fn build_search<'a>(
     (search, max_depth)
 }
 
-/// `infinite`, checked first, wins outright: per UCI, `go infinite` means
-/// search until `stop` alone, with no depth/time budget at all, so it has
-/// to bypass `movetime` and the clock fields entirely, not just fall
-/// through to them being absent. A real GUI can and does send `go
-/// infinite` alongside `wtime`/`btime` (both are simply always attached to
-/// `go`, independent of whether `infinite` is also set), so this can't be
-/// "no deadline" merely as a side effect of the clock fields happening to
-/// be unset.
-///
-/// Otherwise, `movetime`, if given, wins outright. Failing that, with a
-/// real game clock (`wtime`/`btime`), budgets from *whichever side's
-/// clock is actually running* (`board.side_to_move()`, not always
-/// White's) via `search::time::allocate_time`. None of the above (a bare
-/// `go`, or `go depth N` with no clock fields) means no deadline at all:
-/// depth, node count, and `stop` are what bound the search instead.
 /// A per-search seed for root move randomization, taken from the wall clock.
 ///
 /// Deliberately not a fixed seed: a fixed one would make every *game* identical
@@ -320,6 +308,21 @@ fn root_seed() -> u64 {
         .map_or(1, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
 }
 
+/// `infinite`, checked first, wins outright: per UCI, `go infinite` means
+/// search until `stop` alone, with no depth/time budget at all, so it has
+/// to bypass `movetime` and the clock fields entirely, not just fall
+/// through to them being absent. A real GUI can and does send `go
+/// infinite` alongside `wtime`/`btime` (both are simply always attached to
+/// `go`, independent of whether `infinite` is also set), so this can't be
+/// "no deadline" merely as a side effect of the clock fields happening to
+/// be unset.
+///
+/// Otherwise, `movetime`, if given, wins outright. Failing that, with a
+/// real game clock (`wtime`/`btime`), budgets from *whichever side's
+/// clock is actually running* (`board.side_to_move()`, not always
+/// White's) via `search::time::allocate_time`. None of the above (a bare
+/// `go`, or `go depth N` with no clock fields) means no deadline at all:
+/// depth, node count, and `stop` are what bound the search instead.
 fn go_deadline(board: &Board, options: &GoOptions) -> Option<Instant> {
     if options.infinite {
         return None;

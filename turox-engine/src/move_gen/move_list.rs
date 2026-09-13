@@ -16,13 +16,19 @@ use std::fmt;
 
 /// A fixed-capacity buffer of moves, filled by `pseudo_legal`/`legal`.
 pub struct MoveList {
+    /// Inline storage, so generating moves never allocates. Entries at or past
+    /// `len` are `SENTINEL` and must not be read.
     moves: [Move; Self::CAPACITY],
+    /// How much of `moves` is live.
     len: usize,
 }
 
 impl MoveList {
     /// The maximum number of moves a single `MoveList` can hold.
     pub const CAPACITY: usize = 256;
+    /// Fill value for the unused tail of `moves`. `Move` has no null
+    /// representation, and a1-a1 is not a legal move, so it cannot be confused
+    /// with real content if it ever leaks past `len`.
     const SENTINEL: Move = Move::new(Square::A1, Square::A1, MoveFlags::Quiet);
 
     /// An empty list.

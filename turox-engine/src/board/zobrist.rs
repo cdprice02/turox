@@ -120,6 +120,8 @@ const fn generate_keys() -> Keys {
     }
 }
 
+/// The one key table, built at compile time so no runtime initialisation or
+/// synchronisation is needed to reach it.
 const KEYS: Keys = generate_keys();
 
 /// The hash contribution of a single `(ColoredPiece, Square)` fact. What
