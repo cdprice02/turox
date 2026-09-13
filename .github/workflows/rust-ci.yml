@@ -34,6 +34,7 @@ jobs:
       # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -97,6 +98,7 @@ jobs:
       # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -315,6 +317,7 @@ jobs:
       # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
           components: llvm-tools-preview
 
       - name: Cache cargo registry and build artifacts
