@@ -2,5 +2,12 @@
 # no stable equivalent to fall back to. rustup reads this file and switches
 # automatically on `cd turox-fuzz`, so no `cargo +nightly` prefix is needed
 # even on a machine whose default toolchain is stable.
+#
+# Pinned to the same date as the repo root's `rust-toolchain.toml`, and bumped
+# with it in the same commit. A bare `nightly` here would be the second
+# floating channel the root pin exists to prevent, and it would drift against
+# the toolchain everything else in the repo is built and linted with. This
+# crate opts out of the workspace, so it inherits neither that pin nor the
+# workspace lint table; the pin has to be restated rather than inherited.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-08-09"
