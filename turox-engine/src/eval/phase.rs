@@ -61,7 +61,7 @@ const _: () = assert!(
 
 /// Packs `mg` and `eg` into one [`Tapered`] value.
 #[must_use]
-#[allow(
+#[expect(
     clippy::as_conversions,
     reason = "`From`/`TryFrom` aren't const-stable yet, so a const fn widening an i16 into an i32 has to reach for `as`; both casts are sign-extending widens of a value already known to fit, not a lossy narrowing"
 )]

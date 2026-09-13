@@ -594,7 +594,7 @@ fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
         "this position must actually produce beta cutoffs to search at all, or the \
          rate below is measuring nothing"
     );
-    #[allow(
+    #[expect(
         clippy::as_conversions,
         clippy::cast_precision_loss,
         reason = "a diagnostic ratio; node counts are nowhere near f64's 2^52 \

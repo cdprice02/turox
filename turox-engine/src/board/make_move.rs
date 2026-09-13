@@ -18,7 +18,7 @@ impl Board {
     /// rights say there should be one, ...) trips an internal invariant and panics rather
     /// than silently producing a wrong position.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "one match over every MoveFlags variant, applying each rule's full consequence inline (rook hop, capture removal, promotion swap, en passant bookkeeping); splitting it into helper functions would trade length for indirection, not shrink the logic"
     )]

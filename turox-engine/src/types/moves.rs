@@ -5,7 +5,7 @@ use super::square::Square;
 
 /// The kind of a move, packed into 4 bits. Doubles as the promotion piece selector
 /// for the four promotion variants.
-#[allow(missing_docs, reason = "variant names are the doc")]
+#[expect(missing_docs, reason = "variant names are the doc")]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MoveFlags {
@@ -113,7 +113,7 @@ impl MoveFlags {
     // one's discriminants are sparse (0-5, then 8-15) and *are* the point, a bit
     // pattern `Move` packs directly. `Ordinal::to_u8` would work here too, but
     // would misdescribe what these values mean.
-    #[allow(
+    #[expect(
         clippy::as_conversions,
         reason = "sparse bit-pattern discriminants, not an Ordinal; this is the intended way to read them"
     )]
@@ -152,7 +152,7 @@ impl Move {
 
     /// Packs a move from `from` to `to` with the given `flags`.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::as_conversions,
         reason = "from.to_u8()/to.to_u8()/flags.bits() are u8; From isn't const-callable yet (rust-lang/rust#143874), so widening to u16 stays `as`"
     )]
@@ -225,7 +225,7 @@ impl Move {
                 Piece::Bishop => 'b',
                 Piece::Rook => 'r',
                 Piece::Queen => 'q',
-                #[allow(
+                #[expect(
                     clippy::unreachable,
                     reason = "is_promotion() gates this on the flag's own promotion bit, which promotion_piece() never maps to Pawn/King"
                 )]

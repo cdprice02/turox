@@ -199,7 +199,7 @@ fn cutoff_summary(stats: &CutoffStats) -> String {
     let first_move_rate = if stats.fail_high_nodes == 0 {
         0.0
     } else {
-        #[allow(
+        #[expect(
             clippy::as_conversions,
             clippy::cast_precision_loss,
             reason = "a diagnostic percentage; node counts are nowhere near f64's \

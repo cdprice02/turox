@@ -475,7 +475,7 @@ impl<'a> Search<'a> {
     /// is amortized to roughly nothing per node rather than paid on every
     /// single one. Call this immediately after incrementing `self.nodes` at
     /// the top of `negamax`/`quiescence`.
-    #[allow(
+    #[expect(
         clippy::verbose_bit_mask,
         reason = "the mask form is the standard periodic-check idiom, not an oversight; `trailing_zeros() >= 11` would desync from this fn's own doc comment for no clarity gain"
     )]
@@ -1092,13 +1092,19 @@ fn order_moves(
 /// variant because its gain is exactly `0` by definition and no promotion
 /// ever lands there (see `move_priority`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(
-    dead_code,
-    reason = "PrincipalVariation and MateKiller have no producer yet (real PV tracking \
-              needs PVS's triangular PV table; mate killers are a deliberately separate, \
-              later change from ordinary killers, split out to keep each one's SPRT \
-              measuring only one technique) but the ranking scheme is designed to be \
-              complete for when they land, rather than needing to be reshuffled later"
+// `cfg_attr(not(test), ...)` because the ordering test below names both
+// variants, so `dead_code` fires in a normal build and not in a test one, and
+// a bare `expect` would then be unfulfilled exactly where the test build runs.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "PrincipalVariation and MateKiller have no producer yet (real PV tracking \
+                  needs PVS's triangular PV table; mate killers are a deliberately separate, \
+                  later change from ordinary killers, split out to keep each one's SPRT \
+                  measuring only one technique) but the ranking scheme is designed to be \
+                  complete for when they land, rather than needing to be reshuffled later"
+    )
 )]
 enum MovePriority {
     PrincipalVariation,

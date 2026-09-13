@@ -173,21 +173,21 @@ fn generate(name: &str, variants: &[String]) -> TokenStream {
 
             /// This variant's discriminant.
             #[must_use]
-            #[allow(clippy::as_conversions)] // see `generate`'s doc in turox-macros
+            #[expect(clippy::as_conversions, reason = \"a fieldless enum's discriminant cast is the whole point of this derive; see `generate`'s doc in turox-macros\")]
             pub const fn to_u8(self) -> u8 {{
                 self as u8
             }}
 
             /// This variant's discriminant, widened for use as a slice index.
             #[must_use]
-            #[allow(clippy::as_conversions)] // see `generate`'s doc in turox-macros
+            #[expect(clippy::as_conversions, reason = \"a fieldless enum's discriminant cast is the whole point of this derive; see `generate`'s doc in turox-macros\")]
             pub const fn index(self) -> usize {{
                 self as usize
             }}
 
             /// The variant at discriminant `v`, or `None` if `v >= {count}`.
             #[must_use]
-            #[allow(clippy::as_conversions)] // v < {count}u8 checked first, so this widening is always in range.
+            #[expect(clippy::as_conversions, reason = \"v < {count}u8 is checked first, so this widening is always in range\")]
             pub const fn from_u8(v: u8) -> Option<Self> {{
                 if v < {count}u8 {{
                     Some(Self::ALL[v as usize])

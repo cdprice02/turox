@@ -6,8 +6,6 @@
 //! precomputed corpus and `black_box`es both the input and the returned
 //! score.
 
-#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
-
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
 use turox_engine::board::Board;

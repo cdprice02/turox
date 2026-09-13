@@ -184,7 +184,7 @@ fn perft_zero_is_one_leaf() {
 // place the moment one of the counts above is ever wrong and needs
 // localizing to a specific root move, which is exactly what a raw total
 // can't tell you.
-#[allow(
+#[expect(
     dead_code,
     reason = "kept compiling and ready for the moment a perft count is wrong and needs localizing to a root move"
 )]

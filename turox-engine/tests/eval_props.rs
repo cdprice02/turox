@@ -278,7 +278,7 @@ fn total_pawn_count(board: &Board) -> i32 {
 /// for the multiply, since `mg`/`eg` scaled by up to 256 would overflow
 /// `Score` (`i16`) well before the division brings the result back down to
 /// eval-sized magnitudes.
-#[allow(
+#[expect(
     clippy::similar_names,
     reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
 )]
@@ -311,7 +311,7 @@ fn blend(mg: i32, eg: i32, phase: i32) -> Score {
 /// baseline `eval_white_pov`'s deviation is measured against to isolate
 /// pawn structure's own contribution, now that king safety is also live
 /// and would otherwise show up as unexplained deviation in that bound.
-#[allow(
+#[expect(
     clippy::similar_names,
     reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
 )]
@@ -327,7 +327,7 @@ fn naive_material_pst_and_king_safety_white_pov(board: &Board) -> Score {
 /// Material, PST, and pawn structure, king safety switched off: the mirror
 /// image of `naive_material_pst_and_king_safety_white_pov`, isolating king
 /// safety's own contribution instead.
-#[allow(
+#[expect(
     clippy::similar_names,
     reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
 )]

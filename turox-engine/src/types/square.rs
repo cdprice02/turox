@@ -5,7 +5,7 @@ use std::fmt;
 use turox_macros::Ordinal;
 
 /// A file (column), A through H.
-#[allow(
+#[expect(
     missing_docs,
     reason = "each variant just names its own file; a per-variant doc would only restate that name"
 )]
@@ -23,7 +23,7 @@ pub enum File {
 }
 
 /// A rank (row), 1 through 8.
-#[allow(
+#[expect(
     missing_docs,
     reason = "each variant just names its own rank; a per-variant doc would only restate that name"
 )]
@@ -45,7 +45,7 @@ pub enum Rank {
 /// a1 = 0, b1 = 1, ..., h1 = 7, a2 = 8, ..., h8 = 63. This ordering is what the
 /// `Bitboard` transform constants (see `bitboard.rs`) assume. `Debug` is implemented
 /// manually below (algebraic notation) rather than derived.
-#[allow(
+#[expect(
     missing_docs,
     reason = "each variant just names its own square (A1, B1, ...); a per-variant doc would only restate that name"
 )]

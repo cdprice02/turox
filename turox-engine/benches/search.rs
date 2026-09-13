@@ -22,8 +22,6 @@
 //! expected to change), so throughput is measured against whatever node
 //! count this run's own search actually reports, not a hardcoded constant.
 
-#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
-
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use turox_engine::board::Board;
 use turox_engine::search::tt::Tt;

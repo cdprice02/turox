@@ -32,6 +32,13 @@ dbg_macro = "deny"
 missing_assert_message = "deny"
 wildcard_enum_match_arm = "deny"
 allow_attributes_without_reason = "deny"
+# `#[expect]` over `#[allow]`, everywhere. The difference is that an `#[expect]`
+# fails the build once the lint it suppresses *stops* firing, so a suppression
+# that has outlived its reason reports itself instead of waiting for someone to
+# audit for it. Two in this crate are already on a timer: the `dead_code` on
+# `MovePriority`'s unused variants expires when principal variation search and
+# mate killers land, and `perft_divide`'s expires when something calls it.
+allow_attributes = "deny"
 
 [profile.release]
 lto = "fat"

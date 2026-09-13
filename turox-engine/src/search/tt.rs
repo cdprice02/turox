@@ -242,7 +242,7 @@ impl Tt {
     /// Never panics in practice: the `expect` on the index conversion only fails if the
     /// entry count exceeds `usize::MAX`, and `Hash`'s own advertised ceiling (1024 MB) is
     /// nowhere near large enough to produce that many entries even on a 32-bit target.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "one slot's worth of independent fields plus the alpha/beta window `Bound` \
                   is derived from; free to regroup into a params struct while implementing \
