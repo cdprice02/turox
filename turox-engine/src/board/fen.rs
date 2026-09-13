@@ -78,6 +78,10 @@ impl Board {
     }
 
     /// Parses just the piece-placement field (the part before the first space).
+    #[expect(
+        clippy::expect_used,
+        reason = "every conversion here is already range-checked by the branch that reaches it: the digit came from a matched '1'..='8', and `file` is compared against 8 immediately above"
+    )]
     fn parse_placement(placement: &str) -> Result<Self, InvalidFenError> {
         let mut board = Self::default();
         let rows: Vec<&str> = placement.split('/').collect();

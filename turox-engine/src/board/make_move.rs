@@ -22,6 +22,10 @@ impl Board {
         clippy::too_many_lines,
         reason = "one match over every MoveFlags variant, applying each rule's full consequence inline (rook hop, capture removal, promotion swap, en passant bookkeeping); splitting it into helper functions would trade length for indirection, not shrink the logic"
     )]
+    #[expect(
+        clippy::expect_used,
+        reason = "each lookup is guarded by the move's own flags, which only legal move generation sets: a promotion flag implies a promotion piece, a castle flag implies a rook on its home square, and a move implies a piece on its from-square"
+    )]
     pub fn make_move(&self, m: Move) -> Self {
         let mut board = *self;
         let color = board.side_to_move();

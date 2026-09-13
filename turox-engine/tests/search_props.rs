@@ -24,6 +24,11 @@
 //! verification, the same cheap-default/thorough-ignored split
 //! `zobrist_props.rs` uses for its own perft-tree walk.
 
+#![expect(
+    clippy::expect_used,
+    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+)]
+
 mod common;
 
 use common::any_board_with_legal_move;

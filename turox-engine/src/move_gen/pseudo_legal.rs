@@ -272,6 +272,10 @@ pub fn pawn_moves(board: &Board, list: &mut MoveList) {
 /// Single and double pushes, and quiet-promotion variants, for every pawn of
 /// `color`. Pushing twice *through* `empty` (not a single shift-by-16) is
 /// what makes a blocker on the intermediate square stop the double push.
+#[expect(
+    clippy::expect_used,
+    reason = "`lsb` is only called on a bitboard whose non-emptiness was just tested on the line above"
+)]
 fn pawn_pushes(board: &Board, list: &mut MoveList, color: Color) {
     let empty = board.empty();
     let dir = color.forward();
@@ -370,6 +374,10 @@ fn nonpawn_moves(board: &Board, list: &mut MoveList, piece: Piece) {
 /// isn't actually on its corner square, or if `board` has no king of `color` at all: both
 /// are invariants `Board` is supposed to maintain, not conditions this function is meant
 /// to recover from.
+#[expect(
+    clippy::expect_used,
+    reason = "a castling right can only be set while the king and its rook still sit on their home squares, which is what these lookups read back"
+)]
 pub fn castling_moves(board: &Board, list: &mut MoveList) {
     let color = board.side_to_move();
     let Some(king_sq) = king_square(board, color) else {

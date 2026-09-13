@@ -221,6 +221,10 @@ impl Tt {
     /// entry count exceeds `usize::MAX`, and `Hash`'s own advertised ceiling (1024 MB) is
     /// nowhere near large enough to produce that many entries even on a 32-bit target.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the entry count is bounded by the Hash option's advertised MB ceiling, well inside usize on every platform this builds for"
+    )]
     pub fn probe(&self, key: u64) -> Option<Entry> {
         let index = usize::try_from(key & self.mask)
             .expect("Hash's advertised MB ceiling keeps the entry count well within usize");
@@ -251,6 +255,10 @@ impl Tt {
         reason = "one slot's worth of independent fields plus the alpha/beta window `Bound` \
                   is derived from; free to regroup into a params struct while implementing \
                   if that reads better"
+    )]
+    #[expect(
+        clippy::expect_used,
+        reason = "the entry count is bounded by the Hash option's advertised MB ceiling, well inside usize on every platform this builds for"
     )]
     pub fn store(
         &mut self,

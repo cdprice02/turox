@@ -4,6 +4,11 @@
 // criterion's own `criterion_group!`/`criterion_main!` macros generate an
 // undocumented `fn main`.
 
+#![expect(
+    clippy::expect_used,
+    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+)]
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 use turox_engine::board::Board;

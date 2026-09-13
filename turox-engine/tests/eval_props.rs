@@ -27,6 +27,11 @@
 //! reproduce the same formula `eval::phase` documents itself against, not a
 //! call into it.
 
+#![expect(
+    clippy::expect_used,
+    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+)]
+
 mod common;
 
 use common::{any_board, mirrored};

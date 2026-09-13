@@ -26,6 +26,17 @@ string_slice = "deny"
 as_conversions = "deny"
 unreachable = "deny"
 unwrap_used = "deny"
+# The other half of the `unwrap_used` policy, which was only ever half applied:
+# with `unwrap` denied and `expect` not, `expect` was the unaudited escape
+# hatch. Denied here so each surviving site has to *say* why it cannot fail,
+# via `#[expect(clippy::expect_used, reason = "...")]`, rather than rewriting
+# infallible math and table lookups into `Result`s that lie about what can
+# happen. Same reasoning that keeps `indexing_slicing` and
+# `arithmetic_side_effects` off entirely (see `docs/agents/toolchain.md`):
+# this is engine code where those operations are the normal mode, and the goal
+# is an auditable justification, not a uniformly defensive style.
+# `clippy.toml` already exempts test code.
+expect_used = "deny"
 undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "deny"
 dbg_macro = "deny"

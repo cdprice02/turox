@@ -18,6 +18,10 @@
     dead_code,
     reason = "compiled fresh into every binary that does `mod common;`; no single binary uses the whole surface"
 )]
+#![expect(
+    clippy::expect_used,
+    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+)]
 
 use proptest::prelude::*;
 use turox_engine::board::Board;

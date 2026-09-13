@@ -81,6 +81,10 @@ pub const fn pack(mg: Score, eg: Score) -> Tapered {
 /// `phase` (0..=256, from [`game_phase`]: 0 is pure midgame, 256 is pure
 /// endgame).
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "both conversions are bounded by construction: the value is masked to `Score::BITS` bits, and `game_phase` returns 0..=256 by its own contract"
+)]
 pub fn interpolate(t: Tapered, phase: u32) -> Score {
     // `pack` adds `eg` in rather than OR-ing a masked copy, so a negative
     // combined `eg` "borrows" from the `mg` lane the same way subtracting

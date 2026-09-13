@@ -10,6 +10,11 @@
 //! Philidor's Legacy turned out not to be a genuinely forced mate as given
 //! either.
 
+#![expect(
+    clippy::expect_used,
+    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+)]
+
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use turox_engine::board::Board;

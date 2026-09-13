@@ -167,6 +167,10 @@ impl Move {
     ///
     /// Never: the stored bits are masked to 6 bits (`& 0x3F`), always < 64.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the bits are masked to 6 (`& 0x3F`), so the value is always < 64 and always a valid square index"
+    )]
     pub const fn from(self) -> Square {
         Square::from_u8(self.0.to_le_bytes()[0] & 0x3F)
             .expect("masked to 6 bits (& 0x3F), so always < 64")
@@ -178,6 +182,10 @@ impl Move {
     ///
     /// Never: the stored bits are masked to 6 bits (`& 0x3F`), always < 64.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the bits are masked to 6 (`& 0x3F`), so the value is always < 64 and always a valid square index"
+    )]
     pub const fn to(self) -> Square {
         Square::from_u8((self.0 >> 6).to_le_bytes()[0] & 0x3F)
             .expect("masked to 6 bits (& 0x3F), so always < 64")
@@ -190,6 +198,10 @@ impl Move {
     /// Never: `Move` is only ever built via `Move::new`, which packs one of
     /// the 14 valid flag patterns `MoveFlags::from_bits` recognizes.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the flag bits can only have been set by `Move::new`, which takes a `MoveFlags` and so cannot produce an unrepresentable pattern"
+    )]
     pub const fn flags(self) -> MoveFlags {
         MoveFlags::from_bits((self.0 >> 12).to_le_bytes()[0]).expect(
             "Move is only ever built via Move::new, which packs one of the 14 valid patterns",
@@ -213,6 +225,10 @@ impl Move {
     ///
     /// Never: `is_promotion()` true implies `promotion_piece()` returns `Some`.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "a promotion flag implies a promotion piece; the flags are set by `Move::new` and cannot disagree with themselves"
+    )]
     pub fn to_uci(self) -> String {
         let mut s = format!("{}{}", self.from(), self.to());
         if self.flags().is_promotion() {

@@ -838,6 +838,10 @@ impl<'a> Search<'a> {
     /// kept around past the cutoff check (it's `Copy`, so this costs nothing): even when it
     /// doesn't license an outright cutoff, its stored move is still worth trying first in
     /// this node's own move loop, so it survives long enough to feed `order_moves`.
+    #[expect(
+        clippy::expect_used,
+        reason = "the move list's emptiness is checked and returned on well above this point, so the loop always records a best move before the store"
+    )]
     fn negamax(
         &mut self,
         board: &Board,
@@ -1149,6 +1153,10 @@ enum MovePriority {
 /// that check happens before any killer-table lookup, a promotion can never
 /// fall through to `Quiet`, `Killer`, or `MateKiller` either, with or
 /// without a capture attached.
+#[expect(
+    clippy::expect_used,
+    reason = "the flags decide which arm runs, so a promotion arm always has a promotion piece and a capture arm always has a victim; the from-square always holds the moving piece"
+)]
 fn move_priority(
     board: &Board,
     m: Move,

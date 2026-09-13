@@ -4,6 +4,11 @@
 //! works in isolation; a genuine integration test, so it lives here rather
 //! than as a unit test alongside any one of those pieces.
 
+#![expect(
+    clippy::expect_used,
+    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+)]
+
 use std::io::{BufReader, Cursor, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;

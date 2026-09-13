@@ -44,6 +44,10 @@ const DEFAULT_MAX_DEPTH: u8 = 64;
 /// is running has to reach it directly, since the thread that would
 /// otherwise receive it is busy blocking inside `Search::search`. `writer`
 /// stays on this thread; nothing here ever writes concurrently.
+#[expect(
+    clippy::expect_used,
+    reason = "the only code that locks `active_stop` sets or clears an Option and cannot panic while holding it, so the mutex cannot become poisoned; a panic here would mean a bug elsewhere, not a recoverable condition"
+)]
 pub fn run<R, W>(board: &mut Board, reader: R, mut writer: W)
 where
     R: BufRead + Send + 'static,
@@ -232,6 +236,10 @@ fn send(writer: &mut impl Write, response: &Response) {
 /// drain the channel while it's blocked inside `Search::search`, so this is
 /// the only way those two commands can reach a search that's already
 /// running.
+#[expect(
+    clippy::expect_used,
+    reason = "same as `run`: `active_stop` is only ever held across an Option assignment, so poisoning would require a panic that cannot happen there"
+)]
 fn read_commands<R: BufRead>(
     mut reader: R,
     tx: &mpsc::Sender<Command>,

@@ -217,6 +217,10 @@ fn generate(name: &str, variants: &[String]) -> TokenStream {
 /// on `&str`) always produces a properly escaped, syntactically valid string
 /// literal, so this can't fail in practice, and there's no further fallback
 /// to reach for if it somehow did.
+#[expect(
+    clippy::expect_used,
+    reason = "`{message:?}` is Debug on &str, which always produces a properly escaped, syntactically valid string literal, so the parse cannot fail; this is already the base case of generate()'s fallback chain, so there is nothing further to fall back to"
+)]
 fn compile_error(message: &str) -> TokenStream {
     format!("compile_error!({message:?});")
         .parse()
