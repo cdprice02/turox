@@ -97,6 +97,37 @@ over stdin/stdout, the same way any UCI-speaking GUI would.
    bullet or blitz. Whether the rating stabilizes across a session, rather
    than trending down, is the actual signal worth watching, more than any
    single game's result.
+6. For a long unattended run, start it under the supervisor rather than by
+   hand:
+
+   ```sh
+   tools/lichess/run-bot.sh [path-to-lichess-bot]
+   ```
+
+   It restarts a bot that has crashed or gone quiet, and stops one that is
+   flooding its log or retrying against a lichess that is not answering.
+
+### Stopping it safely
+
+Stop the supervisor with `kill` or Ctrl-C, never `kill -9`. `lichess-bot`
+plays each game in a `multiprocessing` pool, so signalling only the parent
+leaves the workers alive and still talking to lichess, with nothing
+supervising them. Enough of them accumulated here once to get this machine's
+address null-routed by lichess's host, which took the whole household off
+lichess for a day and was invisible until the leftover processes were found
+by hand. The supervisor now signals the entire process group and refuses to
+start while any earlier process is alive, but that cleanup runs on SIGTERM
+and cannot run on SIGKILL.
+
+After stopping it, the count that should be zero:
+
+```sh
+pgrep -fl lichess-bot
+```
+
+`tools/lichess/test-run-bot.sh` exercises those guarantees against a
+throwaway bot directory. It takes about a minute and touches nothing outside
+its own fixture.
 
 ## Testing
 

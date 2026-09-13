@@ -23,6 +23,8 @@ import argparse
 import csv
 import io
 import pathlib
+import time
+import urllib.error
 import urllib.request
 
 import chess
@@ -31,6 +33,17 @@ import chess
 UPSTREAM_COMMIT = "4b8622759e7ae6f93f011cc6c83a3823401ab45e"
 UPSTREAM_URL = "https://raw.githubusercontent.com/lichess-org/chess-openings/{}/{}.tsv"
 ECO_VOLUMES = ("a", "b", "c", "d", "e")
+
+# A regeneration is five requests run by hand, so these bounds are not about
+# sustained load: they are about never leaving an unattended retry running.
+# `urlopen` without a timeout waits on a dead socket indefinitely, and a retry
+# loop without a ceiling turns one unreachable host into an endless stream of
+# connection attempts. That combination is what got this machine's address
+# null-routed by lichess once already, from a different script, so nothing here
+# talks to the network without both a timeout and a bounded, spaced retry.
+FETCH_TIMEOUT_SECONDS = 30
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF_SECONDS = 5
 
 # Ply bounds on a line to be usable as a start position. Below the lower
 # bound the positions are too generic to spread games out (there are only
@@ -55,12 +68,26 @@ PIECE_VALUES = {
 MAX_MATERIAL_IMBALANCE = 100
 
 
+def fetch(url):
+    """Returns the body of `url`, retrying only what a retry could fix."""
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_SECONDS) as response:
+                return response.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError) as err:
+            # A 404 or a 403 will not become a 200 by asking again, and the
+            # revision below is pinned, so a missing file means the pin is
+            # wrong rather than that upstream is having a bad minute.
+            client_error = isinstance(err, urllib.error.HTTPError) and err.code < 500
+            if client_error or attempt == FETCH_ATTEMPTS:
+                raise
+            time.sleep(FETCH_BACKOFF_SECONDS * attempt)
+
+
 def fetch_rows():
     """Yields (eco, name, pgn) for every opening in the upstream data set."""
     for volume in ECO_VOLUMES:
-        url = UPSTREAM_URL.format(UPSTREAM_COMMIT, volume)
-        with urllib.request.urlopen(url) as response:
-            text = response.read().decode("utf-8")
+        text = fetch(UPSTREAM_URL.format(UPSTREAM_COMMIT, volume))
         for row in csv.DictReader(io.StringIO(text), delimiter="\t"):
             yield row["eco"], row["name"], row["pgn"]
 
