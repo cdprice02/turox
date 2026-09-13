@@ -30,10 +30,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -93,10 +93,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -110,14 +110,56 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
+      # Catches a dependency that stops being used without anyone noticing.
+      # `turox-cli` carried `anyhow` plus a five-line comment justifying it for
+      # some time after the last `use` of it disappeared. Not `cargo deny`,
+      # which audits licences and advisories across a dependency tree this
+      # repo deliberately does not have.
+      - name: Check for unused dependencies
+        uses: bnjbvr/cargo-machete@main
+
       # `missing_docs` is denied workspace-wide (see the root Cargo.toml's
       # `[workspace.lints.rust]`), but that only checks that a doc comment
       # exists, not that it renders: a broken intra-doc link (`[`board`]`)
       # or malformed doc still passes `cargo build`.
+      # `--document-private-items` because the private half is where most of this
+      # crate's doc comments live: `missing_docs_in_private_items` is denied in
+      # each library's `lib.rs`, so those docs exist, and without this flag their
+      # intra-doc links are the only ones rustdoc never checks.
       - name: Check documentation builds without warnings
-        run: cargo doc --workspace --no-deps --locked
+        run: cargo doc --workspace --no-deps --document-private-items --locked
         env:
           RUSTDOCFLAGS: "--deny warnings"
+
+  # `rust-version = "1.87"` is asserted in three manifests and the README and,
+  # until this job existed, verified by nothing: every other job installs the
+  # pinned nightly, so the floor was a claim no build ever tested. A claim made
+  # in four places and checked in zero is the worst of the available options,
+  # so this either keeps it honest or fails and tells us to drop it.
+  #
+  # `check`, not `test`: the floor is about what downstream consumers can
+  # compile, and dev-dependencies (proptest, criterion) have their own, higher
+  # MSRVs that say nothing about this crate's.
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+
+      - name: Install the declared minimum toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.87"
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: Check the workspace builds on its declared floor
+        run: cargo check --workspace --all-targets --locked
 
   # The `#[ignore]`d tests (deep perft depths, the full magic-bitboard
   # re-search) are the ones too slow to run on every PR, not the ones that
@@ -139,10 +181,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
@@ -173,10 +215,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
@@ -231,10 +273,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
@@ -269,10 +311,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
           components: llvm-tools-preview
 
       - name: Cache cargo registry and build artifacts
@@ -309,10 +351,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
+      # No `toolchain:` input: the action reads the repo-root
+      # `rust-toolchain.toml`, which is the single place the pinned date lives.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-08-09
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2

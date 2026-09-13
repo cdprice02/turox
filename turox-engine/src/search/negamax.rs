@@ -299,7 +299,7 @@ pub struct Search<'a> {
     nodes: u64,
     /// Hashes of every position on the path leading up to (but not
     /// including) the position currently being searched, per
-    /// [`draw::is_threefold_repetition`]'s contract. Seeded by the caller
+    /// [`crate::search::draw::is_threefold_repetition`]'s contract. Seeded by the caller
     /// with real game history, so repetitions that already happened in the
     /// actual game are visible, not just ones the search tree itself
     /// revisits. Grows by one push per ply descended, shrinks by one pop on
