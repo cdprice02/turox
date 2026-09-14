@@ -422,7 +422,7 @@ fn start_pos_has_exactly_twenty_pseudo_legal_moves() {
     assert_eq!(list.len(), 20);
 }
 
-// ---- is_pseudo_legal (#113): cases pseudo_legal_moves membership alone
+// ---- is_pseudo_legal: cases pseudo_legal_moves membership alone
 // wouldn't catch, since these are hand-built `Move`s that never came out of
 // that generator. ----
 

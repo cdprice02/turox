@@ -121,6 +121,12 @@ jobs:
       - name: Check for unused dependencies
         uses: bnjbvr/cargo-machete@main
 
+      # The subset of `docs/agents/voice.md` a machine can judge: em dashes,
+      # and bare references to this repo's issue numbers from source. The rest
+      # of that file is judgement and is caught in review.
+      - name: Check prose against voice.md
+        run: python3 tools/voice/check.py
+
       # `missing_docs` is denied workspace-wide (see the root Cargo.toml's
       # `[workspace.lints.rust]`), but that only checks that a doc comment
       # exists, not that it renders: a broken intra-doc link (`[`board`]`)

@@ -154,7 +154,7 @@ mod tests {
     // exactly as much as one on c4 would. Every other isolated_penalty test
     // above happens to place its pawns on the same rank, which can't tell
     // "checks the adjacent file" apart from "checks the one square
-    // diagonally/orthogonally adjacent" — this is the case that actually
+    // diagonally/orthogonally adjacent"; this is the case that actually
     // distinguishes the two.
     #[test]
     fn isolated_penalty_is_rescued_by_a_pawn_on_an_adjacent_file_at_any_rank() {

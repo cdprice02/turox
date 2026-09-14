@@ -97,7 +97,7 @@ pub fn interpolate(t: Tapered, phase: u32) -> Score {
     let mg = Score::try_from((t + (1 << (Score::BITS - 1))) >> Score::BITS).unwrap_or(Score::MAX);
     // The low lane's raw bits, taken as unsigned, are never negative and
     // always fit `u16` by construction (masked to exactly `Score::BITS`
-    // bits) — `cast_signed` then reinterprets that bit pattern as the
+    // bits). `cast_signed` then reinterprets that bit pattern as the
     // properly sign-extended `Score` it was packed from, which a plain
     // `try_from` on the masked value can't do: the mask alone recovers
     // `eg`'s bits as a positive number (e.g. -150 comes back as 65386),

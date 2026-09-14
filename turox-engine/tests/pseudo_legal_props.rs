@@ -15,7 +15,7 @@
 //! passant, promotion, castling, the full aggregate) live in
 //! `tests/pseudo_legal.rs`; this file is proptest only.
 //!
-//! `is_pseudo_legal` (#113) gets its own proptest further down: its contract is
+//! `is_pseudo_legal` gets its own proptest further down: its contract is
 //! membership in `pseudo_legal_moves`'s own output, so it's checked directly against
 //! that generator rather than against a fourth independent naive reference.
 
@@ -213,7 +213,7 @@ fn naive_pawn_moves(board: &Board) -> Vec<Move> {
     moves
 }
 
-// ---- `is_pseudo_legal` (#113) ----
+// ---- `is_pseudo_legal` ----
 //
 // Its contract is membership in `pseudo_legal_moves`'s own output, checked from both
 // directions: every move that generator actually produces must be accepted, and an
