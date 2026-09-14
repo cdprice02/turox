@@ -46,7 +46,7 @@ const DEFAULT_MAX_DEPTH: u8 = 64;
 /// stays on this thread; nothing here ever writes concurrently.
 #[expect(
     clippy::expect_used,
-    reason = "the only code that locks `active_stop` sets or clears an Option and cannot panic while holding it, so the mutex cannot become poisoned; a panic here would mean a bug elsewhere, not a recoverable condition"
+    reason = "`active_stop` is only ever held across an Option assignment, which cannot panic, so the mutex cannot become poisoned"
 )]
 pub fn run<R, W>(board: &mut Board, reader: R, mut writer: W)
 where
@@ -238,7 +238,7 @@ fn send(writer: &mut impl Write, response: &Response) {
 /// running.
 #[expect(
     clippy::expect_used,
-    reason = "same as `run`: `active_stop` is only ever held across an Option assignment, so poisoning would require a panic that cannot happen there"
+    reason = "`active_stop` is only ever held across an Option assignment, which cannot panic, so the mutex cannot become poisoned"
 )]
 fn read_commands<R: BufRead>(
     mut reader: R,

@@ -19,13 +19,9 @@
 //! generation, search, and evaluation all need `Bitboard`/`Square`/`Move` without
 //! depending on `Board` itself.
 
-// Denied here rather than in the workspace `[lints]` table because that table
-// cannot be scoped to a target: `missing_docs` covers only public items, so
-// private constants and helpers were reaching `main` undocumented, but applying
-// the private-items half to `tests/` and `benches/` too would demand a doc on
-// every `const KIWIPETE: &str`, which is the bloat `docs/agents/voice.md` says
-// to delete rather than write. A crate-level attribute hits the library and
-// leaves the separate test and bench crates alone.
+// `missing_docs` covers public items; this covers the rest. It sits here rather
+// than in the workspace `[lints]` table because that table reaches every
+// target, and a doc per fixture constant in `tests/` and `benches/` is noise.
 #![deny(clippy::missing_docs_in_private_items)]
 pub mod board;
 pub mod eval;

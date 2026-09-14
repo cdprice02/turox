@@ -20,11 +20,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The pinned nightly, spelled once here instead of once per job.
-  # `dtolnay/rust-toolchain` does *not* read `rust-toolchain.toml` (it fails
-  # with "'toolchain' is a required input"), so the date genuinely has to be
-  # repeated in this file; this keeps it to one line. Bump it together with
-  # `rust-toolchain.toml` and `turox-fuzz/rust-toolchain.toml`, in one commit.
+  # The pinned nightly, for every job that wants it. `dtolnay/rust-toolchain`
+  # requires an explicit `toolchain` input and does not read
+  # `rust-toolchain.toml`, so the date lives here as well. Bump it alongside
+  # `rust-toolchain.toml` and `turox-fuzz/rust-toolchain.toml` in one commit.
   RUST_TOOLCHAIN: nightly-2026-08-09
 
 jobs:
@@ -116,11 +115,9 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
-      # Catches a dependency that stops being used without anyone noticing.
-      # `turox-cli` carried `anyhow` plus a five-line comment justifying it for
-      # some time after the last `use` of it disappeared. Not `cargo deny`,
-      # which audits licences and advisories across a dependency tree this
-      # repo deliberately does not have.
+      # Fails when a declared dependency is no longer used anywhere. Not
+      # `cargo deny`, which audits licences and advisories across a dependency
+      # tree this repo deliberately does not have.
       - name: Check for unused dependencies
         uses: bnjbvr/cargo-machete@main
 
@@ -128,24 +125,19 @@ jobs:
       # `[workspace.lints.rust]`), but that only checks that a doc comment
       # exists, not that it renders: a broken intra-doc link (`[`board`]`)
       # or malformed doc still passes `cargo build`.
-      # `--document-private-items` because the private half is where most of this
-      # crate's doc comments live: `missing_docs_in_private_items` is denied in
-      # each library's `lib.rs`, so those docs exist, and without this flag their
-      # intra-doc links are the only ones rustdoc never checks.
+      # `--document-private-items` because private items are documented here too,
+      # and rustdoc checks their intra-doc links only when it renders them.
       - name: Check documentation builds without warnings
         run: cargo doc --workspace --no-deps --document-private-items --locked
         env:
           RUSTDOCFLAGS: "--deny warnings"
 
-  # `rust-version = "1.87"` is asserted in three manifests and the README and,
-  # until this job existed, verified by nothing: every other job installs the
-  # pinned nightly, so the floor was a claim no build ever tested. A claim made
-  # in four places and checked in zero is the worst of the available options,
-  # so this either keeps it honest or fails and tells us to drop it.
+  # Builds the workspace on the `rust-version` floor the manifests declare, so
+  # that floor stays a checked fact rather than a claim. Every other job runs
+  # the pinned nightly and would not notice it breaking.
   #
-  # `check`, not `test`: the floor is about what downstream consumers can
-  # compile, and dev-dependencies (proptest, criterion) have their own, higher
-  # MSRVs that say nothing about this crate's.
+  # `check`, not `test`: the floor bounds what a consumer can compile, and the
+  # dev-dependencies carry their own higher MSRVs that say nothing about it.
   msrv:
     runs-on: ubuntu-latest
     timeout-minutes: 15

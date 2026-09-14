@@ -11,7 +11,7 @@
 
 #![expect(
     clippy::expect_used,
-    reason = "test and bench support code, where a failed setup expectation should abort the run loudly rather than be threaded through a Result nothing would read; `clippy.toml`'s allow-expect-in-tests does not reach plain helper functions, only `#[test]` ones and `#[cfg(test)]` modules"
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
 use turox_engine::board::Board;
