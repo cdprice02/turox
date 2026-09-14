@@ -265,13 +265,30 @@ jobs:
   # made during the audit pass (`cp/test-audit`). Informational only, not a
   # PR gate: a surviving mutant is a prompt to add a test, not a build
   # failure to fix under time pressure.
+  # Sharded because one job cannot finish: each mutant costs a rebuild and a
+  # test run, and the mutant count grows with the crate, so a single job's
+  # runtime is measured in hours and it hit its timeout partway through the
+  # alphabet. That is worse than slow. It meant every mutation result this
+  # project had covered `board` and `eval` and silently none of the rest, which
+  # is exactly the wrong thing for a job whose output is read as coverage.
+  #
+  # `round-robin`, not `slice`: sharding by consecutive ranges gives one shard
+  # a whole module, so a shard that times out takes that module's entire result
+  # with it. Round-robin spreads each module across every shard, so losing one
+  # degrades the picture evenly instead of blanking a subsystem.
   mutants:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # 567 mutants at time of writing; sequential (cargo-mutants' default) risked
-    # exceeding even a generous timeout, found by actually triggering this job
-    # and watching it run rather than guessing at a budget in advance.
-    timeout-minutes: 150
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Zero-indexed: `--shard` takes an index, so eight shards are 0 through
+        # 7 and `8/8` selects nothing. Verified by listing each shard and
+        # checking the eight sum to the full mutant count with no overlap,
+        # because a silently empty shard in a coverage job is invisible.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
       - name: Checkout repo
@@ -294,13 +311,15 @@ jobs:
       # already uses cargo's own parallelism, so running 4 mutants at once
       # would oversubscribe rather than actually parallelize.
       - name: Run mutation testing
-        run: cargo mutants -p turox-engine -j 2
+        run: >
+          cargo mutants -p turox-engine -j 2
+          --shard ${{ matrix.shard }}/8 --sharding round-robin
 
       - name: Upload mutants report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutants-report
+          name: mutants-report-shard-${{ matrix.shard }}
           path: mutants.out
 
   # Which move-gen branches perft's six standard positions never actually
