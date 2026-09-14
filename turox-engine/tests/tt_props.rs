@@ -1,5 +1,10 @@
 //! Property test for `search::tt::Tt`.
 
+#![expect(
+    clippy::expect_used,
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
+)]
+
 mod common;
 
 /// Any legal move, for tests that need a syntactically valid one to store and

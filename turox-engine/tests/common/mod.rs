@@ -14,9 +14,13 @@
 //! `any_square`, `attacks_props.rs` only wants `any_board`/`any_bitboard`/
 //! `any_square`, ...), so `dead_code` fires per-binary for whatever that
 //! binary didn't happen to call. That's expected here, not a real problem.
-#![allow(
+#![expect(
     dead_code,
     reason = "compiled fresh into every binary that does `mod common;`; no single binary uses the whole surface"
+)]
+#![expect(
+    clippy::expect_used,
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
 use proptest::prelude::*;

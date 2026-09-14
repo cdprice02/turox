@@ -5,7 +5,7 @@ use super::square::Square;
 
 /// The kind of a move, packed into 4 bits. Doubles as the promotion piece selector
 /// for the four promotion variants.
-#[allow(missing_docs, reason = "variant names are the doc")]
+#[expect(missing_docs, reason = "variant names are the doc")]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MoveFlags {
@@ -113,7 +113,7 @@ impl MoveFlags {
     // one's discriminants are sparse (0-5, then 8-15) and *are* the point, a bit
     // pattern `Move` packs directly. `Ordinal::to_u8` would work here too, but
     // would misdescribe what these values mean.
-    #[allow(
+    #[expect(
         clippy::as_conversions,
         reason = "sparse bit-pattern discriminants, not an Ordinal; this is the intended way to read them"
     )]
@@ -152,7 +152,7 @@ impl Move {
 
     /// Packs a move from `from` to `to` with the given `flags`.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::as_conversions,
         reason = "from.to_u8()/to.to_u8()/flags.bits() are u8; From isn't const-callable yet (rust-lang/rust#143874), so widening to u16 stays `as`"
     )]
@@ -167,6 +167,10 @@ impl Move {
     ///
     /// Never: the stored bits are masked to 6 bits (`& 0x3F`), always < 64.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the bits are masked to 6 (`& 0x3F`), so the value is always < 64 and always a valid square index"
+    )]
     pub const fn from(self) -> Square {
         Square::from_u8(self.0.to_le_bytes()[0] & 0x3F)
             .expect("masked to 6 bits (& 0x3F), so always < 64")
@@ -178,6 +182,10 @@ impl Move {
     ///
     /// Never: the stored bits are masked to 6 bits (`& 0x3F`), always < 64.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the bits are masked to 6 (`& 0x3F`), so the value is always < 64 and always a valid square index"
+    )]
     pub const fn to(self) -> Square {
         Square::from_u8((self.0 >> 6).to_le_bytes()[0] & 0x3F)
             .expect("masked to 6 bits (& 0x3F), so always < 64")
@@ -190,6 +198,10 @@ impl Move {
     /// Never: `Move` is only ever built via `Move::new`, which packs one of
     /// the 14 valid flag patterns `MoveFlags::from_bits` recognizes.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the flag bits can only have been set by `Move::new`, which takes a `MoveFlags` and so cannot produce an unrepresentable pattern"
+    )]
     pub const fn flags(self) -> MoveFlags {
         MoveFlags::from_bits((self.0 >> 12).to_le_bytes()[0]).expect(
             "Move is only ever built via Move::new, which packs one of the 14 valid patterns",
@@ -213,6 +225,10 @@ impl Move {
     ///
     /// Never: `is_promotion()` true implies `promotion_piece()` returns `Some`.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "a promotion flag implies a promotion piece; the flags are set by `Move::new` and cannot disagree with themselves"
+    )]
     pub fn to_uci(self) -> String {
         let mut s = format!("{}{}", self.from(), self.to());
         if self.flags().is_promotion() {
@@ -225,7 +241,7 @@ impl Move {
                 Piece::Bishop => 'b',
                 Piece::Rook => 'r',
                 Piece::Queen => 'q',
-                #[allow(
+                #[expect(
                     clippy::unreachable,
                     reason = "is_promotion() gates this on the flag's own promotion bit, which promotion_piece() never maps to Pawn/King"
                 )]

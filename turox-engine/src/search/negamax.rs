@@ -221,7 +221,10 @@ enum RootOutcome {
     /// before the interruption, if any had; `None` when the abort landed before the
     /// move loop could report anything (the top-of-function check, or the depth-0
     /// quiescence-only path, which has no per-move loop to have made progress in).
-    Aborted { best_so_far: Option<(Score, Move)> },
+    Aborted {
+        /// See this variant's own doc above.
+        best_so_far: Option<(Score, Move)>,
+    },
 }
 
 /// Which cutoff histogram an [`Search::alpha_beta_loop`] call reports to.
@@ -291,10 +294,12 @@ struct LoopOutcome {
 /// nothing at most call sites; Rust infers it from context the same way it always does
 /// for an unused generic parameter.
 pub struct Search<'a> {
+    /// Every node visited by this search, across all iterative-deepening
+    /// iterations. Drives `max_nodes` as well as being reported.
     nodes: u64,
     /// Hashes of every position on the path leading up to (but not
     /// including) the position currently being searched, per
-    /// [`draw::is_threefold_repetition`]'s contract. Seeded by the caller
+    /// [`crate::search::draw::is_threefold_repetition`]'s contract. Seeded by the caller
     /// with real game history, so repetitions that already happened in the
     /// actual game are visible, not just ones the search tree itself
     /// revisits. Grows by one push per ply descended, shrinks by one pop on
@@ -302,6 +307,8 @@ pub struct Search<'a> {
     /// node's children, but never the node's own hash while checking the
     /// node itself.
     history: Vec<u64>,
+    /// Wall-clock abort point, checked periodically rather than per node. See
+    /// `max_nodes` for the deterministic counterpart used by tests.
     deadline: Option<Instant>,
     /// A deterministic alternative to `deadline`: aborts once `nodes`
     /// reaches this count. A wall-clock deadline makes "iterative deepening
@@ -475,7 +482,7 @@ impl<'a> Search<'a> {
     /// is amortized to roughly nothing per node rather than paid on every
     /// single one. Call this immediately after incrementing `self.nodes` at
     /// the top of `negamax`/`quiescence`.
-    #[allow(
+    #[expect(
         clippy::verbose_bit_mask,
         reason = "the mask form is the standard periodic-check idiom, not an oversight; `trailing_zeros() >= 11` would desync from this fn's own doc comment for no clarity gain"
     )]
@@ -831,6 +838,10 @@ impl<'a> Search<'a> {
     /// kept around past the cutoff check (it's `Copy`, so this costs nothing): even when it
     /// doesn't license an outright cutoff, its stored move is still worth trying first in
     /// this node's own move loop, so it survives long enough to feed `order_moves`.
+    #[expect(
+        clippy::expect_used,
+        reason = "the move list's emptiness is checked and returned on well above this point, so the loop always records a best move before the store"
+    )]
     fn negamax(
         &mut self,
         board: &Board,
@@ -1092,22 +1103,42 @@ fn order_moves(
 /// variant because its gain is exactly `0` by definition and no promotion
 /// ever lands there (see `move_priority`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(
-    dead_code,
-    reason = "PrincipalVariation and MateKiller have no producer yet (real PV tracking \
-              needs PVS's triangular PV table; mate killers are a deliberately separate, \
-              later change from ordinary killers, split out to keep each one's SPRT \
-              measuring only one technique) but the ranking scheme is designed to be \
-              complete for when they land, rather than needing to be reshuffled later"
+// `cfg_attr(not(test), ...)` because the ordering test below names both
+// variants, so `dead_code` fires in a normal build and not in a test one, and
+// a bare `expect` would then be unfulfilled exactly where the test build runs.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "PrincipalVariation and MateKiller have no producer yet (real PV tracking \
+                  needs PVS's triangular PV table; mate killers are a deliberately separate, \
+                  later change from ordinary killers, split out to keep each one's SPRT \
+                  measuring only one technique) but the ranking scheme is designed to be \
+                  complete for when they land, rather than needing to be reshuffled later"
+    )
 )]
 enum MovePriority {
+    /// The previous iteration's best line. No producer yet; PVS supplies one.
     PrincipalVariation,
+    /// The transposition table's stored move for this position: already proved
+    /// best by a deeper or equal search, so nothing cheaper predicts better.
     Hash,
+    /// A capture winning material, ordered by how much. `Reverse` so the
+    /// derived ascending `Ord` puts the *largest* gain first.
     WinningCapture(Reverse<Score>),
+    /// An even trade. Gain is exactly `0` by definition, so unlike the winning
+    /// and losing tiers it carries no payload to sort within.
     EqualCapture,
+    /// A quiet move that refuted a sibling *with a mate score*. Ranked above
+    /// ordinary killers because a forced mate is worth more than material. No
+    /// producer yet.
     MateKiller,
+    /// A quiet move that caused a beta cutoff at a sibling of this ply.
     Killer,
+    /// Everything not otherwise classified.
     Quiet,
+    /// A capture losing material, ordered by how much. Below `Quiet` because a
+    /// move that hangs a piece is worse than an untried ordinary move.
     LosingCapture(Reverse<Score>),
 }
 
@@ -1122,6 +1153,10 @@ enum MovePriority {
 /// that check happens before any killer-table lookup, a promotion can never
 /// fall through to `Quiet`, `Killer`, or `MateKiller` either, with or
 /// without a capture attached.
+#[expect(
+    clippy::expect_used,
+    reason = "the flags decide which arm runs, so a promotion arm always has a promotion piece and a capture arm always has a victim; the from-square always holds the moving piece"
+)]
 fn move_priority(
     board: &Board,
     m: Move,

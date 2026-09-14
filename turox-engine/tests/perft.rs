@@ -11,6 +11,11 @@
 //! multi-million-node perft there is minutes, not seconds. Run them
 //! deliberately with `cargo nextest run --workspace --run-ignored all --release`.
 
+#![expect(
+    clippy::expect_used,
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
+)]
+
 use turox_engine::board::Board;
 use turox_engine::move_gen::legal::{legal_moves, perft};
 
@@ -184,7 +189,7 @@ fn perft_zero_is_one_leaf() {
 // place the moment one of the counts above is ever wrong and needs
 // localizing to a specific root move, which is exactly what a raw total
 // can't tell you.
-#[allow(
+#[expect(
     dead_code,
     reason = "kept compiling and ready for the moment a perft count is wrong and needs localizing to a root move"
 )]

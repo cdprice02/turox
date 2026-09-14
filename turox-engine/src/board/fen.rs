@@ -78,6 +78,10 @@ impl Board {
     }
 
     /// Parses just the piece-placement field (the part before the first space).
+    #[expect(
+        clippy::expect_used,
+        reason = "every conversion here is already range-checked by the branch that reaches it: the digit came from a matched '1'..='8', and `file` is compared against 8 immediately above"
+    )]
     fn parse_placement(placement: &str) -> Result<Self, InvalidFenError> {
         let mut board = Self::default();
         let rows: Vec<&str> = placement.split('/').collect();
@@ -133,6 +137,8 @@ impl Board {
         Ok(board)
     }
 
+    /// Parses FEN's castling field. `-` means no rights, not an error, and is
+    /// the reason this cannot just map characters and collect.
     fn parse_castling(s: &str) -> Result<CastlingRights, InvalidFenError> {
         let mut rights = CastlingRights::NONE;
         for c in s.chars() {
@@ -153,6 +159,10 @@ impl Board {
         Ok(rights)
     }
 
+    /// Parses an algebraic square such as `e3`, for FEN's en passant field.
+    /// Rejects anything that is not exactly two bytes in range, so a stray
+    /// space or a trailing character is an error rather than a silent prefix
+    /// match.
     fn parse_square(s: &str) -> Result<Square, InvalidFenError> {
         Square::try_from_algebraic(s).ok_or_else(|| InvalidFenError::InvalidField {
             field: "en passant target",

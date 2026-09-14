@@ -50,6 +50,9 @@ const fn isolated_penalty(pawns: Bitboard) -> Tapered {
     isolani(pawns).count().cast_signed() * ISOLATED_PENALTY
 }
 
+/// The isolated pawns in `pawns`: those with no friendly pawn on either
+/// adjacent file. Named for the chess term rather than `isolated_pawns` to
+/// match the literature this module's other terms come from.
 const fn isolani(pawns: Bitboard) -> Bitboard {
     let east = pawns.shift(Direction::East);
     let west = pawns.shift(Direction::West);

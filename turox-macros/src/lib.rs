@@ -7,6 +7,10 @@
 //! `turox-engine` stays free of runtime dependencies either way; this is a
 //! compile-time-only proc macro, not a crate its output links against.
 
+// `missing_docs` covers public items; this covers the rest. It sits here rather
+// than in the workspace `[lints]` table because that table reaches every
+// target, and a doc per fixture constant in `tests/` and `benches/` is noise.
+#![deny(clippy::missing_docs_in_private_items)]
 use proc_macro::{Delimiter, TokenStream, TokenTree};
 
 /// Derives `ALL`, `to_u8`, `index`, and `from_u8` for a fieldless `#[repr(u8)]`
@@ -173,21 +177,21 @@ fn generate(name: &str, variants: &[String]) -> TokenStream {
 
             /// This variant's discriminant.
             #[must_use]
-            #[allow(clippy::as_conversions)] // see `generate`'s doc in turox-macros
+            #[expect(clippy::as_conversions, reason = \"a fieldless enum's discriminant cast is the whole point of this derive; see `generate`'s doc in turox-macros\")]
             pub const fn to_u8(self) -> u8 {{
                 self as u8
             }}
 
             /// This variant's discriminant, widened for use as a slice index.
             #[must_use]
-            #[allow(clippy::as_conversions)] // see `generate`'s doc in turox-macros
+            #[expect(clippy::as_conversions, reason = \"a fieldless enum's discriminant cast is the whole point of this derive; see `generate`'s doc in turox-macros\")]
             pub const fn index(self) -> usize {{
                 self as usize
             }}
 
             /// The variant at discriminant `v`, or `None` if `v >= {count}`.
             #[must_use]
-            #[allow(clippy::as_conversions)] // v < {count}u8 checked first, so this widening is always in range.
+            #[expect(clippy::as_conversions, reason = \"v < {count}u8 is checked first, so this widening is always in range\")]
             pub const fn from_u8(v: u8) -> Option<Self> {{
                 if v < {count}u8 {{
                     Some(Self::ALL[v as usize])
@@ -209,6 +213,10 @@ fn generate(name: &str, variants: &[String]) -> TokenStream {
 /// on `&str`) always produces a properly escaped, syntactically valid string
 /// literal, so this can't fail in practice, and there's no further fallback
 /// to reach for if it somehow did.
+#[expect(
+    clippy::expect_used,
+    reason = "`{message:?}` is Debug on &str, which always yields a properly escaped, syntactically valid string literal, so the parse cannot fail"
+)]
 fn compile_error(message: &str) -> TokenStream {
     format!("compile_error!({message:?});")
         .parse()

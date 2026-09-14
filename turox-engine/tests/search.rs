@@ -10,6 +10,11 @@
 //! Philidor's Legacy turned out not to be a genuinely forced mate as given
 //! either.
 
+#![expect(
+    clippy::expect_used,
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
+)]
+
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use turox_engine::board::Board;
@@ -594,7 +599,7 @@ fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
         "this position must actually produce beta cutoffs to search at all, or the \
          rate below is measuring nothing"
     );
-    #[allow(
+    #[expect(
         clippy::as_conversions,
         clippy::cast_precision_loss,
         reason = "a diagnostic ratio; node counts are nowhere near f64's 2^52 \

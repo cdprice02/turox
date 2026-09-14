@@ -37,14 +37,23 @@ const BISHOP_TABLE_SIZE: usize = 5_248;
 /// where its slice starts in the flat `ROOK_ATTACKS`/`BISHOP_ATTACKS` array
 /// (`offset`). One array of 64 of these per piece type.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "`magic` is the actual chess-programming term for this field; a generic name like `multiplier` would read worse to this module's audience"
 )]
 struct Magic {
+    /// The relevant-occupancy mask for this square: the squares a slider could
+    /// be blocked by, with the board edges excluded, since a piece on the edge
+    /// blocks nothing beyond itself.
     mask: Bitboard,
+    /// The multiplier that maps masked occupancy onto a dense index. Found by
+    /// search rather than derived; see `regen`.
     magic: u64,
+    /// How far right to shift the product, `64 - mask.count()`, so the index
+    /// keeps exactly as many bits as the mask has.
     shift: u32,
+    /// Where this square's slice begins in the shared attack table, since all
+    /// 64 squares live in one array rather than 64 separate ones.
     offset: usize,
 }
 
@@ -58,7 +67,7 @@ struct Magic {
 // no const-stable `TryFrom<u64> for usize` to reach for instead
 // (rust-lang/rust#143874), and this is the hottest line in the engine, so a
 // runtime-checked fallback doesn't belong here even once one exists.
-#[allow(
+#[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     reason = "m.shift always leaves <= 12 significant bits, which fits usize; no const-stable TryFrom<u64> for usize exists yet (rust-lang/rust#143874)"

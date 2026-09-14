@@ -6,7 +6,10 @@
 //! precomputed corpus and `black_box`es both the input and the returned
 //! score.
 
-#![allow(missing_docs, reason = "bench binaries aren't a public API surface")]
+#![expect(
+    clippy::expect_used,
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
+)]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;

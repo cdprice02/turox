@@ -9,6 +9,11 @@
 //! catch if `to_uci`/`from_uci` agreed with each other but both disagreed
 //! with the UCI spec.
 
+#![expect(
+    clippy::expect_used,
+    reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
+)]
+
 use turox_engine::board::Board;
 use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::types::MoveFlags;
@@ -24,7 +29,7 @@ use turox_engine::{Move, Square};
 const OPEN_CASTLE_POSITION_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const OPEN_CASTLE_POSITION_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "test-only helper, not itself a #[test] fn, so clippy's test-context detection doesn't cover it; the interpolated fen/flags are worth keeping over a plain .expect(...)"
 )]
