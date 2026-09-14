@@ -15,6 +15,7 @@
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use turox_engine::board::Board;
@@ -424,6 +425,60 @@ fn max_nodes_only_search_unaffected_by_soft_limit() {
         result.depth, 4,
         "a node budget generous enough to never trip should_abort must still reach depth 4, \
          the soft limit must not apply without a deadline"
+    );
+}
+
+/// The behavioural half of root randomization, pinned with fixed seeds so it
+/// cannot flake. `tests/uci_session.rs` covers the session defaulting it *on*,
+/// which is inherently a sampling question; this covers what the shuffle
+/// actually does, which is not.
+///
+/// Sweeping a fixed seed range rather than drawing one: a seed decides the
+/// permutation outright, so the whole sweep is reproducible, and a failure
+/// means the tie set at this depth collapsed rather than that a run got
+/// unlucky. That distinction is the entire point of not reading the clock here.
+#[test]
+fn root_randomization_varies_the_chosen_move_across_seeds() {
+    let board = Board::start_pos();
+
+    let chosen: BTreeSet<String> = (1u64..=64)
+        .filter_map(|seed| {
+            Search::new(Vec::new())
+                .with_root_randomization(seed)
+                .search(&board, 3)
+                .best_move
+                .map(Move::to_uci)
+        })
+        .collect();
+
+    assert!(
+        chosen.len() > 1,
+        "root randomization must be able to pick different moves among equal ones, got {chosen:?}"
+    );
+}
+
+/// The other half: a given seed is reproducible. Without this, the sweep above
+/// could pass on a shuffle that ignored its seed entirely and simply varied.
+#[test]
+fn root_randomization_is_reproducible_for_a_given_seed() {
+    let board = Board::start_pos();
+
+    let run = || {
+        Search::new(Vec::new())
+            .with_root_randomization(0xC0FF_EE12_3456_789A)
+            .search(&board, 4)
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(
+        first.best_move.map(Move::to_uci),
+        second.best_move.map(Move::to_uci),
+        "the same seed must produce the same move"
+    );
+    assert_eq!(
+        first.score, second.score,
+        "the same seed must produce the same score"
     );
 }
 
