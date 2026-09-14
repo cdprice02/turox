@@ -1341,11 +1341,10 @@ mod tests {
         );
     }
 
-    /// The issue's own testing note: `RxQ` and `PxN` are both winning captures
-    /// under the old fieldless enum, and a fieldless `Ord` sees them as equal,
-    /// throwing away MVV-LVA's whole point. Embedding the material delta on
-    /// `WinningCapture` has to actually break that tie, not just happen to
-    /// leave both moves in the same broad tier.
+    /// `RxQ` and `PxN` are both winning captures, so a priority that carried no
+    /// payload would rank them equal and throw away MVV-LVA's whole point. This
+    /// pins that the material delta on `WinningCapture` actually breaks the tie,
+    /// rather than both moves merely landing in the same broad tier.
     #[test]
     fn move_priority_does_not_conflate_two_different_winning_captures() {
         let rxq_board = Board::try_from_fen("q5k1/8/8/8/8/8/8/R3K3 w - - 0 1").expect("valid FEN");
@@ -1371,11 +1370,10 @@ mod tests {
         assert_eq!(pxn_priority, MovePriority::WinningCapture(Reverse(220)));
     }
 
-    /// The issue's own testing note: a losing capture must sort behind a
-    /// quiet move, not ahead of it. This is the reordering `LosingCapture`'s
-    /// declaration position exists to fix; it's harmless under today's
-    /// fieldless enum only because every quiet move ties with every other
-    /// quiet move regardless of where `LosingCapture` sits.
+    /// A losing capture must sort behind a quiet move, not ahead of it: hanging
+    /// a piece is worse than an untried ordinary move. This is what
+    /// `LosingCapture`'s position in the declaration order buys, and the
+    /// derived `Ord` makes that position load-bearing rather than cosmetic.
     #[test]
     fn move_priority_ranks_a_losing_capture_behind_a_quiet_move() {
         let board = capture_and_quiet_position();
@@ -1473,11 +1471,11 @@ mod tests {
         );
     }
 
-    /// The issue's own testing note: whichever legal move is handed to
-    /// `order_moves` as the hint lands at index 0, regardless of what that
-    /// move actually is. Looping over every legal move in the position (the
-    /// one capture and several quiet king moves) as the hint in turn checks
-    /// this generically rather than pinning it to one move's own kind.
+    /// Whichever legal move is handed to `order_moves` as the hint lands at
+    /// index 0, whatever kind of move it is. Looping over every legal move in
+    /// the position (the one capture and several quiet king moves) as the hint
+    /// in turn checks that generically, rather than pinning it to one move's
+    /// own kind and passing for the wrong reason.
     #[test]
     fn order_moves_places_any_hinted_move_first() {
         let board = capture_and_quiet_position();
@@ -1625,12 +1623,10 @@ mod tests {
 
     // ---- Killer-move classification ----
     //
-    // `move_priority` gains a fourth parameter here: `killers: [Option<Move>; 2]`,
-    // the two killer slots for the ply this move is being classified at. These
-    // tests are written against that target signature and fail to compile until
-    // the implementation adds it; that's deliberate; the signature is the part
-    // of the design that's already settled, not something these tests are
-    // guessing at.
+    // `move_priority`'s `killers` parameter carries the two slots for the ply the
+    // move is being classified at. A killer only outranks a quiet move, never a
+    // capture, so these check the boundary in both directions rather than only
+    // that a match is recognised.
 
     #[test]
     fn move_priority_with_matching_first_killer_slot_classifies_as_killer() {

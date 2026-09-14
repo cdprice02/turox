@@ -17,15 +17,20 @@ real rating.
 
 ## Status
 
-Move generation is complete and verified end-to-end against perft (see
-below): `Board`, FEN parsing/formatting, attack tables, magic bitboards, and
-pseudolegal/legal move generation all work. `eval` (material and
-piece-square tables), `search` (negamax with alpha-beta, iterative
-deepening, and quiescence), and `uci` (parsing commands, emitting
-responses, and a real stdin/stdout session loop) all work too: `turox-cli`
-speaks UCI end to end and can be driven by any UCI-speaking GUI. What's left
-is connecting it to lichess via `lichess-bot` for a real rating (see
-"Playing on lichess" below).
+turox plays. It speaks UCI end to end, runs on lichess through `lichess-bot`
+(see "Playing on lichess" below), and has a rating there to point at rather
+than a passing test suite.
+
+Move generation is verified against perft on the six standard positions.
+Search is negamax with alpha-beta over iterative deepening, with quiescence,
+a transposition table, killer moves, and time management. Evaluation is
+tapered between midgame and endgame. The UCI layer is a real session loop,
+not a stub.
+
+Deliberately not a status list of every term and heuristic: that list lives in
+the module tree, where it cannot disagree with the code. What is *planned*
+lives on the issue tracker, which is where reading about unfinished work
+belongs.
 
 ## Architecture
 
@@ -43,10 +48,11 @@ types  ->  board  ->  move_gen  ->  search / eval / uci
   parsing/formatting, built on `types`.
 - **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
   generation, and `perft`.
-- **`eval`**: static position evaluation (material and piece-square tables).
+- **`eval`**: static position evaluation, tapered between midgame and endgame.
+  Each term is a submodule; that list is the term list.
 - **`search`**: negamax with alpha-beta over iterative deepening and
-  quiescence, driven by a depth or node budget (a transposition table is a
-  later addition).
+  quiescence, driven by a depth, node, or time budget, with a transposition
+  table and move ordering.
 - **`uci`**: the UCI protocol: parsing commands, emitting responses, and the
   stateful session loop that drives the engine from `turox-cli`.
 

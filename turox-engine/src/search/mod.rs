@@ -7,7 +7,7 @@
 //! `Search::with_deadline` wants. Built on `move_gen` for legal moves, `eval` for the
 //! position score to search toward, `draw` for the fifty-move/repetition checks a search
 //! node makes before recursing further, and `board::zobrist` for the hashes `draw`'s
-//! repetition check and the future transposition table (`tt`) both key on.
+//! repetition check and the transposition table (`tt`) both key on.
 
 pub mod draw;
 mod negamax;

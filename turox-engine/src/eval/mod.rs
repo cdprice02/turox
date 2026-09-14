@@ -1,8 +1,9 @@
 //! Static position evaluation, returned from the side-to-move's perspective
 //! via `evaluate`.
 //!
-//! Combines material (below), piece-square tables (`pst`), pawn structure
-//! (`pawn_structure`), and king safety (`king_safety`).
+//! Combines material (below) with the terms in this module's submodules,
+//! blended between midgame and endgame by `phase`. The submodule list is the
+//! term list; repeating it here is how it goes stale.
 //!
 //! `eval_white_pov` is the absolute (White-relative) sum of terms;
 //! `evaluate` is the side-to-move-relative wrapper negamax search wants.
