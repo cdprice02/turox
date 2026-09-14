@@ -474,11 +474,25 @@ fn randomize_off_makes_repeated_searches_identical() {
 /// The default stays on, so ordinary play is still varied. Asserted through a
 /// real session rather than on `Search` directly, because the session is what
 /// decides the default and that is the thing that could silently regress.
+///
+/// Depth 5 and sixteen samples are both chosen against a measurement, not
+/// picked to feel safe. Root randomization only reorders moves the search
+/// scores *equally*, so this test can only see it when the position has a tie
+/// at the top, and how large that tie is decides how often sampling can miss
+/// it. At depth 3 the start position ties exactly two moves at roughly even
+/// odds, which is thin enough that twelve samples agree by chance about once
+/// in two thousand runs; that is what made the earlier version of this flaky.
+/// At depth 5 it ties four, near-uniformly, putting sixteen samples somewhere
+/// around one in ten million.
+///
+/// If this ever fails, re-measure before assuming randomization broke: an eval
+/// change that gives one move a strict edge shrinks the tie set, and this test
+/// is the thing that notices, without being able to say which happened.
 #[test]
 fn randomization_is_on_by_default() {
-    let chosen: Vec<String> = (0..12)
+    let chosen: Vec<String> = (0..16)
         .map(|_| {
-            run_session("position startpos\ngo depth 3\n")
+            run_session("position startpos\ngo depth 5\n")
                 .lines()
                 .find(|l| l.starts_with("bestmove"))
                 .unwrap_or_default()
