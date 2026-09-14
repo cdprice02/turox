@@ -31,7 +31,7 @@ pub enum Command {
     /// `isready`: report whether we're ready for more commands.
     IsReady,
     /// `ucinewgame`: the next `position`/`go` starts a new game, not a
-    /// continuation (relevant once a transposition table exists to clear
+    /// continuation (which is what clears the transposition table
     /// between games).
     NewGame,
     /// `position [startpos | fen <fen>] [moves <move> ...]`, resolved to

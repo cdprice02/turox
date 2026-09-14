@@ -67,10 +67,10 @@ pub struct Entry {
     /// The full Zobrist key this entry was stored under, kept alongside the table index
     /// so a hash collision at the same index can't be mistaken for a real hit on `probe`.
     pub key: u64,
-    /// The best move found at this node, packed via `Move::bits`. Write-only in this
-    /// module: nothing here reads it back yet, since using it to reorder a node's move
-    /// list is separate, later work. Stored now so that later change doesn't need to
-    /// touch this struct's layout.
+    /// The best move found at this node, packed via `Move::bits`. `negamax` unpacks
+    /// it on a probe and tries it first, which is most of what makes a table hit worth
+    /// more than the score alone: even when the stored bound cannot end the search
+    /// outright, the move it names usually still refutes the position.
     pub mv: u16,
     /// Ply-adjusted: not the score as seen from the root, but a form independent of *how*
     /// this node was reached, so a later [`Tt::probe`] at a different ply from a different

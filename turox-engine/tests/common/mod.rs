@@ -1,5 +1,5 @@
-//! Shared proptest strategies for `move_gen`'s integration tests
-//! (`attacks_props.rs`, and the pseudolegal/legal test files that follow it).
+//! Shared proptest strategies for the integration tests, `move_gen`'s
+//! originally and now most of them.
 //! `tests/common/mod.rs` rather than `tests/common.rs`: the `mod.rs` name keeps
 //! `cargo`/`nextest` from treating this as its own standalone test binary (which
 //! would fail to build; it has no `#[test]`s of its own).
@@ -10,10 +10,9 @@
 //! generation cares a great deal, so this is a separate, stricter strategy.
 //!
 //! Rust compiles this file fresh into every binary that does `mod common;`,
-//! and no single binary uses this whole surface (`square_props.rs` only wants
-//! `any_square`, `attacks_props.rs` only wants `any_board`/`any_bitboard`/
-//! `any_square`, ...), so `dead_code` fires per-binary for whatever that
-//! binary didn't happen to call. That's expected here, not a real problem.
+//! and no single binary uses this whole surface, so `dead_code` fires
+//! per-binary for whatever that binary didn't happen to call. That's expected
+//! here, not a real problem.
 #![expect(
     dead_code,
     reason = "compiled fresh into every binary that does `mod common;`; no single binary uses the whole surface"
@@ -28,9 +27,8 @@ use turox_engine::board::Board;
 use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::{Bitboard, CastlingRights, Color, ColoredPiece, Move, Piece, Rank, Square};
 
-/// Shared with every other test file that needs an arbitrary square/bitboard
-/// (`square_props.rs`, `bitboard_props.rs`, `magic_props.rs`, `tables_props.rs`,
-/// `attacks_props.rs`, ...), so the strategy itself isn't duplicated five times.
+/// Shared with every other test file that needs an arbitrary square or
+/// bitboard, so the strategy isn't duplicated once per binary.
 pub fn any_square() -> impl Strategy<Value = Square> {
     (0u8..64).prop_map(|i| Square::from_u8(i).expect("i in 0..64"))
 }

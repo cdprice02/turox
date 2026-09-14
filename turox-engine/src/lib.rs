@@ -9,10 +9,10 @@
 //!   formatting, built on `types`.
 //! - [`move_gen`]: attack tables, magic bitboards, pseudolegal and legal move
 //!   generation, and `perft`.
-//! - [`search`]: negamax with alpha-beta over iterative deepening, driven by
-//!   a depth or node budget (a transposition table is a later addition).
-//! - [`eval`]: static position evaluation (material and piece-square
-//!   tables).
+//! - [`search`]: negamax with alpha-beta over iterative deepening, driven by a
+//!   depth, node, or time budget, with a transposition table and move ordering.
+//! - [`eval`]: static position evaluation, tapered between midgame and endgame.
+//!   Its submodule list is the term list; prose here would only go stale.
 //! - [`uci`]: the UCI protocol, driving the engine from `turox-cli`.
 //!
 //! `types` sits at the crate root rather than under `board` because move
