@@ -22,6 +22,7 @@ why each of these exists; this file is the lookup.
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
 | mutants           | `cargo mutants -p turox-engine`                                       |
 | coverage          | `cargo llvm-cov --workspace`                                          |
+| voice             | `tools/voice/check.py`                                                |
 
 ## Gotchas
 
@@ -59,6 +60,11 @@ why each of these exists; this file is the lookup.
   `accepted-gaps` job runs exactly these tests (`--run-ignored all` plus the
   profile) and inverts the result, so it goes red when one *passes*, meaning
   a gap closed and its ADR is stale.
+- **`tools/voice/check.py` covers only part of `docs/agents/voice.md`.** Em
+  dashes and bare issue references in `.rs` source are the two rules a machine
+  can judge, and CI runs them. Everything else in that file is judgement and is
+  caught in review or not at all, so a green run is not evidence that the prose
+  is good.
 - **Clippy runs `pedantic` and `nursery`, plus a hand-picked set of
   restriction lints** (`unwrap_used`, `unreachable`, `wildcard_enum_match_arm`,
   `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `dbg_macro`,
@@ -68,9 +74,11 @@ why each of these exists; this file is the lookup.
   `arithmetic_side_effects` are the two intentional exceptions, not deferred
   ones: this is bitboard/table-driven engine code, so indexing and
   arithmetic are the normal way to write it, not the exception a
-  restriction lint is meant to catch. Every `#[allow(...)]` in the codebase
-  carries a `reason = "..."` explaining the specific call site; that's what
-  to read (or add to) rather than reaching for a blanket lint change.
+  restriction lint is meant to catch. `allow_attributes` requires `#[expect(...)]`
+  in place of `#[allow(...)]`, each with a `reason = "..."` explaining the
+  specific call site; that's what to read (or add to) rather than reaching for
+  a blanket lint change. An expectation also fails the build once its lint
+  stops firing, so a suppression that has outlived its reason is reported.
   `#[derive(Ordinal)]` in `turox-macros` is how the ordinal enums
   (`Color`/`Piece`/`ColoredPiece`/`File`/`Rank`/`Square`) stayed clean of
   `as` without hand-writing six copies of the same accessor.

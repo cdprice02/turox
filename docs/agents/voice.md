@@ -15,6 +15,34 @@ State the reasoning inline instead. A doc comment that defers to
 `docs/agents/voice.md` or `CLAUDE.md` is skipping the explanation it owes
 its reader, who is looking at a function, not at the repo's agent config.
 
+## Write the standing reason, not the deliberation
+
+A comment earns its place by being true and useful later. Prose that argues
+for a change, or recounts how it was decided, stops being either as soon as
+the change is old news, and it does so silently.
+
+The test: will this sentence still be worth reading once the thing it
+describes is simply how the code is?
+
+- **Keeps**: "X rather than Y, because Y would Z." A standing tradeoff, which
+  a reader can check against the code in front of them.
+- **Rots**: "the other half of a policy that was only ever half applied." A
+  fact about this repo's history, not about the thing being commented.
+- **Rots**: "two are already on a timer: `A` and `B`." Naming the current
+  instances of a rule, which go wrong the moment either changes.
+- **Rots**: "until this existed, nothing verified it", "the worst of the
+  available options". Arguing for a decision to a reader who can only see the
+  result.
+
+This is not "don't record alternatives": the rule above about a rejected
+alternative still holds, and is the first bullet here. The line is between a
+property that stays true and a change that already happened.
+
+Commit messages and PR descriptions are where the deliberation belongs. They
+are dated by construction, a reader reaches them deliberately, and nothing
+there has to stay true. Moving a paragraph from a comment into the commit
+message is usually the right fix, not deleting it.
+
 ## No issue or PR numbers in source
 
 `#54`, `see #26`: these rot as the repo evolves (issues close, get
@@ -24,6 +52,23 @@ doing itself. If a comment needs the issue number to make sense, the
 comment is incomplete. State the reasoning inline and let the number live
 in commit history and the PR description, where it belongs and won't go
 stale.
+
+Two things that look like this and are fine. A *qualified* reference to
+another project's tracker (`rust-lang/rust#143874`) is stable, resolvable
+without access to this repo, and usually the only honest way to say "waiting
+on upstream". And `#N` in backticks is chess notation for mate in N, which an
+engine has every reason to write.
+
+## What is checked, and what isn't
+
+`tools/voice/check.py` enforces the two rules above that a machine can judge:
+em dashes anywhere, and bare issue references in `.rs` source. CI runs it. It
+knows about both exceptions in the previous section.
+
+Every other rule here is a matter of judgement and is caught in review, or
+not at all. That is the reason this file is worth reading rather than
+skimming: the parts a tool cannot check are the parts that decide whether the
+prose is worth having.
 
 ## Module docs stay short
 

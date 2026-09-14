@@ -13,7 +13,7 @@
 //! king) could pass both, since it's built from the exact same primitives in
 //! the exact same order rather than checked as a property of the output.
 //!
-//! `legal_moves` (the pin-set fast path, #113) is checked against
+//! `legal_moves` (the pin-set fast path) is checked against
 //! `legal_moves_naive` directly in the second proptest: now that a second,
 //! independently-built technique exists, exact set agreement is the
 //! stronger and more direct property, and the one every caller elsewhere in

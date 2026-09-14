@@ -81,7 +81,7 @@ fn attacked_by_with_the_kings_own_square_removed_reveals_the_square_behind_it() 
     assert!(attacked_by(&board, Color::Black, occupied_without_king).contains(Square::E1));
 }
 
-// ---- pinned (#113) ----
+// ---- pinned ----
 
 #[test]
 fn a_piece_pinned_along_a_file_by_a_rook_is_reported() {
