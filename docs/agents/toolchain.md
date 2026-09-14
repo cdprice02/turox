@@ -20,7 +20,7 @@ why each of these exists; this file is the lookup.
 | bench vs baseline | `cargo bench -p turox-engine -- --save-baseline before`, then `-- --baseline before` |
 | self-play A/B     | `tools/selfplay/sprt.sh --base main --test my-branch`                 |
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
-| mutants           | `cargo mutants -p turox-engine`                                       |
+| mutants, scoped   | `cargo mutants -p turox-engine --file '**/NAME.rs'`                    |
 | coverage          | `cargo llvm-cov --workspace`                                          |
 | voice             | `tools/voice/check.py`                                                |
 
@@ -60,6 +60,11 @@ why each of these exists; this file is the lookup.
   `accepted-gaps` job runs exactly these tests (`--run-ignored all` plus the
   profile) and inverts the result, so it goes red when one *passes*, meaning
   a gap closed and its ADR is stale.
+- **A whole-crate `cargo mutants` run does not finish.** Every mutant costs a
+  rebuild and a test run, so the full set takes hours. CI shards it eight ways
+  round-robin; locally, scope it (`--file '**/phase.rs'`, `--re SomeName`) or
+  run a shard. `--shard` is zero-indexed, so eight shards are `0/8` through
+  `7/8` and `8/8` silently selects nothing.
 - **`tools/voice/check.py` covers only part of `docs/agents/voice.md`.** Em
   dashes and bare issue references in `.rs` source are the two rules a machine
   can judge, and CI runs them. Everything else in that file is judgement and is
