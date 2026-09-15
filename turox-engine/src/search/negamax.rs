@@ -21,6 +21,7 @@ use std::cmp::Reverse;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use turox_macros::Ordinal;
 
 /// The score magnitude of a certain checkmate.
 ///
@@ -113,7 +114,8 @@ const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 /// that cuts off because the transposition table named it is a hash hit, not a
 /// capture hit. The question this answers is which ordering technique is
 /// earning its place.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Ordinal)]
+#[repr(u8)]
 pub enum CutoffCause {
     /// The transposition table's stored move for this position.
     HashMove,
@@ -122,25 +124,6 @@ pub enum CutoffCause {
     /// Anything else: ordinary move ordering got there without a technique
     /// tracked here claiming credit.
     Other,
-}
-
-impl CutoffCause {
-    /// Every variant, so a reader can total the histogram without knowing how
-    /// many there are.
-    pub const ALL: [Self; 3] = [Self::HashMove, Self::Killer, Self::Other];
-
-    /// How many variants there are, which is [`CutoffStats::by_cause`]'s width.
-    pub const COUNT: usize = Self::ALL.len();
-
-    /// This cause's slot in [`CutoffStats::by_cause`].
-    #[must_use]
-    pub const fn index(self) -> usize {
-        match self {
-            Self::HashMove => 0,
-            Self::Killer => 1,
-            Self::Other => 2,
-        }
-    }
 }
 
 /// Which move index took a beta cutoff, the standard diagnostic for move-ordering quality.
@@ -161,7 +144,7 @@ pub struct CutoffStats {
     /// An array keyed by an enum rather than a counter field per technique:
     /// each new ordering technique that wants its own hit rate adds a variant,
     /// not a field here plus another `bool` parameter on `record`.
-    pub by_cause: [u64; CutoffCause::COUNT],
+    pub by_cause: [u64; CutoffCause::ALL.len()],
     /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
     /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
     /// make this array itself unbounded; summing the whole array always equals
@@ -543,23 +526,46 @@ impl<'a> Search<'a> {
         self.killers[usize::from(ply).min(MAX_KILLER_PLY - 1)]
     }
 
-    /// Called whenever a move causes a beta cutoff, so the killer table can
-    /// learn from it. Returns whether `m` was already sitting in one of this
-    /// ply's killer slots *before* this call, which is what
-    /// `CutoffStats::by_cause` wants to know for `CutoffCause::Killer`.
+    /// Called whenever a move causes a beta cutoff: updates the killer table
+    /// and reports which ordering technique put `m` early enough to cut off.
     ///
-    /// A no-op for anything that isn't a plain quiet move: captures and
-    /// promotions are already ordered by MVV-LVA/material gain, so recording
-    /// them as killers would duplicate that and waste a slot on information
-    /// the ordering already has.
-    fn note_cutoff_move(&mut self, ply: u8, m: Move) -> bool {
-        if !m.flags().is_material_neutral() {
-            return false;
+    /// Classification lives here rather than at the call site because this is
+    /// already the one place that knows what each technique holds, and the
+    /// techniques queued behind killers (mate killers, history, countermoves)
+    /// each add their own table to `Search` and a branch here, not another
+    /// return value threaded out to the loop.
+    ///
+    /// `tt_move` is the exception, and is passed in: it is per-node state from
+    /// this node's own probe rather than a table on `Self`. Checked first,
+    /// because a stored move that is *also* a killer was tried early because
+    /// the table named it, and crediting the killer table would overstate what
+    /// it does.
+    ///
+    /// Recording is a no-op for anything that isn't a plain quiet move:
+    /// captures and promotions are already ordered by MVV-LVA/material gain,
+    /// so recording them as killers would duplicate that and waste a slot on
+    /// information the ordering already has. Such a move can still *cause* a
+    /// cutoff, and is still classified.
+    fn note_cutoff_move(&mut self, ply: u8, m: Move, tt_move: Option<Move>) -> CutoffCause {
+        // Recording happens whatever the cause turns out to be. Skipping it for
+        // a hash move would quietly change which moves the killer table holds,
+        // and so the move ordering and the tree, which classification must not.
+        let was_already_a_killer = if m.flags().is_material_neutral() {
+            let idx = usize::from(ply).min(MAX_KILLER_PLY - 1);
+            let was_already_a_killer = self.killers[idx].contains(&Some(m));
+            self.killers[idx] = record_killer(self.killers[idx], m);
+            was_already_a_killer
+        } else {
+            false
+        };
+
+        if tt_move == Some(m) {
+            CutoffCause::HashMove
+        } else if was_already_a_killer {
+            CutoffCause::Killer
+        } else {
+            CutoffCause::Other
         }
-        let idx = usize::from(ply).min(MAX_KILLER_PLY - 1);
-        let was_already_a_killer = self.killers[idx].contains(&Some(m));
-        self.killers[idx] = record_killer(self.killers[idx], m);
-        was_already_a_killer
     }
 
     /// Iterative deepening driver: repeatedly searches the root at
@@ -757,17 +763,7 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let is_killer_hit = self.note_cutoff_move(ply, m);
-                // Hash first: a stored move that is also a killer was tried
-                // early because the table named it, so crediting the killer
-                // table would overstate what it is doing.
-                let cause = if tt_move == Some(m) {
-                    CutoffCause::HashMove
-                } else if is_killer_hit {
-                    CutoffCause::Killer
-                } else {
-                    CutoffCause::Other
-                };
+                let cause = self.note_cutoff_move(ply, m, tt_move);
                 match sink {
                     CutoffSink::Negamax => self.negamax_cutoffs.record(i, cause),
                     CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, cause),
