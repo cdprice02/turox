@@ -37,6 +37,7 @@ mod common;
 use common::{any_board, mirrored};
 use proptest::prelude::*;
 use turox_engine::board::Board;
+use turox_engine::eval::endgame_scale::{self, ScaleFactor};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
 use turox_engine::{Color, Piece, Square};
@@ -61,6 +62,27 @@ use turox_engine::{Color, Piece, Square};
 /// the implementation packs from.
 fn mg_eg(w: (Score, Score)) -> (i32, i32) {
     (i32::from(w.0), i32::from(w.1))
+}
+
+/// The real scale factor for `board`.
+///
+/// Deliberately not a naive reimplementation. The version this replaced walked
+/// the same early returns in the same order with the same names, which is
+/// sharing reasoning rather than checking it: it could catch a typo and not a
+/// logic error, and `CONTEXT.md` rules that out for a naive reference.
+///
+/// The properties below are not testing the scale factor; they bound pawn
+/// structure and king safety. The factor is a common multiplier that has to
+/// match on both sides of a deviation for those bounds to mean anything, so
+/// sharing it is what makes them correct. What the factor itself does is pinned
+/// by concrete positions in `tests/eval.rs`.
+fn real_scale_factor(board: &Board) -> ScaleFactor {
+    endgame_scale::scale_factor(board)
+}
+
+/// Whether `board`'s material triggers any scaling at all.
+fn triggers_endgame_scale(board: &Board) -> bool {
+    !real_scale_factor(board).is_one()
 }
 
 /// Mailbox walk over `board.piece_at`, reproducing `eval::phase::game_phase`
@@ -295,7 +317,7 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (black_ks_mg, black_ks_eg) = naive_king_safety_mg_eg(board, Color::Black);
     mg += white_ks_mg - black_ks_mg;
     eg += white_ks_eg - black_ks_eg;
-    blend(mg, eg, naive_game_phase(board))
+    real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
 }
 
 /// The standard tapered-eval blend, `(mg * (256 - phase) + eg * phase) /
@@ -350,7 +372,7 @@ fn naive_white_pov_omitting(board: &Board, omit: OmittedTerm) -> Score {
         eg += white_eg - black_eg;
     }
 
-    blend(mg, eg, naive_game_phase(board))
+    real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
 }
 
 /// The largest absolute value a `(mg, eg)` weight can contribute once blended.
@@ -447,6 +469,20 @@ proptest! {
     // above. `eval::king_safety`'s constants are first-pass placeholders
     // sized by reasoning rather than measured games; worth re-checking
     // again if they're ever tuned past a pawn's value.
+    //
+    // `eval::endgame_scale` breaks this property outright for boards it
+    // touches, in either direction, not just down to a tie: `K+N vs K+P`
+    // (a pawn on the board, so no signature matches, score passes through
+    // unscaled) can score *better* for White than the `K+N vs K` left after
+    // removing that pawn (a real known draw, scored exactly `0`), because
+    // the unscaled pre-removal score has no way to express "that pawn was
+    // never going to matter anyway." That's not a bug to chase: it's the
+    // same plateau-and-cliff shape the whole feature is built on, just
+    // visible from the removal side instead of the comparison side. So
+    // this property is restricted to the boards the feature doesn't touch,
+    // where it's exactly as strict as it was before `endgame_scale`
+    // existed, via `triggers_endgame_scale` on both the position being
+    // reduced and the result of reducing it.
     #[test]
     fn removing_a_black_piece_strictly_increases_white_pov(board in any_board()) {
         let target = Square::ALL.into_iter().find(|&sq| {
@@ -458,6 +494,9 @@ proptest! {
         };
         let mut reduced = board;
         reduced.remove(sq);
+        if triggers_endgame_scale(&board) || triggers_endgame_scale(&reduced) {
+            return Ok(());
+        }
         prop_assert!(eval_white_pov(&reduced) > eval_white_pov(&board));
     }
 

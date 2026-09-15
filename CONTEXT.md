@@ -52,3 +52,20 @@ as search gets deeper and stronger. See
 `docs/adr/0002-accept-bounded-path-dependence-in-the-transposition-table.md`.
 _Avoid_: graph history interaction, GHI (narrower published term; covers
 only the repetition half of what turox tracks under this name)
+
+**Evaluation term**:
+A signed centipawn contribution summed into the `Tapered` (mg/eg) accumulator
+before `phase::interpolate` blends it into a single `Score`. Material, piece-
+square tables, pawn structure, and king safety are evaluation terms.
+_Avoid_: Scale factor (a different mechanism, applied after blending rather
+than summed before it).
+
+**Scale factor**:
+A multiplier applied to the already-interpolated `Score`, not summed into the
+tapered accumulator. Represents a material balance whose winnability the
+piece-square tables can't express: PSTs judge where pieces stand, not whether
+the position can be converted at all. A scale factor of zero marks a known
+draw (a material balance that is a draw under the rules regardless of
+placement, e.g. KNK); a fractional scale factor marks a heuristically
+unwinnable-but-not-drawn balance (e.g. opposite-coloured bishops).
+_Avoid_: Evaluation term, endgame term.
