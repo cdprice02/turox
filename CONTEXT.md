@@ -15,7 +15,12 @@ precomputed structure (pin sets, magic tables, incremental state), so it
 stays obviously correct by inspection even as the fast path gets cleverer.
 Never deleted once the fast path lands; deleting it would remove the fast
 path's only independent check.
+Shares no *reasoning* with the thing it checks: not the walk, not the order of
+cases, not the dispatch. It may share *magnitudes*, and for a tuned weight it
+should: a number self-play chose has no independent truth to check against, so
+a second copy of it only ever tests that someone updated both, and turns every
+retune into a two-place edit. What a weight is worth is pinned separately, by
+structure rather than by transcription.
 _Avoid_: Oracle (used for the reference itself elsewhere in chess literature,
 but ambiguous here with "TT/eval oracle"), slow path, reference implementation
-(too generic; "naive" is the load-bearing word: it must not share reasoning
-with the thing it checks).
+(too generic; "naive" is the load-bearing word).
