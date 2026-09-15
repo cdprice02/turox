@@ -39,7 +39,7 @@ use turox_engine::move_gen::attacks::in_check;
 use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::search::draw;
 use turox_engine::search::tt::Tt;
-use turox_engine::search::{Search, MATE, MAX_QUIESCENCE_DEPTH};
+use turox_engine::search::{CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
 
 // ---- Independent reference ----
 
@@ -188,6 +188,19 @@ proptest! {
         prop_assert_eq!(
             result.quiescence_cutoffs.by_cause.iter().sum::<u64>(),
             result.quiescence_cutoffs.fail_high_nodes
+        );
+        // Quiescence orders by no hash move, so it can never cut off because
+        // of one, whatever the table happens to hold for those positions.
+        //
+        // This is the invariant that makes per-ply hash-move tracking safe:
+        // every loop records what it ordered by before running, including the
+        // ones that ordered by nothing, and a loop that forgot would inherit
+        // whichever move last occupied that depth and start attributing
+        // quiescence cutoffs to the table. That shows up here and nowhere
+        // else, since the totals above would still reconcile.
+        prop_assert_eq!(
+            result.quiescence_cutoffs.by_cause[CutoffCause::HashMove.index()],
+            0
         );
     }
 }

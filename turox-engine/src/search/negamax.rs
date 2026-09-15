@@ -285,12 +285,6 @@ struct LoopCtx {
     initial_max: Score,
     /// Which histogram this loop's cutoffs belong to.
     sink: CutoffSink,
-    /// The transposition table's move for this node, if it had one.
-    ///
-    /// Only used to attribute a cutoff to [`CutoffCause::HashMove`], which is
-    /// why it is compared once on the cutoff path rather than per move.
-    /// Quiescence has no such move and passes `None`.
-    tt_move: Option<Move>,
 }
 
 /// What one [`Search::alpha_beta_loop`] call produced.
@@ -368,6 +362,20 @@ pub struct Search<'a> {
     /// the same tree, just re-explored at increasing depth, so a killer
     /// found at iteration 3 is still valid information for iteration 4.
     killers: [[Option<Move>; KILLER_SLOTS]; MAX_KILLER_PLY],
+    /// The move this ply's move loop ordered by, if any: the transposition
+    /// table's move for the position being searched there.
+    ///
+    /// Per ply for the same reason `killers` is, and clamped the same way: one
+    /// position is being searched at each ply at a time, so a ply's slot is
+    /// only ever about its own node, and a child writing its own slot cannot
+    /// disturb an ancestor's.
+    ///
+    /// It holds what the loop *ordered by*, not what the table knows. Those
+    /// differ: quiescence never orders by a hash move even where the table has
+    /// one, so it writes `None` and its cutoffs are never attributed to the
+    /// table. Attribution has to follow the ordering, or it credits a technique
+    /// that did not put the move first.
+    hash_moves: [Option<Move>; MAX_KILLER_PLY],
     /// xorshift64* state when root move randomization is on, `None` when it is
     /// off (the default, so every existing test and bench stays deterministic
     /// without knowing this exists).
@@ -400,6 +408,7 @@ impl<'a> Search<'a> {
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
             killers: [[None; KILLER_SLOTS]; MAX_KILLER_PLY],
+            hash_moves: [None; MAX_KILLER_PLY],
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
@@ -526,6 +535,20 @@ impl<'a> Search<'a> {
         self.killers[usize::from(ply).min(MAX_KILLER_PLY - 1)]
     }
 
+    /// Records what this ply's move loop is ordering by, which every loop must
+    /// do before running, including the loops that order by nothing.
+    ///
+    /// Passing `None` is not a formality: it is what keeps a ply's slot about
+    /// its own node rather than whatever last occupied that depth.
+    fn set_hash_move(&mut self, ply: u8, m: Option<Move>) {
+        self.hash_moves[usize::from(ply).min(MAX_KILLER_PLY - 1)] = m;
+    }
+
+    /// This ply's hash move; see [`Self::set_hash_move`].
+    fn hash_move(&self, ply: u8) -> Option<Move> {
+        self.hash_moves[usize::from(ply).min(MAX_KILLER_PLY - 1)]
+    }
+
     /// Called whenever a move causes a beta cutoff: updates the killer table
     /// and reports which ordering technique put `m` early enough to cut off.
     ///
@@ -535,18 +558,18 @@ impl<'a> Search<'a> {
     /// each add their own table to `Search` and a branch here, not another
     /// return value threaded out to the loop.
     ///
-    /// `tt_move` is the exception, and is passed in: it is per-node state from
-    /// this node's own probe rather than a table on `Self`. Checked first,
-    /// because a stored move that is *also* a killer was tried early because
-    /// the table named it, and crediting the killer table would overstate what
-    /// it does.
+    /// The hash move is read from [`Self::hash_move`] like the killers are
+    /// read from their own table, so every ordering input this classifies
+    /// against lives on `Self`. Checked first, because a stored move that is
+    /// *also* a killer was tried early because the table named it, and
+    /// crediting the killer table would overstate what it does.
     ///
     /// Recording is a no-op for anything that isn't a plain quiet move:
     /// captures and promotions are already ordered by MVV-LVA/material gain,
     /// so recording them as killers would duplicate that and waste a slot on
     /// information the ordering already has. Such a move can still *cause* a
     /// cutoff, and is still classified.
-    fn note_cutoff_move(&mut self, ply: u8, m: Move, tt_move: Option<Move>) -> CutoffCause {
+    fn note_cutoff_move(&mut self, ply: u8, m: Move) -> CutoffCause {
         // Recording happens whatever the cause turns out to be. Skipping it for
         // a hash move would quietly change which moves the killer table holds,
         // and so the move ordering and the tree, which classification must not.
@@ -559,7 +582,7 @@ impl<'a> Search<'a> {
             false
         };
 
-        if tt_move == Some(m) {
+        if self.hash_move(ply) == Some(m) {
             CutoffCause::HashMove
         } else if was_already_a_killer {
             CutoffCause::Killer
@@ -738,7 +761,6 @@ impl<'a> Search<'a> {
             beta,
             initial_max,
             sink,
-            tt_move,
         } = ctx;
 
         let mut max = initial_max;
@@ -763,7 +785,7 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let cause = self.note_cutoff_move(ply, m, tt_move);
+                let cause = self.note_cutoff_move(ply, m);
                 match sink {
                     CutoffSink::Negamax => self.negamax_cutoffs.record(i, cause),
                     CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, cause),
@@ -792,6 +814,7 @@ impl<'a> Search<'a> {
             if drawn_moves.is_empty() {
                 return RootOutcome::Completed(0, None);
             }
+            self.set_hash_move(0, None);
             order_moves(board, &mut drawn_moves, None, self.killer_slots(0));
             return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
@@ -825,6 +848,7 @@ impl<'a> Search<'a> {
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
+        self.set_hash_move(0, None);
         order_moves(board, &mut moves, None, self.killer_slots(0));
 
         let outcome = self.alpha_beta_loop(
@@ -835,7 +859,6 @@ impl<'a> Search<'a> {
                 beta,
                 initial_max: Score::MIN,
                 sink: CutoffSink::Negamax,
-                tt_move: None,
             },
             |s, m, a, b| {
                 s.history.push(board.hash());
@@ -933,6 +956,7 @@ impl<'a> Search<'a> {
         let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
 
         let original_alpha = alpha;
+        self.set_hash_move(ply, tt_move);
         order_moves(board, &mut moves, tt_move, self.killer_slots(ply));
 
         let outcome = self.alpha_beta_loop(
@@ -943,7 +967,6 @@ impl<'a> Search<'a> {
                 beta,
                 initial_max: Score::MIN,
                 sink: CutoffSink::Negamax,
-                tt_move,
             },
             |s, m, a, b| {
                 s.history.push(board.hash());
@@ -1035,6 +1058,7 @@ impl<'a> Search<'a> {
                 return Some(Score::from(ply) - MATE);
             }
 
+            self.set_hash_move(ply, None);
             order_moves(board, &mut evasions, None, self.killer_slots(ply));
 
             let outcome = self.alpha_beta_loop(
@@ -1045,7 +1069,6 @@ impl<'a> Search<'a> {
                     beta,
                     initial_max: Score::MIN,
                     sink: CutoffSink::Quiescence,
-                    tt_move: None,
                 },
                 |s, m, a, b| {
                     let child = board.make_move(m);
@@ -1074,6 +1097,7 @@ impl<'a> Search<'a> {
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
         qmoves.retain(|m| m.flags().is_capture());
 
+        self.set_hash_move(ply, None);
         order_moves(board, &mut qmoves, None, self.killer_slots(ply));
 
         let outcome = self.alpha_beta_loop(
@@ -1084,7 +1108,6 @@ impl<'a> Search<'a> {
                 beta,
                 initial_max: stand_pat,
                 sink: CutoffSink::Quiescence,
-                tt_move: None,
             },
             |s, m, a, b| {
                 let child = board.make_move(m);
