@@ -10,6 +10,7 @@
 //! king still under attack in a position that reads as partway toward the
 //! endgame on `game_phase`'s blend.
 
+use super::weights;
 use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
 use crate::move_gen::attacks::king_square;
@@ -19,7 +20,7 @@ use crate::Direction;
 /// Penalty per zone file (`sq`'s own file and each file adjacent to it,
 /// clamped at the board edge) with no friendly pawn anywhere on it: nothing
 /// left on that file to block a rook or queen running straight at the king.
-const SHELTER_PENALTY: Tapered = pack(-15, 0);
+const SHELTER_PENALTY: Tapered = pack(weights::SHELTER_PENALTY.0, weights::SHELTER_PENALTY.1);
 
 /// Additional penalty per zone file with no pawn of *either* color on it: a
 /// fully open file is worse than merely missing friendly cover
@@ -28,7 +29,7 @@ const SHELTER_PENALTY: Tapered = pack(-15, 0);
 /// the way down it. Stacks on top of `SHELTER_PENALTY` rather than
 /// replacing it: a fully open file is strictly more dangerous than a
 /// semi-open one, not a different category of danger.
-const OPEN_FILE_PENALTY: Tapered = pack(-25, 0);
+const OPEN_FILE_PENALTY: Tapered = pack(weights::OPEN_FILE_PENALTY.0, weights::OPEN_FILE_PENALTY.1);
 
 /// `king_sq`'s own file plus one file adjacent to it on either side, each
 /// the full 8-square file. Always 3 entries, never 2: a `const fn` can't
@@ -88,14 +89,14 @@ const fn open_file_penalty(pawns: Bitboard, enemy_pawns: Bitboard, king_sq: Squa
 /// `storm_zone`): an advancing pawn threatening to crack the shelter open,
 /// distinct from `SHELTER_PENALTY`/`OPEN_FILE_PENALTY`, which only look at
 /// whether pawns are *missing*, not whether the enemy's are closing in.
-const STORM_PENALTY: Tapered = pack(-10, 0);
+const STORM_PENALTY: Tapered = pack(weights::STORM_PENALTY.0, weights::STORM_PENALTY.1);
 
 /// How many ranks deep `storm_zone` reaches in front of the king: a pawn
 /// still this close to its own back rank hasn't threatened anything yet,
 /// every real game's pawns start there. First-pass placeholder, same as
 /// every other magnitude in this module, sized by reasoning rather than by
 /// measured games and expected to move once self-play can score it.
-const STORM_RANGE: u8 = 3;
+const STORM_RANGE: u8 = weights::STORM_RANGE;
 
 /// The three-file, `STORM_RANGE`-rank cone strictly ahead of `king_sq`,
 /// from `color`'s own forward direction: the region an enemy pawn has to

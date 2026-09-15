@@ -5,6 +5,7 @@
 //! accumulator `eval_white_pov` already carries for material and piece-
 //! square terms, so no separate blending pass is needed here.
 
+use super::weights;
 use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
 use crate::types::{Bitboard, Color, Piece};
@@ -12,16 +13,16 @@ use crate::Direction;
 
 /// Penalty for each pawn beyond the first on a file: doubled pawns block
 /// each other's advance and don't add proportional extra defensive value.
-const DOUBLED_PENALTY: Tapered = pack(-10, -20);
+const DOUBLED_PENALTY: Tapered = pack(weights::DOUBLED_PENALTY.0, weights::DOUBLED_PENALTY.1);
 
 /// Penalty per pawn with no friendly pawn on an adjacent file: isolated
 /// pawns can never be defended by another pawn.
-const ISOLATED_PENALTY: Tapered = pack(-10, -10);
+const ISOLATED_PENALTY: Tapered = pack(weights::ISOLATED_PENALTY.0, weights::ISOLATED_PENALTY.1);
 
 /// Bonus per pawn with a clear path to promotion: worth more in the
 /// endgame, where there are fewer pieces left to stop it and a king
 /// nearby to escort it.
-const PASSED_BONUS: Tapered = pack(10, 20);
+const PASSED_BONUS: Tapered = pack(weights::PASSED_BONUS.0, weights::PASSED_BONUS.1);
 
 /// `color`'s total pawn-structure contribution: doubled and isolated
 /// penalties plus the passed-pawn bonus, summed over every pawn `color`

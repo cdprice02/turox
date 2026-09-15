@@ -7,6 +7,7 @@
 //! interpolate once, at the very end, rather than keeping two separate
 //! running totals in sync by hand.
 
+use super::weights;
 use crate::board::Board;
 use crate::types::{Color, Piece};
 
@@ -19,12 +20,12 @@ use super::Score;
 /// bishop counts for one point, a rook two, a queen four. Pawns and kings
 /// are zero because their count doesn't track how much fighting material
 /// is left.
-const PHASE_WEIGHT: [u32; 6] = [0, 1, 1, 2, 4, 0];
+const PHASE_WEIGHT: [u32; 6] = weights::PHASE_WEIGHT;
 
 /// The phase total at the start of a game: two knights, two bishops, two
 /// rooks, and a queen, per side, weighted by [`PHASE_WEIGHT`] and summed
 /// over both colors.
-const TOTAL_PHASE: u32 = 24;
+const TOTAL_PHASE: u32 = weights::TOTAL_PHASE;
 
 /// How far into the endgame `board` is, scaled to `0..=256`: 0 is full
 /// non-pawn material (pure midgame), 256 is none left (pure endgame).
