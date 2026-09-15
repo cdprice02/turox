@@ -310,39 +310,81 @@ fn blend(mg: i32, eg: i32, phase: i32) -> Score {
         .expect("eval magnitudes stay well under i16::MAX, per eval::Score's own invariant")
 }
 
-/// Material, PST, and king safety, pawn structure switched off: the
-/// baseline `eval_white_pov`'s deviation is measured against to isolate
-/// pawn structure's own contribution, now that king safety is also live
-/// and would otherwise show up as unexplained deviation in that bound.
+/// A term this reference can leave out, so a property can measure what the
+/// real evaluation adds for it.
+///
+/// One parameterised baseline rather than one function per term: each new
+/// evaluation term otherwise needs its own near-identical copy of the walk
+/// below, and the queued terms would have turned two of those into six.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OmittedTerm {
+    /// Leaves out pawn structure, so the deviation isolates it.
+    PawnStructure,
+    /// Leaves out king safety, so the deviation isolates that instead.
+    KingSafety,
+}
+
+/// Material and PST, plus every term except `omit`, White-relative.
+///
+/// `eval_white_pov`'s deviation from this is the omitted term's own
+/// contribution and nothing else, which is what lets the bounds below be
+/// stated per term rather than as one combined fudge factor.
 #[expect(
     clippy::similar_names,
     reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
 )]
-fn naive_material_pst_and_king_safety_white_pov(board: &Board) -> Score {
+fn naive_white_pov_omitting(board: &Board, omit: OmittedTerm) -> Score {
     let (mut mg, mut eg) = naive_material_and_pst_mg_eg(board);
-    let (white_mg, white_eg) = naive_king_safety_mg_eg(board, Color::White);
-    let (black_mg, black_eg) = naive_king_safety_mg_eg(board, Color::Black);
-    mg += white_mg - black_mg;
-    eg += white_eg - black_eg;
+
+    if omit != OmittedTerm::PawnStructure {
+        let (white_mg, white_eg) = naive_pawn_structure_mg_eg(board, Color::White);
+        let (black_mg, black_eg) = naive_pawn_structure_mg_eg(board, Color::Black);
+        mg += white_mg - black_mg;
+        eg += white_eg - black_eg;
+    }
+
+    if omit != OmittedTerm::KingSafety {
+        let (white_mg, white_eg) = naive_king_safety_mg_eg(board, Color::White);
+        let (black_mg, black_eg) = naive_king_safety_mg_eg(board, Color::Black);
+        mg += white_mg - black_mg;
+        eg += white_eg - black_eg;
+    }
+
     blend(mg, eg, naive_game_phase(board))
 }
 
-/// Material, PST, and pawn structure, king safety switched off: the mirror
-/// image of `naive_material_pst_and_king_safety_white_pov`, isolating king
-/// safety's own contribution instead.
-#[expect(
-    clippy::similar_names,
-    reason = "mg/eg is the tapered-eval jargon pair this whole module (and eval::phase) is built on; white_mg/white_eg read as a pair for exactly that reason, not a typo risk"
-)]
-fn naive_material_pst_and_pawn_structure_white_pov(board: &Board) -> Score {
-    let (mut mg, mut eg) = naive_material_and_pst_mg_eg(board);
-    let (white_mg, white_eg) = naive_pawn_structure_mg_eg(board, Color::White);
-    let (black_mg, black_eg) = naive_pawn_structure_mg_eg(board, Color::Black);
-    mg += white_mg - black_mg;
-    eg += white_eg - black_eg;
-    blend(mg, eg, naive_game_phase(board))
+/// The largest absolute value a `(mg, eg)` weight can contribute once blended.
+///
+/// `interpolate` never returns a value outside the span of the `mg` and `eg`
+/// it is given, so whichever half is larger bounds the blended result too.
+fn max_magnitude(w: (Score, Score)) -> i32 {
+    i32::from(w.0).abs().max(i32::from(w.1).abs())
 }
 
+/// The most pawn structure can be worth, per pawn on the board, combined
+/// across both colours.
+///
+/// Derived from the weights rather than written as a number: a retune moves
+/// this bound with it, instead of leaving a stale literal that gets widened
+/// the next time it fails.
+fn pawn_structure_bound_per_pawn() -> i32 {
+    max_magnitude(weights::DOUBLED_PENALTY)
+        + max_magnitude(weights::ISOLATED_PENALTY)
+        + max_magnitude(weights::PASSED_BONUS)
+}
+
+/// The most king safety can be worth, for both kings together.
+///
+/// The king zone is three files wide whatever else is on the board, and the
+/// storm cone is those three files by `STORM_RANGE` ranks, so this is a fixed
+/// amount rather than one scaling with material.
+fn king_safety_bound() -> i32 {
+    const ZONE_FILES: i32 = 3;
+    let per_king = ZONE_FILES * max_magnitude(weights::SHELTER_PENALTY)
+        + ZONE_FILES * max_magnitude(weights::OPEN_FILE_PENALTY)
+        + ZONE_FILES * i32::from(weights::STORM_RANGE) * max_magnitude(weights::STORM_PENALTY);
+    2 * per_king
+}
 proptest! {
     #[test]
     fn eval_white_pov_matches_naive_reference(board in any_board()) {
@@ -420,24 +462,23 @@ proptest! {
     }
 
     // A loose sanity bound rather than a tight one, but a real structural
-    // guarantee, not an arbitrary number: each pawn can contribute at most
-    // one `DOUBLED_PENALTY` (eg magnitude 20), one `ISOLATED_PENALTY` (10),
-    // and one `PASSED_BONUS` (20) to its own side's total, and
-    // `interpolate` can never blend a result outside the span of the `mg`
-    // and `eg` totals it's given (`tests/eval_props.rs`'s sibling property
-    // in `eval::phase`'s own test module establishes that). So the total
-    // pawn-structure swing, combined across both colors, is bounded by 50
-    // centipawns per pawn on the board, not merely "some bound found
-    // empirically." A doubled- or isolated-counting bug that scales with
-    // the number of *pairs* of pawns rather than the number of pawns
-    // (quadratic instead of linear) blows past this bound as soon as a
-    // board has more than a handful of pawns, which `any_board()`
-    // regularly generates.
+    // guarantee, not an arbitrary number: each pawn can contribute at most one
+    // doubled penalty, one isolated penalty, and one passed bonus to its own
+    // side's total, and `interpolate` can never blend a result outside the
+    // span of the `mg` and `eg` totals it is given (`eval::phase`'s own test
+    // module establishes that). `pawn_structure_bound_per_pawn` sums those
+    // three from `eval::weights`, so the bound tracks a retune instead of
+    // going stale and being widened the next time it fails.
+    //
+    // What it catches: a doubled- or isolated-counting bug that scales with
+    // the number of *pairs* of pawns rather than the number of pawns, which
+    // blows past a linear bound as soon as a board has more than a handful,
+    // and `any_board()` generates those regularly.
     #[test]
     fn pawn_structure_contribution_is_bounded_by_pawn_count(board in any_board()) {
         let deviation = i32::from(eval_white_pov(&board))
-            - i32::from(naive_material_pst_and_king_safety_white_pov(&board));
-        let bound = 50 * total_pawn_count(&board);
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::PawnStructure));
+        let bound = pawn_structure_bound_per_pawn() * total_pawn_count(&board);
         prop_assert!(
             deviation.abs() <= bound,
             "pawn-structure deviation {deviation} exceeds the {bound}-centipawn bound for {} pawns",
@@ -446,20 +487,16 @@ proptest! {
     }
 
     // The same discipline as `pawn_structure_contribution_is_bounded_by_pawn_count`,
-    // but a fixed bound rather than one scaled by pawn count: king safety's
-    // zone is capped at 3 files regardless of how many pawns are on the
-    // board, so its maximum contribution per king is a fixed constant, not
-    // a linear function of piece count. Per king: 3 files x
-    // `SHELTER_PENALTY` (15) + 3 files x `OPEN_FILE_PENALTY` (25) + 9
-    // storm-cone squares x `STORM_PENALTY` (10) = 210. Every term here is
-    // `mg`-only, and `interpolate` never blends outside the span of `mg`
-    // and `eg` it's given, so 210 bounds the blended contribution too, not
-    // just the raw `mg` sum. Doubled for two kings.
+    // but a fixed bound rather than one scaled by pawn count: the king zone is
+    // three files wide whatever else is on the board, so king safety's maximum
+    // contribution is a constant rather than a function of material.
+    // `king_safety_bound` derives it from `eval::weights` for the same reason
+    // the pawn-structure bound is derived.
     #[test]
     fn king_safety_contribution_is_bounded_by_a_fixed_amount(board in any_board()) {
         let deviation = i32::from(eval_white_pov(&board))
-            - i32::from(naive_material_pst_and_pawn_structure_white_pov(&board));
-        let bound = 2 * (3 * 15 + 3 * 25 + 9 * 10);
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::KingSafety));
+        let bound = king_safety_bound();
         prop_assert!(
             deviation.abs() <= bound,
             "king-safety deviation {deviation} exceeds the {bound}-centipawn bound"

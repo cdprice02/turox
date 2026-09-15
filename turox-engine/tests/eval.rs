@@ -11,7 +11,7 @@ mod common;
 use common::mirrored;
 use turox_engine::board::Board;
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
-use turox_engine::eval::{eval_white_pov, evaluate, Score};
+use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
 use turox_engine::{Color, Piece, Square};
 
 // Not just an empirical check: `eval_white_pov_is_mirror_antisymmetric` (in
@@ -54,11 +54,24 @@ fn white_up_a_rook_scores_exactly_rook_value() {
 // 10 net pawn-structure eg.
 #[test]
 fn a_central_pawn_push_changes_pst_but_not_material() {
+    // Spelled as the sum rather than as its total: a retune then moves the
+    // expectation with the weights instead of leaving a literal that has to be
+    // recomputed by hand, and the arithmetic in a trailing comment silently
+    // disagreeing with the assertion beside it is how that goes wrong.
+    let material = weights::PIECE_VALUES[Piece::Pawn.index()];
+    let structure_eg = weights::ISOLATED_PENALTY.1 + weights::PASSED_BONUS.1;
+
     let before = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&before), 90); // 100 material + (0 + -20) PST + 10 pawn structure (eg)
+    assert_eq!(
+        eval_white_pov(&before),
+        material + pst_value_eg(Color::White, Piece::Pawn, Square::D2) + structure_eg
+    );
 
     let after = Board::try_from_fen("4k3/8/8/8/3P4/8/8/4K3 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&after), 130); // 100 material + (0 + 20) PST + 10 pawn structure (eg)
+    assert_eq!(
+        eval_white_pov(&after),
+        material + pst_value_eg(Color::White, Piece::Pawn, Square::D4) + structure_eg
+    );
 }
 
 // ---- PST orientation anchors ----
@@ -132,13 +145,12 @@ fn centralization_preference_is_smaller_with_full_material_than_with_low_materia
 // midgame-only sum, with no endgame contribution blended in at all.
 #[test]
 fn full_phase_material_total_matches_pure_midgame_sum() {
-    const MATERIAL: [Score; 6] = [100, 320, 330, 500, 900, 0];
-
     let board = Board::try_from_fen("bbrrqk2/8/8/8/8/8/QK6/NNNNBBRR w - - 0 1").expect("valid FEN");
     let mut expected: Score = 0;
     for sq in Square::ALL {
         if let Some(cp) = board.piece_at(sq) {
-            let value = MATERIAL[cp.piece().index()] + pst_value(cp.color(), cp.piece(), sq);
+            let value =
+                weights::PIECE_VALUES[cp.piece().index()] + pst_value(cp.color(), cp.piece(), sq);
             expected += match cp.color() {
                 Color::White => value,
                 Color::Black => -value,
@@ -197,7 +209,18 @@ fn one_doubled_pawn_scores_material_plus_pst_minus_one_doubled_penalty() {
     let one_pawn = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");
     let two_pawns = Board::try_from_fen("4k3/8/8/8/3P4/8/3P4/4K3 w - - 0 1").expect("valid FEN");
 
-    assert_eq!(eval_white_pov(&two_pawns) - eval_white_pov(&one_pawn), 110);
+    // The new d4 pawn's own material and PST, its own isolated penalty (c and
+    // e stay empty in both), its own passed bonus (no Black pawn anywhere),
+    // and the one doubled penalty it creates. Endgame throughout, so the eg
+    // half of each tapered weight is the one that lands.
+    assert_eq!(
+        eval_white_pov(&two_pawns) - eval_white_pov(&one_pawn),
+        weights::PIECE_VALUES[Piece::Pawn.index()]
+            + pst_value_eg(Color::White, Piece::Pawn, Square::D4)
+            + weights::ISOLATED_PENALTY.1
+            + weights::PASSED_BONUS.1
+            + weights::DOUBLED_PENALTY.1
+    );
 }
 
 // The case that catches counting doubled pawns as "N per file" instead of
@@ -244,7 +267,15 @@ fn adding_an_adjacent_pawn_removes_the_isolated_penalty() {
     let isolated = Board::try_from_fen("4k3/8/8/3p4/3P4/8/8/4K3 w - - 0 1").expect("valid FEN");
     let supported = Board::try_from_fen("4k3/8/8/3p4/2PP4/8/8/4K3 w - - 0 1").expect("valid FEN");
 
-    assert_eq!(eval_white_pov(&supported) - eval_white_pov(&isolated), 110);
+    // The new c4 pawn's own material and PST, plus the isolated penalty d4 no
+    // longer pays now that it has a neighbour. Subtracting the penalty is what
+    // removing it means, which is why this term is a minus.
+    assert_eq!(
+        eval_white_pov(&supported) - eval_white_pov(&isolated),
+        weights::PIECE_VALUES[Piece::Pawn.index()]
+            + pst_value_eg(Color::White, Piece::Pawn, Square::C4)
+            - weights::ISOLATED_PENALTY.1
+    );
 }
 
 // A lone White d5 pawn with a completely clear path to promotion (no
@@ -265,7 +296,18 @@ fn a_lone_passed_pawn_loses_its_bonus_once_blocked_on_its_own_file() {
     let clear_path = Board::try_from_fen("4k3/8/8/3P4/8/8/8/4K3 w - - 0 1").expect("valid FEN");
     let blocked = Board::try_from_fen("4k3/3p4/8/3P4/8/8/8/4K3 w - - 0 1").expect("valid FEN");
 
-    assert_eq!(eval_white_pov(&clear_path) - eval_white_pov(&blocked), 90);
+    // Two independent things disappear when Black's d7 pawn shows up: White's
+    // own passed bonus, and the whole value that pawn brings to Black's side,
+    // which is subtracted from White's POV and so raises White's total by its
+    // absence. Black's d7 is itself isolated and not passed, blocked by
+    // White's d5.
+    let black_d7 = weights::PIECE_VALUES[Piece::Pawn.index()]
+        + pst_value_eg(Color::Black, Piece::Pawn, Square::D7)
+        + weights::ISOLATED_PENALTY.1;
+    assert_eq!(
+        eval_white_pov(&clear_path) - eval_white_pov(&blocked),
+        weights::PASSED_BONUS.1 + black_d7
+    );
 }
 
 // The same clear-path d5 pawn, but blocked by a Black pawn on e6 instead
@@ -309,7 +351,17 @@ fn black_passed_pawn_direction_mirrors_white_not_the_other_way_around() {
     let clear_path = Board::try_from_fen("4k3/8/8/8/3p4/8/8/4K3 w - - 0 1").expect("valid FEN");
     let blocked = Board::try_from_fen("4k3/8/8/8/3p4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
 
-    assert_eq!(eval_white_pov(&blocked) - eval_white_pov(&clear_path), 110);
+    // White's new e3 pawn adds its own material, PST and isolated penalty to
+    // White's POV directly, and is not passed itself, blocked by Black's d4.
+    // Black losing its passed bonus raises White's POV by that much again,
+    // since Black's total is subtracted.
+    let white_e3 = weights::PIECE_VALUES[Piece::Pawn.index()]
+        + pst_value_eg(Color::White, Piece::Pawn, Square::E3)
+        + weights::ISOLATED_PENALTY.1;
+    assert_eq!(
+        eval_white_pov(&blocked) - eval_white_pov(&clear_path),
+        white_e3 + weights::PASSED_BONUS.1
+    );
 }
 
 // ---- King safety ----
