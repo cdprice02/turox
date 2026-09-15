@@ -398,7 +398,7 @@ fn go_emits_a_cutoff_stats_info_string_before_bestmove() {
         "quiescence",
         "fail_high=",
         "first_move_rate=",
-        "killers=",
+        "cause=",
         "index=",
     ] {
         assert!(
@@ -406,6 +406,14 @@ fn go_emits_a_cutoff_stats_info_string_before_bestmove() {
             "info string is missing {field:?}: {info_string:?}"
         );
     }
+    for cause in ["HashMove=", "Killer=", "Other="] {
+        assert!(
+            info_string.contains(cause),
+            "info string names no {cause:?} count, so a cutoff cause is being collected \
+             and not reported: {info_string:?}"
+        );
+    }
+
     assert!(
         info_string_index < bestmove_index,
         "the cutoff-stats info string must arrive before bestmove, output: {output:?}"

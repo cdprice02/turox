@@ -22,7 +22,7 @@
 use crate::board::Board;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
-use crate::search::{CutoffStats, Search, SearchResult};
+use crate::search::{CutoffCause, CutoffStats, Search, SearchResult};
 use crate::types::Color;
 use crate::uci::{self, Command, GoOptions, Response};
 use std::io::{BufRead, Write};
@@ -193,12 +193,15 @@ fn cutoff_info_string(result: &SearchResult) -> Response {
     ))
 }
 
-/// `fail_high=<n> first_move_rate=<pct>% killers=<n> index=<histogram>` for
+/// `fail_high=<n> first_move_rate=<pct>% cause=<counts> index=<histogram>` for
 /// one `CutoffStats`. `first_move_rate` is 0% on a stats with no cutoffs at
 /// all (rather than dividing by zero) since there's nothing to rate yet, not
-/// because ordering failed. `killers` is `killer_cutoffs`: the pre-SPRT
-/// sanity check that the killer table is actually being consulted, not just
-/// populated; see that field's own doc.
+/// because ordering failed.
+///
+/// `cause` is the pre-SPRT sanity check that each ordering technique is
+/// actually being consulted and not merely populated. Printed in
+/// `CutoffCause::ALL` order and labelled, so adding a technique changes what
+/// this line says without changing how it is read.
 fn cutoff_summary(stats: &CutoffStats) -> String {
     let first_move_rate = if stats.fail_high_nodes == 0 {
         0.0
@@ -212,9 +215,14 @@ fn cutoff_summary(stats: &CutoffStats) -> String {
         let rate = 100.0 * stats.cutoff_index[0] as f64 / stats.fail_high_nodes as f64;
         rate
     };
+    let causes = CutoffCause::ALL
+        .iter()
+        .map(|cause| format!("{cause:?}={}", stats.by_cause[cause.index()]))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "fail_high={} first_move_rate={first_move_rate:.1}% killers={} index={:?}",
-        stats.fail_high_nodes, stats.killer_cutoffs, stats.cutoff_index
+        "fail_high={} first_move_rate={first_move_rate:.1}% cause={causes} index={:?}",
+        stats.fail_high_nodes, stats.cutoff_index
     )
 }
 

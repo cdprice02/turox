@@ -177,6 +177,18 @@ proptest! {
             result.quiescence_cutoffs.cutoff_index.iter().sum::<u64>(),
             result.quiescence_cutoffs.fail_high_nodes
         );
+        // The cause histogram carries the same invariant, and it is the one
+        // that can break silently: every cutoff lands in exactly one cause, so
+        // a new technique whose classification misses a case shows up here as
+        // a total that no longer reconciles.
+        prop_assert_eq!(
+            result.negamax_cutoffs.by_cause.iter().sum::<u64>(),
+            result.negamax_cutoffs.fail_high_nodes
+        );
+        prop_assert_eq!(
+            result.quiescence_cutoffs.by_cause.iter().sum::<u64>(),
+            result.quiescence_cutoffs.fail_high_nodes
+        );
     }
 }
 

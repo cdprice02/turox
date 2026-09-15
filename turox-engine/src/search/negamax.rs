@@ -107,6 +107,42 @@ pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 /// that would need less than half the typical growth factor to fit.
 const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
+/// What produced a beta cutoff, for [`CutoffStats::by_cause`].
+///
+/// About *why the move was tried early*, not what kind of move it is: a capture
+/// that cuts off because the transposition table named it is a hash hit, not a
+/// capture hit. The question this answers is which ordering technique is
+/// earning its place.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CutoffCause {
+    /// The transposition table's stored move for this position.
+    HashMove,
+    /// A quiet move already sitting in a killer slot for this ply.
+    Killer,
+    /// Anything else: ordinary move ordering got there without a technique
+    /// tracked here claiming credit.
+    Other,
+}
+
+impl CutoffCause {
+    /// Every variant, so a reader can total the histogram without knowing how
+    /// many there are.
+    pub const ALL: [Self; 3] = [Self::HashMove, Self::Killer, Self::Other];
+
+    /// How many variants there are, which is [`CutoffStats::by_cause`]'s width.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// This cause's slot in [`CutoffStats::by_cause`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::HashMove => 0,
+            Self::Killer => 1,
+            Self::Other => 2,
+        }
+    }
+}
+
 /// Which move index took a beta cutoff, the standard diagnostic for move-ordering quality.
 ///
 /// A well-ordered search takes most of its cutoffs on the first move tried (index 0),
@@ -115,13 +151,17 @@ const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 pub struct CutoffStats {
     /// Nodes whose move loop hit a beta cutoff (`alpha >= beta`) at all.
     pub fail_high_nodes: u64,
-    /// Of those, how many were caused by a move already sitting in a killer
-    /// slot for that ply: how often the killer table's own prediction was
-    /// the one that paid off, as distinct from `fail_high_nodes`/
-    /// `cutoff_index`, which measure move-ordering quality overall and say
-    /// nothing about whether this specific table is the thing doing the
-    /// work.
-    pub killer_cutoffs: u64,
+    /// Cutoffs per [`CutoffCause`], indexed by [`CutoffCause::index`].
+    ///
+    /// Answers which ordering technique actually paid off, as distinct from
+    /// `fail_high_nodes` and `cutoff_index`, which measure ordering quality
+    /// overall and say nothing about what produced it. Summing this always
+    /// equals `fail_high_nodes`, the same invariant `cutoff_index` has.
+    ///
+    /// An array keyed by an enum rather than a counter field per technique:
+    /// each new ordering technique that wants its own hit rate adds a variant,
+    /// not a field here plus another `bool` parameter on `record`.
+    pub by_cause: [u64; CutoffCause::COUNT],
     /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
     /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
     /// make this array itself unbounded; summing the whole array always equals
@@ -131,15 +171,11 @@ pub struct CutoffStats {
 
 impl CutoffStats {
     /// Records a cutoff at `index` (0-based position in the already-ordered
-    /// move list). `is_killer_hit` is whether the cutoff move was already
-    /// sitting in a killer slot for this ply before the cutoff; see
-    /// `killer_cutoffs`.
-    fn record(&mut self, index: usize, is_killer_hit: bool) {
+    /// move list), attributed to `cause`.
+    fn record(&mut self, index: usize, cause: CutoffCause) {
         self.fail_high_nodes += 1;
         self.cutoff_index[index.min(15)] += 1;
-        if is_killer_hit {
-            self.killer_cutoffs += 1;
-        }
+        self.by_cause[cause.index()] += 1;
     }
 }
 
@@ -266,6 +302,12 @@ struct LoopCtx {
     initial_max: Score,
     /// Which histogram this loop's cutoffs belong to.
     sink: CutoffSink,
+    /// The transposition table's move for this node, if it had one.
+    ///
+    /// Only used to attribute a cutoff to [`CutoffCause::HashMove`], which is
+    /// why it is compared once on the cutoff path rather than per move.
+    /// Quiescence has no such move and passes `None`.
+    tt_move: Option<Move>,
 }
 
 /// What one [`Search::alpha_beta_loop`] call produced.
@@ -504,7 +546,7 @@ impl<'a> Search<'a> {
     /// Called whenever a move causes a beta cutoff, so the killer table can
     /// learn from it. Returns whether `m` was already sitting in one of this
     /// ply's killer slots *before* this call, which is what
-    /// `CutoffStats::killer_cutoffs` wants to know.
+    /// `CutoffStats::by_cause` wants to know for `CutoffCause::Killer`.
     ///
     /// A no-op for anything that isn't a plain quiet move: captures and
     /// promotions are already ordered by MVV-LVA/material gain, so recording
@@ -690,6 +732,7 @@ impl<'a> Search<'a> {
             beta,
             initial_max,
             sink,
+            tt_move,
         } = ctx;
 
         let mut max = initial_max;
@@ -715,9 +758,19 @@ impl<'a> Search<'a> {
             }
             if alpha >= beta {
                 let is_killer_hit = self.note_cutoff_move(ply, m);
+                // Hash first: a stored move that is also a killer was tried
+                // early because the table named it, so crediting the killer
+                // table would overstate what it is doing.
+                let cause = if tt_move == Some(m) {
+                    CutoffCause::HashMove
+                } else if is_killer_hit {
+                    CutoffCause::Killer
+                } else {
+                    CutoffCause::Other
+                };
                 match sink {
-                    CutoffSink::Negamax => self.negamax_cutoffs.record(i, is_killer_hit),
-                    CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, is_killer_hit),
+                    CutoffSink::Negamax => self.negamax_cutoffs.record(i, cause),
+                    CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, cause),
                 }
                 break;
             }
@@ -786,6 +839,7 @@ impl<'a> Search<'a> {
                 beta,
                 initial_max: Score::MIN,
                 sink: CutoffSink::Negamax,
+                tt_move: None,
             },
             |s, m, a, b| {
                 s.history.push(board.hash());
@@ -893,6 +947,7 @@ impl<'a> Search<'a> {
                 beta,
                 initial_max: Score::MIN,
                 sink: CutoffSink::Negamax,
+                tt_move,
             },
             |s, m, a, b| {
                 s.history.push(board.hash());
@@ -994,6 +1049,7 @@ impl<'a> Search<'a> {
                     beta,
                     initial_max: Score::MIN,
                     sink: CutoffSink::Quiescence,
+                    tt_move: None,
                 },
                 |s, m, a, b| {
                     let child = board.make_move(m);
@@ -1032,6 +1088,7 @@ impl<'a> Search<'a> {
                 beta,
                 initial_max: stand_pat,
                 sink: CutoffSink::Quiescence,
+                tt_move: None,
             },
             |s, m, a, b| {
                 let child = board.make_move(m);

@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use turox_engine::board::Board;
 use turox_engine::move_gen::legal::legal_moves;
-use turox_engine::search::{is_mate_score, Search, MATE, MAX_QUIESCENCE_DEPTH};
+use turox_engine::search::{is_mate_score, CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
 use turox_engine::{Move, Square};
 
 // ---- Concrete mate puzzles ----
@@ -669,7 +669,7 @@ fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
 
 // ---- Killer-move instrumentation ----
 
-/// `killer_cutoffs` on `CutoffStats` is the pre-SPRT sanity check that the
+/// `CutoffStats`'s `Killer` cause count is the pre-SPRT sanity check that the
 /// killer table is actually being consulted from inside a real search, not
 /// just correct in isolation: it's entirely possible for the table to be
 /// wired up, populated, and never once actually looked at by a live move
@@ -695,7 +695,7 @@ fn killer_table_is_consulted_during_a_real_search() {
     let result = Search::new(Vec::new()).search(&board, 6);
 
     assert!(
-        result.negamax_cutoffs.killer_cutoffs > 0,
+        result.negamax_cutoffs.by_cause[CutoffCause::Killer.index()] > 0,
         "a depth-6 search of a position this open must cause at least one beta cutoff \
          on a move that was already sitting in a killer slot, or the table isn't being \
          consulted from the real move loop"
