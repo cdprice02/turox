@@ -21,6 +21,7 @@ mod king_safety;
 mod pawn_structure;
 mod phase;
 pub mod pst;
+pub mod weights;
 
 /// A position score in centipawns. Positive favors whoever the score is
 /// relative to: White for `eval_white_pov`, the side to move for `evaluate`.
@@ -45,7 +46,7 @@ pub type Score = i16;
 /// `pub(crate)` rather than private: `search`'s MVV-LVA move ordering reuses
 /// this same value scale for ranking captures, rather than maintaining a
 /// second table that could drift out of sync with this one.
-pub(crate) const PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
+pub(crate) use weights::PIECE_VALUES;
 
 /// Material, piece-square, and pawn-structure sum from White's
 /// perspective: positive means White is ahead, regardless of who's

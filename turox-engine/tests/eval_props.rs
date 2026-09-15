@@ -38,53 +38,50 @@ use common::{any_board, mirrored};
 use proptest::prelude::*;
 use turox_engine::board::Board;
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
-use turox_engine::eval::{eval_white_pov, evaluate, Score};
+use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
 use turox_engine::{Color, Piece, Square};
 
 // ---- Independent reference ----
+//
+// Independent in the way that matters: every function below walks
+// `board.piece_at` square by square and recomputes the term from scratch,
+// sharing none of the bitboard tricks, file masks, or packed accumulator the
+// real implementation uses. That walk is the thing being checked.
+//
+// The magnitudes are *not* independent, deliberately. They are imported from
+// `eval::weights`, the same place the implementation reads them. A tuned
+// constant has no independent truth to check against, so a second copy only
+// ever tested that the two copies matched, and made every retune a two-place
+// edit that failed loudly when someone updated one. What the tables and
+// weights themselves are worth is pinned separately, by structure rather than
+// by transcription; see `tests/eval.rs`.
 
-/// Hardcoded independently of `eval::PIECE_VALUES` (which is private
-/// anyway): a mailbox walk summing the same spec values `eval_white_pov`
-/// documents itself against, not a call into the module under test.
-const NAIVE_PIECE_VALUES: [Score; 6] = [100, 320, 330, 500, 900, 0];
-
-/// Independent of `eval::phase::PHASE_WEIGHT`/`TOTAL_PHASE`: the same
-/// standard tapered-eval weighting, transcribed again here rather than
-/// shared, for the same reason `NAIVE_PIECE_VALUES` isn't shared either.
-const NAIVE_PHASE_WEIGHT: [i32; 6] = [0, 1, 1, 2, 4, 0];
-const NAIVE_TOTAL_PHASE: i32 = 24;
-
-/// Independent of `eval::pawn_structure`'s own constants (`pawn_structure`
-/// is private to `eval`, unreachable from this integration-test crate
-/// anyway): the same `(mg, eg)` values, transcribed again here for the
-/// same reason `NAIVE_PIECE_VALUES` isn't shared either.
-const NAIVE_DOUBLED_PENALTY: (i32, i32) = (-10, -20);
-const NAIVE_ISOLATED_PENALTY: (i32, i32) = (-10, -10);
-const NAIVE_PASSED_BONUS: (i32, i32) = (10, 20);
-
-/// Independent of `eval::king_safety`'s own constants (also private to
-/// `eval`), for the same reason as the pawn-structure constants above.
-const NAIVE_SHELTER_PENALTY: i32 = -15;
-const NAIVE_OPEN_FILE_PENALTY: i32 = -25;
-const NAIVE_STORM_PENALTY: i32 = -10;
-const NAIVE_STORM_RANGE: usize = 3;
+/// The mg/eg halves as plain `i32`, which is what the naive walks accumulate
+/// in. `eval::weights` stores them as `(Score, Score)` because that is what
+/// the implementation packs from.
+fn mg_eg(w: (Score, Score)) -> (i32, i32) {
+    (i32::from(w.0), i32::from(w.1))
+}
 
 /// Mailbox walk over `board.piece_at`, reproducing `eval::phase::game_phase`
-/// without calling it: sums `NAIVE_PHASE_WEIGHT` for every non-pawn,
-/// non-king piece found, subtracts from `NAIVE_TOTAL_PHASE`, clamps to
-/// non-negative (`any_board()` can place more non-pawn material than
-/// `NAIVE_TOTAL_PHASE` accounts for), and scales to `0..=256`.
+/// without calling it: sums `weights::PHASE_WEIGHT` for every non-pawn,
+/// non-king piece found, subtracts that from `weights::TOTAL_PHASE`, clamps
+/// to non-negative (`any_board()` can place more non-pawn material than a
+/// real game has, which `TOTAL_PHASE` does not account for), and scales the
+/// result to `0..=256`.
 fn naive_game_phase(board: &Board) -> i32 {
-    let mut phase = NAIVE_TOTAL_PHASE;
+    let mut phase = i32::try_from(weights::TOTAL_PHASE).expect("24 fits i32");
     for sq in Square::ALL {
         if let Some(cp) = board.piece_at(sq) {
             if !matches!(cp.piece(), Piece::Pawn | Piece::King) {
-                phase -= NAIVE_PHASE_WEIGHT[cp.piece().index()];
+                phase -= i32::try_from(weights::PHASE_WEIGHT[cp.piece().index()])
+                    .expect("phase weights are small");
             }
         }
     }
     let phase = phase.max(0);
-    (phase * 256 + NAIVE_TOTAL_PHASE / 2) / NAIVE_TOTAL_PHASE
+    (phase * 256 + i32::try_from(weights::TOTAL_PHASE).expect("24 fits i32") / 2)
+        / i32::try_from(weights::TOTAL_PHASE).expect("24 fits i32")
 }
 
 /// Sums a midgame and an endgame total independently (no packed
@@ -100,7 +97,7 @@ fn naive_material_and_pst_mg_eg(board: &Board) -> (i32, i32) {
     let mut eg: i32 = 0;
     for sq in Square::ALL {
         if let Some(cp) = board.piece_at(sq) {
-            let material = i32::from(NAIVE_PIECE_VALUES[cp.piece().index()]);
+            let material = i32::from(weights::PIECE_VALUES[cp.piece().index()]);
             let mg_positional = i32::from(pst_value(cp.color(), cp.piece(), sq));
             let eg_positional = i32::from(pst_value_eg(cp.color(), cp.piece(), sq));
             let sign = match cp.color() {
@@ -145,8 +142,8 @@ fn naive_pawn_structure_mg_eg(board: &Board, color: Color) -> (i32, i32) {
     for &count in &file_counts {
         if count >= 2 {
             let doubled = i32::try_from(count - 1).expect("a file holds at most 8 pawns");
-            mg += doubled * NAIVE_DOUBLED_PENALTY.0;
-            eg += doubled * NAIVE_DOUBLED_PENALTY.1;
+            mg += doubled * mg_eg(weights::DOUBLED_PENALTY).0;
+            eg += doubled * mg_eg(weights::DOUBLED_PENALTY).1;
         }
     }
 
@@ -155,8 +152,8 @@ fn naive_pawn_structure_mg_eg(board: &Board, color: Color) -> (i32, i32) {
         let west_occupied = file.checked_sub(1).is_some_and(|f| file_counts[f] > 0);
         let east_occupied = file_counts.get(file + 1).is_some_and(|&c| c > 0);
         if !west_occupied && !east_occupied {
-            mg += NAIVE_ISOLATED_PENALTY.0;
-            eg += NAIVE_ISOLATED_PENALTY.1;
+            mg += mg_eg(weights::ISOLATED_PENALTY).0;
+            eg += mg_eg(weights::ISOLATED_PENALTY).1;
         }
 
         let blocked = Square::ALL.into_iter().any(|other| {
@@ -177,8 +174,8 @@ fn naive_pawn_structure_mg_eg(board: &Board, color: Color) -> (i32, i32) {
             }
         });
         if !blocked {
-            mg += NAIVE_PASSED_BONUS.0;
-            eg += NAIVE_PASSED_BONUS.1;
+            mg += mg_eg(weights::PASSED_BONUS).0;
+            eg += mg_eg(weights::PASSED_BONUS).1;
         }
     }
 
@@ -231,10 +228,10 @@ fn naive_king_safety_mg_eg(board: &Board, color: Color) -> (i32, i32) {
     let mut mg = 0i32;
     for &file in &zone_files {
         if !own_pawn_files[file] {
-            mg += NAIVE_SHELTER_PENALTY;
+            mg += i32::from(weights::SHELTER_PENALTY.0);
         }
         if !own_pawn_files[file] && !enemy_pawn_files[file] {
-            mg += NAIVE_OPEN_FILE_PENALTY;
+            mg += i32::from(weights::OPEN_FILE_PENALTY.0);
         }
     }
 
@@ -254,9 +251,10 @@ fn naive_king_safety_mg_eg(board: &Board, color: Color) -> (i32, i32) {
             Color::White => sq_rank - king_rank,
             Color::Black => king_rank - sq_rank,
         };
-        let storm_range = i32::try_from(NAIVE_STORM_RANGE).expect("STORM_RANGE fits i32");
+        let storm_range =
+            i32::try_from(usize::from(weights::STORM_RANGE)).expect("STORM_RANGE fits i32");
         if (1..=storm_range).contains(&ranks_ahead) {
-            mg += NAIVE_STORM_PENALTY;
+            mg += i32::from(weights::STORM_PENALTY.0);
         }
     }
 
