@@ -21,6 +21,7 @@ use std::cmp::Reverse;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use turox_macros::Ordinal;
 
 /// The score magnitude of a certain checkmate.
 ///
@@ -42,13 +43,19 @@ pub const MATE: Score = 30_000;
 /// margin only has to separate the two ranges, not be tight.
 pub const MAX_MATE_PLY: Score = 512;
 
-/// Ply bound for the killer table: same "comfortably above any ply a real
-/// search reaches" reasoning as [`MAX_MATE_PLY`], kept as its own constant
-/// rather than reusing that one directly since the two bound unrelated
-/// things and a future change to one shouldn't silently resize the other.
-/// A ply past this saturates to the last slot instead of indexing out of
-/// bounds; see `Search::killer_slots`.
-const MAX_KILLER_PLY: usize = 512;
+/// Ply bound for every per-ply side table `Search` keeps: the killers, the
+/// hash move, and whatever the queued ordering techniques add next.
+///
+/// Same "comfortably above any ply a real search reaches" reasoning as
+/// [`MAX_MATE_PLY`], kept as its own constant rather than reusing that one
+/// since the two bound unrelated things and a future change to one shouldn't
+/// silently resize the other. A ply past this saturates to the last slot
+/// instead of indexing out of bounds; see `Search::killer_slots`.
+///
+/// One bound for all of them on purpose: they are indexed by the same ply in
+/// the same loops, so letting them disagree would mean a ply that saturates in
+/// one table and not another, which is a difference nothing would report.
+const MAX_TRACKED_PLY: usize = 512;
 
 /// Killer slots per ply: the single place that number is spelled out, so
 /// every array shaped by it (`Search::killers`, `move_priority`'s and
@@ -107,6 +114,24 @@ pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 /// that would need less than half the typical growth factor to fit.
 const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
+/// What produced a beta cutoff, for [`CutoffStats::by_cause`].
+///
+/// About *why the move was tried early*, not what kind of move it is: a capture
+/// that cuts off because the transposition table named it is a hash hit, not a
+/// capture hit. The question this answers is which ordering technique is
+/// earning its place.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Ordinal)]
+#[repr(u8)]
+pub enum CutoffCause {
+    /// The transposition table's stored move for this position.
+    HashMove,
+    /// A quiet move already sitting in a killer slot for this ply.
+    Killer,
+    /// Anything else: ordinary move ordering got there without a technique
+    /// tracked here claiming credit.
+    Other,
+}
+
 /// Which move index took a beta cutoff, the standard diagnostic for move-ordering quality.
 ///
 /// A well-ordered search takes most of its cutoffs on the first move tried (index 0),
@@ -115,13 +140,17 @@ const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 pub struct CutoffStats {
     /// Nodes whose move loop hit a beta cutoff (`alpha >= beta`) at all.
     pub fail_high_nodes: u64,
-    /// Of those, how many were caused by a move already sitting in a killer
-    /// slot for that ply: how often the killer table's own prediction was
-    /// the one that paid off, as distinct from `fail_high_nodes`/
-    /// `cutoff_index`, which measure move-ordering quality overall and say
-    /// nothing about whether this specific table is the thing doing the
-    /// work.
-    pub killer_cutoffs: u64,
+    /// Cutoffs per [`CutoffCause`], indexed by [`CutoffCause::index`].
+    ///
+    /// Answers which ordering technique actually paid off, as distinct from
+    /// `fail_high_nodes` and `cutoff_index`, which measure ordering quality
+    /// overall and say nothing about what produced it. Summing this always
+    /// equals `fail_high_nodes`, the same invariant `cutoff_index` has.
+    ///
+    /// An array keyed by an enum rather than a counter field per technique:
+    /// each new ordering technique that wants its own hit rate adds a variant,
+    /// not a field here plus another `bool` parameter on `record`.
+    pub by_cause: [u64; CutoffCause::ALL.len()],
     /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
     /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
     /// make this array itself unbounded; summing the whole array always equals
@@ -131,15 +160,11 @@ pub struct CutoffStats {
 
 impl CutoffStats {
     /// Records a cutoff at `index` (0-based position in the already-ordered
-    /// move list). `is_killer_hit` is whether the cutoff move was already
-    /// sitting in a killer slot for this ply before the cutoff; see
-    /// `killer_cutoffs`.
-    fn record(&mut self, index: usize, is_killer_hit: bool) {
+    /// move list), attributed to `cause`.
+    fn record(&mut self, index: usize, cause: CutoffCause) {
         self.fail_high_nodes += 1;
         self.cutoff_index[index.min(15)] += 1;
-        if is_killer_hit {
-            self.killer_cutoffs += 1;
-        }
+        self.by_cause[cause.index()] += 1;
     }
 }
 
@@ -342,7 +367,21 @@ pub struct Search<'a> {
     /// between iterative-deepening iterations within one `go`: those share
     /// the same tree, just re-explored at increasing depth, so a killer
     /// found at iteration 3 is still valid information for iteration 4.
-    killers: [[Option<Move>; KILLER_SLOTS]; MAX_KILLER_PLY],
+    killers: [[Option<Move>; KILLER_SLOTS]; MAX_TRACKED_PLY],
+    /// The move this ply's move loop ordered by, if any: the transposition
+    /// table's move for the position being searched there.
+    ///
+    /// Per ply for the same reason `killers` is, and clamped the same way: one
+    /// position is being searched at each ply at a time, so a ply's slot is
+    /// only ever about its own node, and a child writing its own slot cannot
+    /// disturb an ancestor's.
+    ///
+    /// It holds what the loop *ordered by*, not what the table knows. Those
+    /// differ: quiescence never orders by a hash move even where the table has
+    /// one, so it writes `None` and its cutoffs are never attributed to the
+    /// table. Attribution has to follow the ordering, or it credits a technique
+    /// that did not put the move first.
+    hash_moves: [Option<Move>; MAX_TRACKED_PLY],
     /// xorshift64* state when root move randomization is on, `None` when it is
     /// off (the default, so every existing test and bench stays deterministic
     /// without knowing this exists).
@@ -374,7 +413,8 @@ impl<'a> Search<'a> {
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
-            killers: [[None; KILLER_SLOTS]; MAX_KILLER_PLY],
+            killers: [[None; KILLER_SLOTS]; MAX_TRACKED_PLY],
+            hash_moves: [None; MAX_TRACKED_PLY],
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
@@ -493,31 +533,68 @@ impl<'a> Search<'a> {
                 || self.max_nodes.is_some_and(|max| self.nodes >= max))
     }
 
-    /// This ply's two killer slots, clamped to `MAX_KILLER_PLY - 1` so a
+    /// This ply's two killer slots, clamped to `MAX_TRACKED_PLY - 1` so a
     /// `ply` past the table's bound (only reachable through quiescence's
     /// uncapped in-check evasion recursion; see that function's own doc)
     /// reads the last slot instead of panicking.
     fn killer_slots(&self, ply: u8) -> [Option<Move>; KILLER_SLOTS] {
-        self.killers[usize::from(ply).min(MAX_KILLER_PLY - 1)]
+        self.killers[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
-    /// Called whenever a move causes a beta cutoff, so the killer table can
-    /// learn from it. Returns whether `m` was already sitting in one of this
-    /// ply's killer slots *before* this call, which is what
-    /// `CutoffStats::killer_cutoffs` wants to know.
+    /// Records what this ply's move loop is ordering by, which every loop must
+    /// do before running, including the loops that order by nothing.
     ///
-    /// A no-op for anything that isn't a plain quiet move: captures and
-    /// promotions are already ordered by MVV-LVA/material gain, so recording
-    /// them as killers would duplicate that and waste a slot on information
-    /// the ordering already has.
-    fn note_cutoff_move(&mut self, ply: u8, m: Move) -> bool {
-        if !m.flags().is_material_neutral() {
-            return false;
+    /// Passing `None` is not a formality: it is what keeps a ply's slot about
+    /// its own node rather than whatever last occupied that depth.
+    fn set_hash_move(&mut self, ply: u8, m: Option<Move>) {
+        self.hash_moves[usize::from(ply).min(MAX_TRACKED_PLY - 1)] = m;
+    }
+
+    /// This ply's hash move; see [`Self::set_hash_move`].
+    fn hash_move(&self, ply: u8) -> Option<Move> {
+        self.hash_moves[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
+    }
+
+    /// Called whenever a move causes a beta cutoff: updates the killer table
+    /// and reports which ordering technique put `m` early enough to cut off.
+    ///
+    /// Classification lives here rather than at the call site because this is
+    /// already the one place that knows what each technique holds, and the
+    /// techniques queued behind killers (mate killers, history, countermoves)
+    /// each add their own table to `Search` and a branch here, not another
+    /// return value threaded out to the loop.
+    ///
+    /// The hash move is read from [`Self::hash_move`] like the killers are
+    /// read from their own table, so every ordering input this classifies
+    /// against lives on `Self`. Checked first, because a stored move that is
+    /// *also* a killer was tried early because the table named it, and
+    /// crediting the killer table would overstate what it does.
+    ///
+    /// Recording is a no-op for anything that isn't a plain quiet move:
+    /// captures and promotions are already ordered by MVV-LVA/material gain,
+    /// so recording them as killers would duplicate that and waste a slot on
+    /// information the ordering already has. Such a move can still *cause* a
+    /// cutoff, and is still classified.
+    fn note_cutoff_move(&mut self, ply: u8, m: Move) -> CutoffCause {
+        // Recording happens whatever the cause turns out to be. Skipping it for
+        // a hash move would quietly change which moves the killer table holds,
+        // and so the move ordering and the tree, which classification must not.
+        let was_already_a_killer = if m.flags().is_material_neutral() {
+            let idx = usize::from(ply).min(MAX_TRACKED_PLY - 1);
+            let was_already_a_killer = self.killers[idx].contains(&Some(m));
+            self.killers[idx] = record_killer(self.killers[idx], m);
+            was_already_a_killer
+        } else {
+            false
+        };
+
+        if self.hash_move(ply) == Some(m) {
+            CutoffCause::HashMove
+        } else if was_already_a_killer {
+            CutoffCause::Killer
+        } else {
+            CutoffCause::Other
         }
-        let idx = usize::from(ply).min(MAX_KILLER_PLY - 1);
-        let was_already_a_killer = self.killers[idx].contains(&Some(m));
-        self.killers[idx] = record_killer(self.killers[idx], m);
-        was_already_a_killer
     }
 
     /// Iterative deepening driver: repeatedly searches the root at
@@ -714,10 +791,10 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let is_killer_hit = self.note_cutoff_move(ply, m);
+                let cause = self.note_cutoff_move(ply, m);
                 match sink {
-                    CutoffSink::Negamax => self.negamax_cutoffs.record(i, is_killer_hit),
-                    CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, is_killer_hit),
+                    CutoffSink::Negamax => self.negamax_cutoffs.record(i, cause),
+                    CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, cause),
                 }
                 break;
             }
@@ -738,12 +815,22 @@ impl<'a> Search<'a> {
             return RootOutcome::Aborted { best_so_far: None };
         }
 
+        // Once, for every path out of this node: the root neither probes nor
+        // stores the table (see this function's own doc), so it orders by no
+        // hash move whichever way it exits.
+        self.set_hash_move(0, None);
+
         if is_draw(board, &self.history, board.hash()) {
             let mut drawn_moves = legal_moves(board);
             if drawn_moves.is_empty() {
                 return RootOutcome::Completed(0, None);
             }
-            order_moves(board, &mut drawn_moves, None, self.killer_slots(0));
+            order_moves(
+                board,
+                &mut drawn_moves,
+                self.hash_move(0),
+                self.killer_slots(0),
+            );
             return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
 
@@ -776,7 +863,7 @@ impl<'a> Search<'a> {
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
-        order_moves(board, &mut moves, None, self.killer_slots(0));
+        order_moves(board, &mut moves, self.hash_move(0), self.killer_slots(0));
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -883,7 +970,13 @@ impl<'a> Search<'a> {
         let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
 
         let original_alpha = alpha;
-        order_moves(board, &mut moves, tt_move, self.killer_slots(ply));
+        self.set_hash_move(ply, tt_move);
+        order_moves(
+            board,
+            &mut moves,
+            self.hash_move(ply),
+            self.killer_slots(ply),
+        );
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -978,13 +1071,23 @@ impl<'a> Search<'a> {
             return None;
         }
 
+        // Once, above the branch: quiescence orders by no hash move on either
+        // path, in check or out of it, whatever the table holds for these
+        // positions.
+        self.set_hash_move(ply, None);
+
         if in_check(board, board.side_to_move()) {
             let mut evasions = moves.unwrap_or_else(|| legal_moves(board));
             if evasions.is_empty() {
                 return Some(Score::from(ply) - MATE);
             }
 
-            order_moves(board, &mut evasions, None, self.killer_slots(ply));
+            order_moves(
+                board,
+                &mut evasions,
+                self.hash_move(ply),
+                self.killer_slots(ply),
+            );
 
             let outcome = self.alpha_beta_loop(
                 &evasions,
@@ -1022,7 +1125,12 @@ impl<'a> Search<'a> {
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
         qmoves.retain(|m| m.flags().is_capture());
 
-        order_moves(board, &mut qmoves, None, self.killer_slots(ply));
+        order_moves(
+            board,
+            &mut qmoves,
+            self.hash_move(ply),
+            self.killer_slots(ply),
+        );
 
         let outcome = self.alpha_beta_loop(
             &qmoves,
