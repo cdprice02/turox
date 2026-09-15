@@ -31,9 +31,21 @@ work by what it buys means this loses to almost everything.
 **The cheap defensive half.** Suppressing the store when a subtree returned a
 repetition draw, or carrying a flag that does, closes most of the ancestor
 window for very little code. This is the closest call of the four. It was not
-taken because it silently lowers how much the table retains, and there is
-currently no instrumentation to price that. Once cutoff-rate and table
-instrumentation exist, this becomes a cheap experiment rather than a guess.
+taken because it silently lowers how much the table retains, and there was no
+instrumentation to price that.
+
+That instrumentation now exists. `Tt::hashfull` reports occupancy and
+`CutoffStats` reports cutoff rate and cause, both on every `info` line, so the
+cost this option was deferred over is now measurable rather than guessed at.
+The experiment it was waiting for is therefore available, and specified: apply
+the suppression, then compare occupancy, first-move cutoff rate, and
+fixed-depth node counts against the same positions without it. A suppression
+that costs little on all three is worth taking; one that visibly empties the
+table is the reason this was not taken in the first place, and would say so.
+
+What it is *not* is free to land. It changes which entries exist, so it changes
+the tree and needs the same self-play gate any search change does. The condition
+this ADR set has been met, and the work it unblocks is queued rather than done.
 
 **Clearing the table between `go` commands.** This eliminates both problems
 outright, because the cross-`go` lifetime is what widens them: an entry stored
@@ -57,7 +69,24 @@ pruning and late move reductions both increase how much gets stored, which widen
 the window, and draw-related errors become proportionally more expensive as the
 engine stops losing games for simpler reasons.
 
-Two `#[ignore]`d tests document the current behaviour, following the same pattern
-the deep perft depths use. They are expected to fail. When the fix lands they
-flip to passing and the attribute comes off, which makes them the acceptance
-criteria rather than dead weight.
+One widening arrived from an angle this list did not anticipate. Pin-set legal
+move generation, and probing the table before generating moves, made the engine
+search more nodes in the same budget. More nodes searched is more entries stored
+and more churn, which is the same pressure null-move pruning and reductions were
+named for, without any of them being implemented. The lesson for anyone reading
+this list as a checklist: "the engine got faster" belongs on it.
+
+Two tests document the current behaviour and are expected to fail:
+`accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary` and
+`accepted_gap_shared_table_leaks_a_repetition_tainted_score_across_go_commands`.
+They are the acceptance criteria rather than dead weight: when the fix lands
+they flip to passing.
+
+They are kept out of ordinary runs twice over, and both are load-bearing. The
+`accepted_gap_` prefix is what the default nextest filter excludes, which is what
+the weekly deep job needs, since it passes `--run-ignored all` and so defeats the
+attribute. `#[ignore]` is what plain `cargo test` honours, which is what
+`cargo llvm-cov` and `cargo mutants` shell out to. A weekly `accepted-gaps` job
+runs exactly these and **inverts the result**, so it is green while the gap
+persists and red when one *passes*. A permanently red job teaches everyone to
+ignore it, and then it cannot report the one thing it exists to report.
