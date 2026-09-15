@@ -43,13 +43,19 @@ pub const MATE: Score = 30_000;
 /// margin only has to separate the two ranges, not be tight.
 pub const MAX_MATE_PLY: Score = 512;
 
-/// Ply bound for the killer table: same "comfortably above any ply a real
-/// search reaches" reasoning as [`MAX_MATE_PLY`], kept as its own constant
-/// rather than reusing that one directly since the two bound unrelated
-/// things and a future change to one shouldn't silently resize the other.
-/// A ply past this saturates to the last slot instead of indexing out of
-/// bounds; see `Search::killer_slots`.
-const MAX_KILLER_PLY: usize = 512;
+/// Ply bound for every per-ply side table `Search` keeps: the killers, the
+/// hash move, and whatever the queued ordering techniques add next.
+///
+/// Same "comfortably above any ply a real search reaches" reasoning as
+/// [`MAX_MATE_PLY`], kept as its own constant rather than reusing that one
+/// since the two bound unrelated things and a future change to one shouldn't
+/// silently resize the other. A ply past this saturates to the last slot
+/// instead of indexing out of bounds; see `Search::killer_slots`.
+///
+/// One bound for all of them on purpose: they are indexed by the same ply in
+/// the same loops, so letting them disagree would mean a ply that saturates in
+/// one table and not another, which is a difference nothing would report.
+const MAX_TRACKED_PLY: usize = 512;
 
 /// Killer slots per ply: the single place that number is spelled out, so
 /// every array shaped by it (`Search::killers`, `move_priority`'s and
@@ -361,7 +367,7 @@ pub struct Search<'a> {
     /// between iterative-deepening iterations within one `go`: those share
     /// the same tree, just re-explored at increasing depth, so a killer
     /// found at iteration 3 is still valid information for iteration 4.
-    killers: [[Option<Move>; KILLER_SLOTS]; MAX_KILLER_PLY],
+    killers: [[Option<Move>; KILLER_SLOTS]; MAX_TRACKED_PLY],
     /// The move this ply's move loop ordered by, if any: the transposition
     /// table's move for the position being searched there.
     ///
@@ -375,7 +381,7 @@ pub struct Search<'a> {
     /// one, so it writes `None` and its cutoffs are never attributed to the
     /// table. Attribution has to follow the ordering, or it credits a technique
     /// that did not put the move first.
-    hash_moves: [Option<Move>; MAX_KILLER_PLY],
+    hash_moves: [Option<Move>; MAX_TRACKED_PLY],
     /// xorshift64* state when root move randomization is on, `None` when it is
     /// off (the default, so every existing test and bench stays deterministic
     /// without knowing this exists).
@@ -407,8 +413,8 @@ impl<'a> Search<'a> {
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
-            killers: [[None; KILLER_SLOTS]; MAX_KILLER_PLY],
-            hash_moves: [None; MAX_KILLER_PLY],
+            killers: [[None; KILLER_SLOTS]; MAX_TRACKED_PLY],
+            hash_moves: [None; MAX_TRACKED_PLY],
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
@@ -527,12 +533,12 @@ impl<'a> Search<'a> {
                 || self.max_nodes.is_some_and(|max| self.nodes >= max))
     }
 
-    /// This ply's two killer slots, clamped to `MAX_KILLER_PLY - 1` so a
+    /// This ply's two killer slots, clamped to `MAX_TRACKED_PLY - 1` so a
     /// `ply` past the table's bound (only reachable through quiescence's
     /// uncapped in-check evasion recursion; see that function's own doc)
     /// reads the last slot instead of panicking.
     fn killer_slots(&self, ply: u8) -> [Option<Move>; KILLER_SLOTS] {
-        self.killers[usize::from(ply).min(MAX_KILLER_PLY - 1)]
+        self.killers[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
     /// Records what this ply's move loop is ordering by, which every loop must
@@ -541,12 +547,12 @@ impl<'a> Search<'a> {
     /// Passing `None` is not a formality: it is what keeps a ply's slot about
     /// its own node rather than whatever last occupied that depth.
     fn set_hash_move(&mut self, ply: u8, m: Option<Move>) {
-        self.hash_moves[usize::from(ply).min(MAX_KILLER_PLY - 1)] = m;
+        self.hash_moves[usize::from(ply).min(MAX_TRACKED_PLY - 1)] = m;
     }
 
     /// This ply's hash move; see [`Self::set_hash_move`].
     fn hash_move(&self, ply: u8) -> Option<Move> {
-        self.hash_moves[usize::from(ply).min(MAX_KILLER_PLY - 1)]
+        self.hash_moves[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
     /// Called whenever a move causes a beta cutoff: updates the killer table
@@ -574,7 +580,7 @@ impl<'a> Search<'a> {
         // a hash move would quietly change which moves the killer table holds,
         // and so the move ordering and the tree, which classification must not.
         let was_already_a_killer = if m.flags().is_material_neutral() {
-            let idx = usize::from(ply).min(MAX_KILLER_PLY - 1);
+            let idx = usize::from(ply).min(MAX_TRACKED_PLY - 1);
             let was_already_a_killer = self.killers[idx].contains(&Some(m));
             self.killers[idx] = record_killer(self.killers[idx], m);
             was_already_a_killer
@@ -809,13 +815,22 @@ impl<'a> Search<'a> {
             return RootOutcome::Aborted { best_so_far: None };
         }
 
+        // Once, for every path out of this node: the root neither probes nor
+        // stores the table (see this function's own doc), so it orders by no
+        // hash move whichever way it exits.
+        self.set_hash_move(0, None);
+
         if is_draw(board, &self.history, board.hash()) {
             let mut drawn_moves = legal_moves(board);
             if drawn_moves.is_empty() {
                 return RootOutcome::Completed(0, None);
             }
-            self.set_hash_move(0, None);
-            order_moves(board, &mut drawn_moves, None, self.killer_slots(0));
+            order_moves(
+                board,
+                &mut drawn_moves,
+                self.hash_move(0),
+                self.killer_slots(0),
+            );
             return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
 
@@ -848,8 +863,7 @@ impl<'a> Search<'a> {
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
-        self.set_hash_move(0, None);
-        order_moves(board, &mut moves, None, self.killer_slots(0));
+        order_moves(board, &mut moves, self.hash_move(0), self.killer_slots(0));
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -957,7 +971,12 @@ impl<'a> Search<'a> {
 
         let original_alpha = alpha;
         self.set_hash_move(ply, tt_move);
-        order_moves(board, &mut moves, tt_move, self.killer_slots(ply));
+        order_moves(
+            board,
+            &mut moves,
+            self.hash_move(ply),
+            self.killer_slots(ply),
+        );
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -1052,14 +1071,23 @@ impl<'a> Search<'a> {
             return None;
         }
 
+        // Once, above the branch: quiescence orders by no hash move on either
+        // path, in check or out of it, whatever the table holds for these
+        // positions.
+        self.set_hash_move(ply, None);
+
         if in_check(board, board.side_to_move()) {
             let mut evasions = moves.unwrap_or_else(|| legal_moves(board));
             if evasions.is_empty() {
                 return Some(Score::from(ply) - MATE);
             }
 
-            self.set_hash_move(ply, None);
-            order_moves(board, &mut evasions, None, self.killer_slots(ply));
+            order_moves(
+                board,
+                &mut evasions,
+                self.hash_move(ply),
+                self.killer_slots(ply),
+            );
 
             let outcome = self.alpha_beta_loop(
                 &evasions,
@@ -1097,8 +1125,12 @@ impl<'a> Search<'a> {
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
         qmoves.retain(|m| m.flags().is_capture());
 
-        self.set_hash_move(ply, None);
-        order_moves(board, &mut qmoves, None, self.killer_slots(ply));
+        order_moves(
+            board,
+            &mut qmoves,
+            self.hash_move(ply),
+            self.killer_slots(ply),
+        );
 
         let outcome = self.alpha_beta_loop(
             &qmoves,
