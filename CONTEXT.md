@@ -69,3 +69,24 @@ draw (a material balance that is a draw under the rules regardless of
 placement, e.g. KNK); a fractional scale factor marks a heuristically
 unwinnable-but-not-drawn balance (e.g. opposite-coloured bishops).
 _Avoid_: Evaluation term, endgame term.
+
+**Opening book**:
+A precomputed table, keyed on `board::zobrist`'s hash, mapping a position to
+one or more known-good moves, built offline by a generator from a database of
+strong human games and shipped as a checked-in binary asset. Consulted by
+`Session` before a `go` reaches `Search`, not inside `Search` itself: a book
+hit is a bypass of search, not an input to it. Own format, not Polyglot,
+specifically because it reuses this engine's existing Zobrist hash rather
+than Polyglot's separate 781-number scheme and its own castling-move
+encoding convention.
+_Avoid_: Opening database (ambiguous with the source PGN data the generator
+reads from, which is not itself the book).
+
+**Book hit** / **out-of-book**:
+A book hit is a position `Session` finds in the loaded opening book; it
+answers instantly with a weighted-random choice among that position's
+book moves and never invokes `Search`. Out-of-book is every other
+position, which falls through to `Search` exactly as it does today.
+_Avoid_: In book/in-book (adjective form reads ambiguously next to
+"in-book position"; "book hit" is the noun this codebase uses for the
+event).
