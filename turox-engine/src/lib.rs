@@ -7,6 +7,8 @@
 //!   write `turox_engine::Bitboard` rather than reaching into the module.
 //! - [`board`]: `Board` (piece placement plus game state) and FEN parsing/
 //!   formatting, built on `types`.
+//! - [`book`]: the opening book's file format and lookup, keyed on
+//!   `board::zobrist`'s hash.
 //! - [`move_gen`]: attack tables, magic bitboards, pseudolegal and legal move
 //!   generation, and `perft`.
 //! - [`search`]: negamax with alpha-beta over iterative deepening, driven by a
@@ -24,6 +26,7 @@
 // target, and a doc per fixture constant in `tests/` and `benches/` is noise.
 #![deny(clippy::missing_docs_in_private_items)]
 pub mod board;
+pub mod book;
 pub mod eval;
 pub mod move_gen;
 mod rng;
