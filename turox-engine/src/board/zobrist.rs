@@ -177,6 +177,52 @@ pub(crate) const fn en_passant_hash(ep: Option<Square>) -> u64 {
     }
 }
 
+/// A compile-time fingerprint of this build's whole key table, folding every
+/// key through `rng::xorshift64star` in the same fixed order `generate_keys`
+/// produces them in.
+///
+/// Not cryptographic, and doesn't need to be: the only thing this guards
+/// against is this build's own key table silently having a different shape
+/// (a changed `SEED`, a reordered or resized field) than whatever build
+/// generated an opening book being loaded (`book::Book::from_bytes`, the
+/// only caller). A plain `XOR`-fold of every key would miss some of that,
+/// since `XOR` is its own inverse and so folds the same regardless of
+/// arrangement; mixing each key through the same avalanche function that
+/// built the table in the first place catches a reordering too.
+const fn fingerprint() -> u64 {
+    let mut acc = 0u64;
+    let mut cp = 0;
+    while cp < 12 {
+        let mut sq = 0;
+        while sq < 64 {
+            acc = xorshift64star(acc ^ KEYS.piece_square[cp][sq]);
+            sq += 1;
+        }
+        cp += 1;
+    }
+
+    acc = xorshift64star(acc ^ KEYS.side_to_move);
+
+    let mut i = 0;
+    while i < 4 {
+        acc = xorshift64star(acc ^ KEYS.castling[i]);
+        i += 1;
+    }
+
+    let mut f = 0;
+    while f < 8 {
+        acc = xorshift64star(acc ^ KEYS.en_passant_file[f]);
+        f += 1;
+    }
+
+    acc
+}
+
+/// The one fingerprint value for this build's key table, computed once at
+/// compile time. `book::Book::to_bytes`/`from_bytes` are the only intended
+/// callers; see `book`'s module doc for why an opening book needs this.
+pub(crate) const FINGERPRINT: u64 = fingerprint();
+
 /// An independent, from-scratch fold over `board`'s full state.
 ///
 /// Every occupied square via `piece_at` (not the bitboards `place`/`remove` maintain),
