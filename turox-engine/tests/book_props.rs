@@ -1,11 +1,11 @@
 //! Property tests for `book`, over arbitrary hashes, candidate move sets,
 //! and seeds. `tests/book.rs` has the concrete scenarios (round-tripping,
-//! fingerprint rejection, weight actually mattering); this file is the
-//! shape #196 asks for directly: the chosen move is always among the
-//! position's candidates, and, with a seeded RNG, repeated calls aren't
-//! always identical. Mirrors `search_props.rs`'s root-randomization
-//! properties, the existing precedent for testing seeded, weighted choice
-//! in this crate.
+//! fingerprint rejection, weight actually mattering); this file covers what
+//! has to hold for *every* position and seed, not just a few hand-picked
+//! ones: the chosen move is always among the position's candidates, and,
+//! with a seeded RNG, repeated calls aren't always identical. Mirrors
+//! `search_props.rs`'s root-randomization properties, the existing
+//! precedent for testing seeded, weighted choice in this crate.
 
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -45,9 +45,8 @@ fn any_candidate_set() -> impl Strategy<Value = Vec<BookMove>> {
 }
 
 proptest! {
-    /// The core contract #196 asks for: whatever `choose` returns, it is
-    /// always one of the position's own candidates, never a move the book
-    /// never recorded for that hash.
+    /// Whatever `choose` returns is always one of the position's own
+    /// candidates, never a move the book never recorded for that hash.
     #[test]
     fn chosen_move_is_always_among_the_position_candidates(
         hash: u64,

@@ -1,10 +1,10 @@
 //! Concrete tests for `book`: the opening book's file format and lookup.
 //!
 //! `tests/book_props.rs` has the property coverage over arbitrary hashes,
-//! move sets, and seeds; this file pins the specific scenarios #196's own
-//! testing section calls for: round-tripping through bytes, rejecting a
-//! too-short byte stream, rejecting a fingerprint mismatch, and the
-//! weighting actually mattering rather than just being random.
+//! move sets, and seeds; this file pins the specific concrete scenarios a
+//! property alone wouldn't reliably hit: round-tripping through bytes,
+//! rejecting a too-short byte stream, rejecting a fingerprint mismatch, and
+//! the weighting actually mattering rather than just being random.
 
 use turox_engine::book::{Book, BookLoadError, BookMove};
 use turox_engine::{Move, MoveFlags, Square};
