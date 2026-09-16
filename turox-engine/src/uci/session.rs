@@ -20,6 +20,7 @@
 //! later change, not something to fold into this loop silently.
 
 use crate::board::Board;
+use crate::book::Book;
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
@@ -45,11 +46,15 @@ const DEFAULT_MAX_DEPTH: u8 = 64;
 /// is running has to reach it directly, since the thread that would
 /// otherwise receive it is busy blocking inside `Search::search`. `writer`
 /// stays on this thread; nothing here ever writes concurrently.
+///
+/// `_book`: not yet consulted; every `go` searches exactly as it always
+/// has regardless of what's passed here. Threaded through so
+/// `Engine::with_book` has somewhere to pass one.
 #[expect(
     clippy::expect_used,
     reason = "`active_stop` is only ever held across an Option assignment, which cannot panic, so the mutex cannot become poisoned"
 )]
-pub fn run<R, W>(board: &mut Board, reader: R, mut writer: W)
+pub fn run<R, W>(board: &mut Board, _book: Option<&Book>, reader: R, mut writer: W)
 where
     R: BufRead + Send + 'static,
     W: Write,

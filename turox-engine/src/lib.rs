@@ -43,13 +43,24 @@ pub struct Engine {
     /// The position the session is tracking, rebuilt by each `position`
     /// command rather than mutated move by move.
     board: board::Board,
+    /// Consulted before every `go` reaches `Search`; `None` (the default)
+    /// means every `go` searches exactly as it always has.
+    book: Option<book::Book>,
 }
 
 impl Engine {
-    /// A new engine on the default (empty) `Board`.
+    /// A new engine on the default (empty) `Board`, with no opening book.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Attaches an opening book, consulted before every `go` reaches
+    /// `Search` for the rest of this engine's life.
+    #[must_use]
+    pub fn with_book(mut self, book: book::Book) -> Self {
+        self.book = Some(book);
+        self
     }
 
     /// The position the engine is currently tracking.
@@ -82,6 +93,6 @@ impl Engine {
         R: std::io::BufRead + Send + 'static,
         W: std::io::Write,
     {
-        uci::run_session(&mut self.board, reader, writer);
+        uci::run_session(&mut self.board, self.book.as_ref(), reader, writer);
     }
 }

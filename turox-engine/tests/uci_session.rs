@@ -14,13 +14,23 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use turox_engine::board::Board;
+use turox_engine::book::{Book, BookMove};
 use turox_engine::move_gen::legal::legal_moves;
-use turox_engine::Engine;
+use turox_engine::{Engine, Move, MoveFlags, Square};
 
 /// Feeds `input` to a fresh `Engine` over an in-memory buffer and returns
 /// everything it wrote back, as a `String`.
 fn run_session(input: &str) -> String {
     let mut engine = Engine::new();
+    let reader = Cursor::new(input.as_bytes().to_vec());
+    let mut output = Vec::new();
+    engine.run_with_io(reader, &mut output);
+    String::from_utf8(output).expect("UCI output must be valid UTF-8")
+}
+
+/// `run_session`, for an `Engine` carrying `book` instead of a bookless one.
+fn run_session_with_book(book: Book, input: &str) -> String {
+    let mut engine = Engine::new().with_book(book);
     let reader = Cursor::new(input.as_bytes().to_vec());
     let mut output = Vec::new();
     engine.run_with_io(reader, &mut output);
@@ -587,4 +597,132 @@ fn accepted_gap_shared_table_leaks_a_repetition_tainted_score_across_go_commands
     let cleared = run_session(&ghi_probe_script(&moves, depth, true));
 
     assert_eq!(final_scores(&shared), final_scores(&cleared));
+}
+
+/// A book hit answers instantly: `bestmove` matches the book's own choice,
+/// and no `info` line of any kind appears, since a hit never reaches
+/// `Search` at all (no depth line, no cutoff-stats line, nothing to
+/// stream).
+#[test]
+fn a_book_hit_returns_the_book_move_with_no_search_at_all() {
+    let e2e4 = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .iter()
+        .find(|m| m.to_uci() == "e2e4")
+        .expect("e2e4 is legal from startpos");
+    let book = Book::new(vec![(
+        Board::start_pos().hash(),
+        vec![BookMove {
+            mv: e2e4,
+            weight: 1,
+        }],
+    )]);
+
+    let output = run_session_with_book(book, "position startpos\ngo depth 5\nquit\n");
+
+    assert!(output.contains("bestmove e2e4"), "output: {output:?}");
+    assert!(
+        !output.contains("info "),
+        "a book hit must never reach Search, so no info line should appear, output: {output:?}"
+    );
+}
+
+/// A position the book doesn't cover falls through to `Search` exactly as
+/// it would with no book attached at all: a real search runs (an `info
+/// depth` line appears) and the reported `bestmove` is actually legal.
+#[test]
+fn an_out_of_book_position_falls_through_to_search_unchanged() {
+    // A position no real opening book would record: White missing a rook,
+    // reached by no sequence of legal moves from any real game, so its
+    // hash is guaranteed absent from any book covering only real
+    // positions. `startpos_missing_a_rook` isn't itself in `book`, since
+    // `book` here has exactly one, unrelated entry.
+    let unrelated_hash = 0xDEAD_BEEF_0000_0001;
+    let book = Book::new(vec![(
+        unrelated_hash,
+        vec![BookMove {
+            mv: Move::new(Square::A2, Square::A3, MoveFlags::Quiet),
+            weight: 1,
+        }],
+    )]);
+
+    let output = run_session_with_book(book, "position startpos\ngo depth 3\nquit\n");
+
+    assert!(
+        output.contains("info depth"),
+        "a miss must still run a real search, output: {output:?}"
+    );
+    let bestmove_line = output
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .unwrap_or_else(|| panic!("no bestmove line in output: {output:?}"));
+    let uci_move = bestmove_line
+        .strip_prefix("bestmove ")
+        .expect("checked above")
+        .trim();
+    assert!(
+        legal_moves(&Board::start_pos())
+            .as_slice()
+            .iter()
+            .any(|m| m.to_uci() == uci_move),
+        "bestmove {uci_move:?} must be legal from startpos, output: {output:?}"
+    );
+}
+
+/// The book lookup is stateless, not sticky: a `go` that misses (search
+/// runs) doesn't disable book lookups for the rest of the game. Once the
+/// opponent's own reply transposes back into a position the book covers,
+/// the *next* `go` is a fresh hit again.
+#[test]
+fn a_later_go_can_hit_the_book_again_after_an_earlier_miss() {
+    let after_e4 = Board::start_pos().make_move(
+        *legal_moves(&Board::start_pos())
+            .as_slice()
+            .iter()
+            .find(|m| m.to_uci() == "e2e4")
+            .expect("e2e4 is legal from startpos"),
+    );
+    let e7e5 = *legal_moves(&after_e4)
+        .as_slice()
+        .iter()
+        .find(|m| m.to_uci() == "e7e5")
+        .expect("e7e5 is legal after 1.e4 (Black to move)");
+
+    // Startpos is deliberately absent, so the first `go` below is a miss;
+    // only the position after 1.e4 is in the book.
+    let book = Book::new(vec![(
+        after_e4.hash(),
+        vec![BookMove {
+            mv: e7e5,
+            weight: 1,
+        }],
+    )]);
+
+    let output = run_session_with_book(
+        book,
+        "position startpos\ngo depth 2\nposition startpos moves e2e4\ngo depth 2\nquit\n",
+    );
+
+    let bestmove_lines: Vec<&str> = output
+        .lines()
+        .filter(|line| line.starts_with("bestmove "))
+        .collect();
+    assert_eq!(
+        bestmove_lines.len(),
+        2,
+        "expected exactly two bestmove lines, output: {output:?}"
+    );
+    assert_eq!(
+        bestmove_lines[1], "bestmove e7e5",
+        "the second go, now in book, must return the book move instantly, output: {output:?}"
+    );
+
+    let after_first_bestmove = output
+        .split("bestmove")
+        .next()
+        .expect("split always yields at least one chunk");
+    assert!(
+        after_first_bestmove.contains("info depth"),
+        "the first go, out of book, must still have run a real search, output: {output:?}"
+    );
 }
