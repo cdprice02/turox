@@ -1,20 +1,18 @@
-//! Piece-to history: a fact about which quiet moves tend to be good, independent of any
-//! one search tree.
+//! The history heuristic: a fact about which quiet moves tend to be good, independent of
+//! any one search tree.
 //!
 //! Complements the killer table (`negamax`'s own `Search::killers` field) rather than
 //! replacing it: a killer is a fact about *this search tree's* sibling structure, rebuilt
-//! fresh every `go` (ADR-0003). This table accumulates over many more nodes than two
-//! killer slots ever see, and it survives across `go` calls the way the transposition
-//! table does (ADR-0001, ADR-0005), aging by half each call rather than resetting to
+//! fresh every `go`. This table accumulates over many more nodes than two killer slots
+//! ever see, so it is threaded in from `uci::session::run` and survives across `go` calls
+//! the way the transposition table does, aging by half each call rather than resetting to
 //! nothing.
 //!
-//! Indexed `[side][piece][to]`, not the historically-original `[side][from][to]`
-//! "butterfly board" CPW names the technique after: `docs/research/move-ordering.md`
-//! found Stockfish itself indexes this way, and two different pieces leaving the same
-//! square are unrelated events for "was this destination good," so the `from` square
-//! carries no information this table needs. Quiet moves only, same rule as killers
-//! (`Search::note_cutoff_move`'s own doc): a capture or promotion is already ordered by
-//! MVV-LVA/material gain, so recording it here would duplicate that ordering.
+//! Indexed `[side][piece][to]` rather than `[side][from][to]`: two different pieces
+//! leaving the same square are unrelated events for "was this destination good," so the
+//! `from` square carries no information this table needs. Quiet moves only, same rule as
+//! killers (`Search::note_cutoff_move`'s own doc): a capture or promotion is already
+//! ordered by MVV-LVA/material gain, so recording it here would duplicate that ordering.
 
 use crate::eval::Score;
 use crate::types::{Color, Piece, Square};
@@ -23,24 +21,19 @@ use crate::types::{Color, Piece, Square};
 ///
 /// Comfortably below `Score::MAX`/`Score::MIN`, so `update`'s `saturating_add` followed by
 /// this clamp never has to reason about the addition itself overflowing `Score`: the
-/// operand being added in is itself bounded (see [`history_delta`]), and the running total
+/// operand being added in is itself bounded (see [`cutoff_delta`]), and the running total
 /// is always re-clamped into this range immediately after every update.
 const MAX_MAGNITUDE: Score = 16_384;
 
-/// `depth * depth`: the classical history-heuristic weighting (CPW's page, per
-/// `docs/research/move-ordering.md`), so a refutation found deep in the tree counts for
-/// more than one found near the leaves, which there are vastly more of. Shared by both
-/// the bonus (cutoff) and the malus (searched, no cutoff) side of an update: the two are
-/// the same formula with opposite sign, not separate formulas to keep in sync.
-///
-/// Deliberately not history-gravity-scaled (bonus/malus shrinking as a cell nears the
-/// ceiling): that's a real refinement, but landing it alongside this issue's own SPRT
-/// would leave two variables moving under one measurement. Filed as a fast-follow.
+/// `depth * depth`, so a cutoff found deep in the tree counts for more than one found near
+/// the leaves, which there are vastly more of. Shared by both the bonus (cutoff) and the
+/// malus (searched, no cutoff) side of an update: the two are the same formula with
+/// opposite sign, not separate formulas to keep in sync.
 ///
 /// Computed in `i32` and clamped down: `depth` is a plain `u8` with no enforced ceiling at
 /// this layer (a GUI's `go depth` can ask for anything up to 255), and 255 * 255 overflows
 /// `Score` (`i16`) well before `update`'s own clamp ever gets a chance to bound it.
-fn history_delta(depth: u8) -> Score {
+fn cutoff_delta(depth: u8) -> Score {
     let squared = i32::from(depth) * i32::from(depth);
     Score::try_from(squared).unwrap_or(Score::MAX)
 }
@@ -48,19 +41,19 @@ fn history_delta(depth: u8) -> Score {
 /// Quiet-move ordering scores, `[side][piece][to]`. See the module doc for the shape and
 /// lifetime reasoning.
 #[derive(Debug)]
-pub struct PieceToHistory {
+pub struct CutoffHistory {
     /// `[side][piece][to]`; see the module doc for why `from` carries no information this
     /// table needs.
     scores: [[[Score; Square::ALL.len()]; Piece::ALL.len()]; Color::ALL.len()],
 }
 
-impl Default for PieceToHistory {
+impl Default for CutoffHistory {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PieceToHistory {
+impl CutoffHistory {
     /// An empty table: every `[side][piece][to]` cell starts at `0`, meaning "no opinion,"
     /// the same neutral value ordering already falls back to when no history exists at all
     /// (see `negamax::move_priority`).
@@ -88,7 +81,7 @@ impl PieceToHistory {
     /// different name. This type has no way to enforce that itself since it never sees a
     /// `Move`, only the `(side, piece, to)` a caller has already decided to record.
     pub fn record_cutoff(&mut self, side: Color, piece: Piece, to: Square, depth: u8) {
-        self.update(side, piece, to, history_delta(depth));
+        self.update(side, piece, to, cutoff_delta(depth));
     }
 
     /// Records that `piece` moving to `to` (as `side`) was searched at depth `depth` but
@@ -100,7 +93,7 @@ impl PieceToHistory {
     ///
     /// Same material-neutral-only contract as [`Self::record_cutoff`].
     pub fn record_no_cutoff(&mut self, side: Color, piece: Piece, to: Square, depth: u8) {
-        self.update(side, piece, to, -history_delta(depth));
+        self.update(side, piece, to, -cutoff_delta(depth));
     }
 
     /// Shared by [`Self::record_cutoff`] and [`Self::record_no_cutoff`]: same clamp, same
@@ -116,7 +109,7 @@ impl PieceToHistory {
     /// against its neighbors while decaying old evidence. Called once per `go` command
     /// (`uci::session::run`), not once per node: this is about a table that outlives a
     /// single search tree tracking the *current* position rather than the whole game, not
-    /// about anything that happens within one search; see the module doc and ADR-0005.
+    /// about anything that happens within one search.
     pub fn age(&mut self) {
         for side in &mut self.scores {
             for piece in side {
@@ -142,30 +135,30 @@ mod tests {
 
     #[test]
     fn new_table_has_no_opinion_on_any_cell() {
-        let history = PieceToHistory::new();
+        let history = CutoffHistory::new();
         assert_eq!(history.score(Color::White, Piece::Knight, Square::F3), 0);
     }
 
     #[test]
     fn record_cutoff_raises_the_entry() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         history.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
         assert!(history.score(Color::White, Piece::Knight, Square::F3) > 0);
     }
 
     #[test]
     fn record_no_cutoff_lowers_the_entry() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         history.record_no_cutoff(Color::White, Piece::Knight, Square::F3, 4);
         assert!(history.score(Color::White, Piece::Knight, Square::F3) < 0);
     }
 
     #[test]
     fn bonus_is_depth_weighted() {
-        let mut shallow = PieceToHistory::new();
+        let mut shallow = CutoffHistory::new();
         shallow.record_cutoff(Color::White, Piece::Knight, Square::F3, 2);
 
-        let mut deep = PieceToHistory::new();
+        let mut deep = CutoffHistory::new();
         deep.record_cutoff(Color::White, Piece::Knight, Square::F3, 8);
 
         assert!(
@@ -178,7 +171,7 @@ mod tests {
 
     #[test]
     fn updates_to_one_cell_do_not_affect_a_different_side_piece_or_destination() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         history.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
 
         assert_eq!(history.score(Color::Black, Piece::Knight, Square::F3), 0);
@@ -188,7 +181,7 @@ mod tests {
 
     #[test]
     fn age_halves_every_entry() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         history.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
         let before = history.score(Color::White, Piece::Knight, Square::F3);
 
@@ -202,7 +195,7 @@ mod tests {
 
     #[test]
     fn age_preserves_relative_order_between_two_positive_entries() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         history.record_cutoff(Color::White, Piece::Knight, Square::F3, 8);
         history.record_cutoff(Color::White, Piece::Bishop, Square::C4, 2);
         assert!(
@@ -221,7 +214,7 @@ mod tests {
 
     #[test]
     fn repeated_cutoffs_saturate_instead_of_overflowing() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         for _ in 0..1000 {
             history.record_cutoff(Color::White, Piece::Queen, Square::D4, 255);
         }
@@ -233,7 +226,7 @@ mod tests {
 
     #[test]
     fn repeated_maluses_saturate_instead_of_overflowing() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         for _ in 0..1000 {
             history.record_no_cutoff(Color::White, Piece::Queen, Square::D4, 255);
         }
@@ -245,7 +238,7 @@ mod tests {
 
     #[test]
     fn clear_resets_every_cell_to_zero() {
-        let mut history = PieceToHistory::new();
+        let mut history = CutoffHistory::new();
         history.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
         history.record_no_cutoff(Color::Black, Piece::Pawn, Square::E5, 2);
 

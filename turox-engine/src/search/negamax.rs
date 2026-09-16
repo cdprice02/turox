@@ -12,8 +12,8 @@ use crate::move_gen::attacks::in_check;
 use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
 use crate::rng::xorshift64star;
+use crate::search::cutoff_history::CutoffHistory;
 use crate::search::draw::is_draw;
-use crate::search::piece_to_history::PieceToHistory;
 use crate::search::tt::Tt;
 use crate::types::Move;
 use crate::MoveFlags;
@@ -67,14 +67,13 @@ const MAX_TRACKED_PLY: usize = 512;
 /// makes the *type* generic, not the *policy*.
 const KILLER_SLOTS: usize = 2;
 
-/// The depth-equivalent [`PieceToHistory`]'s bonus/malus formula uses for cutoffs found in
+/// The depth-equivalent [`CutoffHistory`]'s bonus/malus formula uses for cutoffs found in
 /// quiescence's evasion loop, which (unlike `negamax`'s move loop) has no real `depth` to
 /// weight by: `ply` means something different there (distance from root, not remaining
 /// search) and `qdepth` is frozen/unused on the evasion path (see `quiescence`'s own doc).
 /// A fixed `1` rather than deriving one from either keeps this real but deliberately
 /// minimal weight, on the theory that a quiescence-depth refutation is a far lower-quality
-/// signal than a main-search one. Threading a real depth through (or tuning this constant)
-/// is a fast-follow, not this issue's scope.
+/// signal than a main-search one.
 const QUIESCENCE_HISTORY_DEPTH: u8 = 1;
 
 /// Whether `score` encodes a forced mate rather than an ordinary evaluation.
@@ -318,7 +317,7 @@ struct LoopOutcome {
     /// the abort instead.
     aborted: bool,
     /// The move index a beta cutoff broke on, `None` if the loop ran to completion
-    /// without one. Callers feed this straight into [`Search::update_piece_to_history`],
+    /// without one. Callers feed this straight into [`Search::update_cutoff_history`],
     /// which needs to know not just *whether* a cutoff happened (that's `best_move`
     /// improving past `initial_max`) but exactly which prefix of `moves` was tried before
     /// it, malus-worthy quiets and all.
@@ -399,12 +398,12 @@ pub struct Search<'a> {
     /// table. Attribution has to follow the ordering, or it credits a technique
     /// that did not put the move first.
     hash_moves: [Option<Move>; MAX_TRACKED_PLY],
-    /// Quiet-move ordering scores independent of any one search tree; see
-    /// [`PieceToHistory`]'s own doc and ADR-0005 for why this, unlike `killers`, is
-    /// threaded in from `uci::session::run` rather than owned here. `None` by default
-    /// (`negamax` orders and records quiets exactly as if history didn't exist, the same
-    /// as before this existed): set via [`Search::with_piece_to_history`].
-    piece_to_history: Option<&'a mut PieceToHistory>,
+    /// Quiet-move ordering scores independent of any one search tree, unlike `killers`:
+    /// it accumulates over many more nodes than two killer slots ever see, so it is
+    /// threaded in from `uci::session::run` rather than owned here, the same way `tt` is.
+    /// `None` by default (`negamax` orders and records quiets exactly as if history
+    /// didn't exist): set via [`Search::with_cutoff_history`].
+    cutoff_history: Option<&'a mut CutoffHistory>,
     /// xorshift64* state when root move randomization is on, `None` when it is
     /// off (the default, so every existing test and bench stays deterministic
     /// without knowing this exists).
@@ -438,7 +437,7 @@ impl<'a> Search<'a> {
             tt: None,
             killers: [[None; KILLER_SLOTS]; MAX_TRACKED_PLY],
             hash_moves: [None; MAX_TRACKED_PLY],
-            piece_to_history: None,
+            cutoff_history: None,
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
@@ -514,14 +513,14 @@ impl<'a> Search<'a> {
         self
     }
 
-    /// Gives this search a piece-to history table to read during move ordering and update
+    /// Gives this search a cutoff history table to read during move ordering and update
     /// after every `search_root`/`negamax`/quiescence-evasion move loop. Without this,
     /// quiet moves beyond the killer table's two slots are ordered and left unrecorded
     /// exactly as if history didn't exist: a no-op, not an error condition, the same
     /// convention `with_tt`'s absence carries.
     #[must_use]
-    pub const fn with_piece_to_history(mut self, piece_to_history: &'a mut PieceToHistory) -> Self {
-        self.piece_to_history = Some(piece_to_history);
+    pub const fn with_cutoff_history(mut self, cutoff_history: &'a mut CutoffHistory) -> Self {
+        self.cutoff_history = Some(cutoff_history);
         self
     }
 
@@ -632,11 +631,11 @@ impl<'a> Search<'a> {
         }
     }
 
-    /// Feeds every material-neutral move this node's loop tried into `self.piece_to_history`:
+    /// Feeds every material-neutral move this node's loop tried into `self.cutoff_history`:
     /// a bonus for whichever one caused the cutoff (if any, and if it's material-neutral), a
     /// malus for every other material-neutral move searched before it. If the loop never
     /// found a cutoff at all (an all-node), every material-neutral move in `moves` gets the
-    /// malus instead, since none of them caused one. A no-op when `self.piece_to_history` is
+    /// malus instead, since none of them caused one. A no-op when `self.cutoff_history` is
     /// `None`, same convention as `self.tt`.
     ///
     /// `moves` is the same already-ordered list the caller's own loop iterated
@@ -649,19 +648,19 @@ impl<'a> Search<'a> {
     /// quiescence's evasion loop has no such quantity and passes [`QUIESCENCE_HISTORY_DEPTH`]
     /// instead; see that constant's own doc. Called independently of, and after,
     /// `note_cutoff_move`: the two tables answer different questions over the same event
-    /// stream and neither is scoped by the other's outcome (see ADR-0005).
+    /// stream and neither is scoped by the other's outcome.
     #[expect(
         clippy::expect_used,
         reason = "moves is the position's own already-ordered move list, so a move's from-square always holds the piece that made it"
     )]
-    fn update_piece_to_history(
+    fn update_cutoff_history(
         &mut self,
         board: &Board,
         moves: &MoveList,
         cutoff_index: Option<usize>,
         depth: u8,
     ) {
-        let Some(piece_to_history) = self.piece_to_history.as_deref_mut() else {
+        let Some(cutoff_history) = self.cutoff_history.as_deref_mut() else {
             return;
         };
         let side = board.side_to_move();
@@ -672,7 +671,7 @@ impl<'a> Search<'a> {
                     .piece_at(searched.from())
                     .expect("move has a piece")
                     .piece();
-                piece_to_history.record_no_cutoff(side, piece, searched.to(), depth);
+                cutoff_history.record_no_cutoff(side, piece, searched.to(), depth);
             }
         }
         if let Some(i) = cutoff_index {
@@ -682,7 +681,7 @@ impl<'a> Search<'a> {
                     .piece_at(cutoff_move.from())
                     .expect("move has a piece")
                     .piece();
-                piece_to_history.record_cutoff(side, piece, cutoff_move.to(), depth);
+                cutoff_history.record_cutoff(side, piece, cutoff_move.to(), depth);
             }
         }
     }
@@ -924,7 +923,7 @@ impl<'a> Search<'a> {
                 &mut drawn_moves,
                 self.hash_move(0),
                 self.killer_slots(0),
-                self.piece_to_history.as_deref(),
+                self.cutoff_history.as_deref(),
             );
             return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
@@ -963,7 +962,7 @@ impl<'a> Search<'a> {
             &mut moves,
             self.hash_move(0),
             self.killer_slots(0),
-            self.piece_to_history.as_deref(),
+            self.cutoff_history.as_deref(),
         );
 
         let outcome = self.alpha_beta_loop(
@@ -988,7 +987,7 @@ impl<'a> Search<'a> {
             let best_so_far = outcome.best_move.map(|m| (outcome.max, m));
             return RootOutcome::Aborted { best_so_far };
         }
-        self.update_piece_to_history(board, &moves, outcome.cutoff_index, depth);
+        self.update_cutoff_history(board, &moves, outcome.cutoff_index, depth);
         RootOutcome::Completed(outcome.max, outcome.best_move)
     }
 
@@ -1078,7 +1077,7 @@ impl<'a> Search<'a> {
             &mut moves,
             self.hash_move(ply),
             self.killer_slots(ply),
-            self.piece_to_history.as_deref(),
+            self.cutoff_history.as_deref(),
         );
 
         let outcome = self.alpha_beta_loop(
@@ -1102,7 +1101,7 @@ impl<'a> Search<'a> {
         if outcome.aborted {
             return None;
         }
-        self.update_piece_to_history(board, &moves, outcome.cutoff_index, depth);
+        self.update_cutoff_history(board, &moves, outcome.cutoff_index, depth);
 
         if let Some(tt) = self.tt.as_deref_mut() {
             let best_move = outcome
@@ -1191,7 +1190,7 @@ impl<'a> Search<'a> {
                 &mut evasions,
                 self.hash_move(ply),
                 self.killer_slots(ply),
-                self.piece_to_history.as_deref(),
+                self.cutoff_history.as_deref(),
             );
 
             let outcome = self.alpha_beta_loop(
@@ -1212,7 +1211,7 @@ impl<'a> Search<'a> {
             if outcome.aborted {
                 return None;
             }
-            self.update_piece_to_history(
+            self.update_cutoff_history(
                 board,
                 &evasions,
                 outcome.cutoff_index,
@@ -1241,7 +1240,7 @@ impl<'a> Search<'a> {
             &mut qmoves,
             self.hash_move(ply),
             self.killer_slots(ply),
-            self.piece_to_history.as_deref(),
+            self.cutoff_history.as_deref(),
         );
 
         let outcome = self.alpha_beta_loop(
@@ -1293,7 +1292,7 @@ fn record_killer(mut slots: [Option<Move>; KILLER_SLOTS], m: Move) -> [Option<Mo
 /// material is most likely to hold up and cause a beta cutoff early.
 /// `tt_move`, when `Some`, ranks ahead of all of that; see [`move_priority`].
 /// `killers`, the calling ply's two killer slots, ranks below captures but
-/// above the remaining quiet moves; see [`move_priority`]. `piece_to_history`,
+/// above the remaining quiet moves; see [`move_priority`]. `cutoff_history`,
 /// when `Some`, breaks ties among the remaining quiets by their stored score;
 /// `None` orders them exactly as if it didn't exist (every untouched quiet
 /// ties at `0`), the same convention `tt_move: None`/empty `killers` carry.
@@ -1310,20 +1309,17 @@ fn order_moves(
     moves: &mut MoveList,
     tt_move: Option<Move>,
     killers: [Option<Move>; KILLER_SLOTS],
-    piece_to_history: Option<&PieceToHistory>,
+    cutoff_history: Option<&CutoffHistory>,
 ) {
-    moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move, killers, piece_to_history));
+    moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move, killers, cutoff_history));
 }
 
 /// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on the enum
 /// compares by declaration order, so this declaration *is* the ranking, not a lookup
-/// table alongside it. The fine-grained tiebreak *within* a tier -- MVV-LVA's delta among
-/// captures, [`PieceToHistory`]'s score among quiets -- used to live on individual
-/// variants (`WinningCapture(Reverse<Score>)`, `LosingCapture(Reverse<Score>)`), which
-/// worked for captures but gave `Quiet` nowhere comparable to put a number once
-/// `PieceToHistory` needed one too. [`move_priority`] returns `(MovePriority,
-/// Reverse<Score>)` instead, so every tier shares one place for its tiebreak and this
-/// enum goes back to being only the coarse ranking.
+/// table alongside it. Carries no payload of its own: [`move_priority`] returns
+/// `(MovePriority, Reverse<Score>)` instead, so the fine-grained tiebreak *within* a
+/// tier (MVV-LVA's delta among captures, [`CutoffHistory`]'s score among quiets) has one
+/// shared place to live rather than a separate payload per variant that needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 // `cfg_attr(not(test), ...)` because the ordering test below names both
 // variants, so `dead_code` fires in a normal build and not in a test one, and
@@ -1379,7 +1375,7 @@ enum MovePriority {
 ///
 /// Returns `(MovePriority, Reverse<Score>)`: the coarse tier, then a tiebreak within it,
 /// always wrapped in `Reverse` so "a bigger real number is better" reads the same
-/// direction for every tier (MVV-LVA's delta for captures, `piece_to_history`'s score for
+/// direction for every tier (MVV-LVA's delta for captures, `cutoff_history`'s score for
 /// quiets) despite `sort_unstable_by_key`'s ascending sort. Tiers with no real number to
 /// break ties by (`Hash`, `EqualCapture`, `Killer`) carry `Reverse(0)`, a placeholder that
 /// never actually competes against anything: every move landing in one of those tiers
@@ -1393,7 +1389,7 @@ fn move_priority(
     m: Move,
     tt_move: Option<Move>,
     killers: [Option<Move>; KILLER_SLOTS],
-    piece_to_history: Option<&PieceToHistory>,
+    cutoff_history: Option<&CutoffHistory>,
 ) -> (MovePriority, Reverse<Score>) {
     if Some(m) == tt_move {
         return (MovePriority::Hash, Reverse(0));
@@ -1423,7 +1419,7 @@ fn move_priority(
             if killers.contains(&Some(m)) {
                 return (MovePriority::Killer, Reverse(0));
             }
-            let history_score = piece_to_history.map_or(0, |history| {
+            let history_score = cutoff_history.map_or(0, |history| {
                 let piece = board.piece_at(m.from()).expect("move has a piece").piece();
                 history.score(board.side_to_move(), piece, m.to())
             });

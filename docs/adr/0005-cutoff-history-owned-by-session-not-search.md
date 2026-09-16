@@ -1,6 +1,6 @@
-# `PieceToHistory` is owned by `uci::session`, not `search::Search`
+# `CutoffHistory` is owned by `uci::session`, not `search::Search`
 
-Unlike the killer table (ADR-0003), `PieceToHistory` is created once in
+Unlike the killer table (ADR-0003), `CutoffHistory` is created once in
 `session::run`, threaded into each `Search` call, and cleared on
 `ucinewgame` alongside the transposition table, rather than rebuilt fresh
 on every `go` command.

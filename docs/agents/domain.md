@@ -9,10 +9,10 @@ What to read before exploring the codebase, and how to use it.
 - `CONTEXT.md` at the repo root: the glossary of domain terms.
 - `docs/adr/`: decision records touching the area being worked in.
 
-The last two don't exist yet. If a file is absent, proceed silently:
-don't flag it, and don't propose creating it upfront. `/domain-modeling`
-creates them lazily, when a term or a decision actually needs pinning
-down.
+Not every term or decision has one yet. If a glossary entry or ADR a
+task would benefit from is absent, proceed silently: don't flag it, and
+don't propose creating it upfront. `/domain-modeling` creates them
+lazily, when a term or a decision actually needs pinning down.
 
 Chess brings a large amount of established public vocabulary with it
 (perft, quiescence, en passant, magic bitboards, SPRT). That vocabulary
