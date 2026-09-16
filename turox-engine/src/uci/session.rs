@@ -21,6 +21,7 @@
 
 use crate::board::Board;
 use crate::book::Book;
+use crate::move_gen::legal::legal_moves;
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
@@ -54,7 +55,7 @@ const DEFAULT_MAX_DEPTH: u8 = 64;
     clippy::expect_used,
     reason = "`active_stop` is only ever held across an Option assignment, which cannot panic, so the mutex cannot become poisoned"
 )]
-pub fn run<R, W>(board: &mut Board, _book: Option<&Book>, reader: R, mut writer: W)
+pub fn run<R, W>(board: &mut Board, book: Option<&Book>, reader: R, mut writer: W)
 where
     R: BufRead + Send + 'static,
     W: Write,
@@ -102,6 +103,29 @@ where
                 *board = new_board;
             }
             Command::Go(options) => {
+                // Checked before any of the search-only setup below, and
+                // ahead of `active_stop` in particular: a book hit never
+                // calls `Search::search`, so it never needs `stop` to exist
+                // at all. Validated against the real board's own legal
+                // moves before being trusted, not just handed straight to
+                // the GUI: `book.choose` only knows the position's hash, so
+                // a hash collision, a stale book, or the coarser-than-strictly-
+                // legal en passant hashing gap (`board::zobrist`'s own module
+                // doc) could otherwise hand back a move that isn't actually
+                // playable here. A position with no legal moves at all
+                // (checkmate, stalemate) falls out of this the same way: no
+                // candidate can ever pass the check, so it falls through to
+                // search below, which already reports the null move `0000`
+                // for that case.
+                if let Some(book) = book {
+                    if let Some(mv) = book.choose(board.hash(), root_seed()) {
+                        if legal_moves(board).as_slice().contains(&mv) {
+                            send(&mut writer, &Response::BestMove(Some(mv)));
+                            continue;
+                        }
+                    }
+                }
+
                 let stop = Arc::new(AtomicBool::new(false));
                 // A poisoned lock means another thread already panicked while
                 // holding it; propagating that panic here, rather than silently
