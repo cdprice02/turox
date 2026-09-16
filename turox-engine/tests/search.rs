@@ -701,3 +701,41 @@ fn killer_table_is_consulted_during_a_real_search() {
          consulted from the real move loop"
     );
 }
+
+// ---- Piece-to history wiring ----
+
+/// The same "is this actually wired into a real move loop" question
+/// `killer_table_is_consulted_during_a_real_search` asks, for `PieceToHistory`:
+/// exact scores are `PieceToHistory`'s own unit tests' job (bonus, malus,
+/// aging, depth-weighting), and exact ordering consequences are
+/// `negamax`'s own `move_priority`/`order_moves` unit tests' job. This only
+/// proves `Search::with_piece_to_history` actually reaches the table from a
+/// live `search_root`/`negamax` move loop, rather than the table sitting
+/// there unread and unwritten.
+#[test]
+fn search_with_piece_to_history_actually_updates_it() {
+    use turox_engine::search::piece_to_history::PieceToHistory;
+    use turox_engine::types::{Color, Piece, Square};
+
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+    let mut history = PieceToHistory::new();
+    Search::new(Vec::new())
+        .with_piece_to_history(&mut history)
+        .search(&board, 6);
+
+    let any_cell_touched = Color::ALL.into_iter().any(|side| {
+        Piece::ALL.into_iter().any(|piece| {
+            Square::ALL
+                .into_iter()
+                .any(|to| history.score(side, piece, to) != 0)
+        })
+    });
+    assert!(
+        any_cell_touched,
+        "a depth-6 search of a position this open must record at least one quiet-move \
+         cutoff or malus somewhere in the table, or it isn't being consulted from the \
+         real move loop"
+    );
+}

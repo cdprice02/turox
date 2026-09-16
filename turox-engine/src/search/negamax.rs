@@ -13,6 +13,7 @@ use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
 use crate::rng::xorshift64star;
 use crate::search::draw::is_draw;
+use crate::search::piece_to_history::PieceToHistory;
 use crate::search::tt::Tt;
 use crate::types::Move;
 use crate::MoveFlags;
@@ -65,6 +66,16 @@ const MAX_TRACKED_PLY: usize = 512;
 /// not-yet-written algorithm from the two-slot one below), so this constant
 /// makes the *type* generic, not the *policy*.
 const KILLER_SLOTS: usize = 2;
+
+/// The depth-equivalent [`PieceToHistory`]'s bonus/malus formula uses for cutoffs found in
+/// quiescence's evasion loop, which (unlike `negamax`'s move loop) has no real `depth` to
+/// weight by: `ply` means something different there (distance from root, not remaining
+/// search) and `qdepth` is frozen/unused on the evasion path (see `quiescence`'s own doc).
+/// A fixed `1` rather than deriving one from either keeps this real but deliberately
+/// minimal weight, on the theory that a quiescence-depth refutation is a far lower-quality
+/// signal than a main-search one. Threading a real depth through (or tuning this constant)
+/// is a fast-follow, not this issue's scope.
+const QUIESCENCE_HISTORY_DEPTH: u8 = 1;
 
 /// Whether `score` encodes a forced mate rather than an ordinary evaluation.
 ///
@@ -306,6 +317,12 @@ struct LoopOutcome {
     /// the root reports as its partial result; every other caller propagates
     /// the abort instead.
     aborted: bool,
+    /// The move index a beta cutoff broke on, `None` if the loop ran to completion
+    /// without one. Callers feed this straight into [`Search::update_piece_to_history`],
+    /// which needs to know not just *whether* a cutoff happened (that's `best_move`
+    /// improving past `initial_max`) but exactly which prefix of `moves` was tried before
+    /// it, malus-worthy quiets and all.
+    cutoff_index: Option<usize>,
 }
 
 /// Mutable search state threaded through one [`Search::search`] call: the node counter
@@ -382,6 +399,12 @@ pub struct Search<'a> {
     /// table. Attribution has to follow the ordering, or it credits a technique
     /// that did not put the move first.
     hash_moves: [Option<Move>; MAX_TRACKED_PLY],
+    /// Quiet-move ordering scores independent of any one search tree; see
+    /// [`PieceToHistory`]'s own doc and ADR-0005 for why this, unlike `killers`, is
+    /// threaded in from `uci::session::run` rather than owned here. `None` by default
+    /// (`negamax` orders and records quiets exactly as if history didn't exist, the same
+    /// as before this existed): set via [`Search::with_piece_to_history`].
+    piece_to_history: Option<&'a mut PieceToHistory>,
     /// xorshift64* state when root move randomization is on, `None` when it is
     /// off (the default, so every existing test and bench stays deterministic
     /// without knowing this exists).
@@ -415,6 +438,7 @@ impl<'a> Search<'a> {
             tt: None,
             killers: [[None; KILLER_SLOTS]; MAX_TRACKED_PLY],
             hash_moves: [None; MAX_TRACKED_PLY],
+            piece_to_history: None,
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
@@ -487,6 +511,17 @@ impl<'a> Search<'a> {
     #[must_use]
     pub const fn with_tt(mut self, tt: &'a mut Tt) -> Self {
         self.tt = Some(tt);
+        self
+    }
+
+    /// Gives this search a piece-to history table to read during move ordering and update
+    /// after every `search_root`/`negamax`/quiescence-evasion move loop. Without this,
+    /// quiet moves beyond the killer table's two slots are ordered and left unrecorded
+    /// exactly as if history didn't exist: a no-op, not an error condition, the same
+    /// convention `with_tt`'s absence carries.
+    #[must_use]
+    pub const fn with_piece_to_history(mut self, piece_to_history: &'a mut PieceToHistory) -> Self {
+        self.piece_to_history = Some(piece_to_history);
         self
     }
 
@@ -594,6 +629,61 @@ impl<'a> Search<'a> {
             CutoffCause::Killer
         } else {
             CutoffCause::Other
+        }
+    }
+
+    /// Feeds every material-neutral move this node's loop tried into `self.piece_to_history`:
+    /// a bonus for whichever one caused the cutoff (if any, and if it's material-neutral), a
+    /// malus for every other material-neutral move searched before it. If the loop never
+    /// found a cutoff at all (an all-node), every material-neutral move in `moves` gets the
+    /// malus instead, since none of them caused one. A no-op when `self.piece_to_history` is
+    /// `None`, same convention as `self.tt`.
+    ///
+    /// `moves` is the same already-ordered list the caller's own loop iterated
+    /// (`search_root`'s, `negamax`'s, or quiescence's evasion loop's), so this needs no
+    /// separate bookkeeping of which quiets were tried: everything up to `cutoff_index` (or
+    /// everything, if there wasn't one) was tried by construction. `cutoff_index` is `None`
+    /// when the loop ran to completion without a cutoff, `Some(i)` when it broke at index `i`.
+    ///
+    /// `depth` is the caller's own remaining-depth parameter for `search_root`/`negamax`;
+    /// quiescence's evasion loop has no such quantity and passes [`QUIESCENCE_HISTORY_DEPTH`]
+    /// instead; see that constant's own doc. Called independently of, and after,
+    /// `note_cutoff_move`: the two tables answer different questions over the same event
+    /// stream and neither is scoped by the other's outcome (see ADR-0005).
+    #[expect(
+        clippy::expect_used,
+        reason = "moves is the position's own already-ordered move list, so a move's from-square always holds the piece that made it"
+    )]
+    fn update_piece_to_history(
+        &mut self,
+        board: &Board,
+        moves: &MoveList,
+        cutoff_index: Option<usize>,
+        depth: u8,
+    ) {
+        let Some(piece_to_history) = self.piece_to_history.as_deref_mut() else {
+            return;
+        };
+        let side = board.side_to_move();
+        let searched_end = cutoff_index.unwrap_or(moves.as_slice().len());
+        for &searched in &moves.as_slice()[..searched_end] {
+            if searched.flags().is_material_neutral() {
+                let piece = board
+                    .piece_at(searched.from())
+                    .expect("move has a piece")
+                    .piece();
+                piece_to_history.record_no_cutoff(side, piece, searched.to(), depth);
+            }
+        }
+        if let Some(i) = cutoff_index {
+            let cutoff_move = moves.as_slice()[i];
+            if cutoff_move.flags().is_material_neutral() {
+                let piece = board
+                    .piece_at(cutoff_move.from())
+                    .expect("move has a piece")
+                    .piece();
+                piece_to_history.record_cutoff(side, piece, cutoff_move.to(), depth);
+            }
         }
     }
 
@@ -771,6 +861,7 @@ impl<'a> Search<'a> {
 
         let mut max = initial_max;
         let mut best_move = None;
+        let mut cutoff_index = None;
 
         for (i, &m) in moves.as_slice().iter().enumerate() {
             let Some(score) = search_child(self, m, -beta, -alpha) else {
@@ -778,6 +869,7 @@ impl<'a> Search<'a> {
                     max,
                     best_move,
                     aborted: true,
+                    cutoff_index,
                 };
             };
 
@@ -796,6 +888,7 @@ impl<'a> Search<'a> {
                     CutoffSink::Negamax => self.negamax_cutoffs.record(i, cause),
                     CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, cause),
                 }
+                cutoff_index = Some(i);
                 break;
             }
         }
@@ -804,6 +897,7 @@ impl<'a> Search<'a> {
             max,
             best_move,
             aborted: false,
+            cutoff_index,
         }
     }
 
@@ -830,6 +924,7 @@ impl<'a> Search<'a> {
                 &mut drawn_moves,
                 self.hash_move(0),
                 self.killer_slots(0),
+                self.piece_to_history.as_deref(),
             );
             return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
         }
@@ -863,7 +958,13 @@ impl<'a> Search<'a> {
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
-        order_moves(board, &mut moves, self.hash_move(0), self.killer_slots(0));
+        order_moves(
+            board,
+            &mut moves,
+            self.hash_move(0),
+            self.killer_slots(0),
+            self.piece_to_history.as_deref(),
+        );
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -887,6 +988,7 @@ impl<'a> Search<'a> {
             let best_so_far = outcome.best_move.map(|m| (outcome.max, m));
             return RootOutcome::Aborted { best_so_far };
         }
+        self.update_piece_to_history(board, &moves, outcome.cutoff_index, depth);
         RootOutcome::Completed(outcome.max, outcome.best_move)
     }
 
@@ -976,6 +1078,7 @@ impl<'a> Search<'a> {
             &mut moves,
             self.hash_move(ply),
             self.killer_slots(ply),
+            self.piece_to_history.as_deref(),
         );
 
         let outcome = self.alpha_beta_loop(
@@ -999,6 +1102,7 @@ impl<'a> Search<'a> {
         if outcome.aborted {
             return None;
         }
+        self.update_piece_to_history(board, &moves, outcome.cutoff_index, depth);
 
         if let Some(tt) = self.tt.as_deref_mut() {
             let best_move = outcome
@@ -1087,6 +1191,7 @@ impl<'a> Search<'a> {
                 &mut evasions,
                 self.hash_move(ply),
                 self.killer_slots(ply),
+                self.piece_to_history.as_deref(),
             );
 
             let outcome = self.alpha_beta_loop(
@@ -1107,6 +1212,12 @@ impl<'a> Search<'a> {
             if outcome.aborted {
                 return None;
             }
+            self.update_piece_to_history(
+                board,
+                &evasions,
+                outcome.cutoff_index,
+                QUIESCENCE_HISTORY_DEPTH,
+            );
             return Some(outcome.max);
         }
 
@@ -1130,6 +1241,7 @@ impl<'a> Search<'a> {
             &mut qmoves,
             self.hash_move(ply),
             self.killer_slots(ply),
+            self.piece_to_history.as_deref(),
         );
 
         let outcome = self.alpha_beta_loop(
@@ -1181,7 +1293,10 @@ fn record_killer(mut slots: [Option<Move>; KILLER_SLOTS], m: Move) -> [Option<Mo
 /// material is most likely to hold up and cause a beta cutoff early.
 /// `tt_move`, when `Some`, ranks ahead of all of that; see [`move_priority`].
 /// `killers`, the calling ply's two killer slots, ranks below captures but
-/// above the remaining quiet moves; see [`move_priority`].
+/// above the remaining quiet moves; see [`move_priority`]. `piece_to_history`,
+/// when `Some`, breaks ties among the remaining quiets by their stored score;
+/// `None` orders them exactly as if it didn't exist (every untouched quiet
+/// ties at `0`), the same convention `tt_move: None`/empty `killers` carry.
 ///
 /// En passant's victim isn't actually on `m.to()`; scored as `0` (an
 /// equal-value trade) rather than looking up the true victim square, an
@@ -1195,21 +1310,20 @@ fn order_moves(
     moves: &mut MoveList,
     tt_move: Option<Move>,
     killers: [Option<Move>; KILLER_SLOTS],
+    piece_to_history: Option<&PieceToHistory>,
 ) {
-    moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move, killers));
+    moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move, killers, piece_to_history));
 }
 
-/// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on the
-/// enum compares by declaration order first, then by field data for two
-/// values of the same variant, so this declaration *is* the ranking, not a
-/// lookup table alongside it. `WinningCapture`/`LosingCapture` carry their
-/// material gain wrapped in `Reverse` rather than negated by hand: gain is
-/// stored as the real, un-negated victim-minus-attacker (or promotion)
-/// delta, and `Reverse` flips the field comparison so a bigger real gain
-/// still sorts first, the same direction the ascending derive already
-/// applies to the surrounding tiers. `EqualCapture` stays a bare unit
-/// variant because its gain is exactly `0` by definition and no promotion
-/// ever lands there (see `move_priority`).
+/// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on the enum
+/// compares by declaration order, so this declaration *is* the ranking, not a lookup
+/// table alongside it. The fine-grained tiebreak *within* a tier -- MVV-LVA's delta among
+/// captures, [`PieceToHistory`]'s score among quiets -- used to live on individual
+/// variants (`WinningCapture(Reverse<Score>)`, `LosingCapture(Reverse<Score>)`), which
+/// worked for captures but gave `Quiet` nowhere comparable to put a number once
+/// `PieceToHistory` needed one too. [`move_priority`] returns `(MovePriority,
+/// Reverse<Score>)` instead, so every tier shares one place for its tiebreak and this
+/// enum goes back to being only the coarse ranking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 // `cfg_attr(not(test), ...)` because the ordering test below names both
 // variants, so `dead_code` fires in a normal build and not in a test one, and
@@ -1231,11 +1345,12 @@ enum MovePriority {
     /// The transposition table's stored move for this position: already proved
     /// best by a deeper or equal search, so nothing cheaper predicts better.
     Hash,
-    /// A capture winning material, ordered by how much. `Reverse` so the
-    /// derived ascending `Ord` puts the *largest* gain first.
-    WinningCapture(Reverse<Score>),
-    /// An even trade. Gain is exactly `0` by definition, so unlike the winning
-    /// and losing tiers it carries no payload to sort within.
+    /// A capture winning material, ordered by how much; see [`move_priority`]'s own doc
+    /// for why the ordering value lives in the tuple this enum is half of, not a payload
+    /// on the variant.
+    WinningCapture,
+    /// An even trade. Gain is exactly `0` by definition, so unlike the winning and losing
+    /// tiers it needs no tiebreak beyond ordinary declaration order.
     EqualCapture,
     /// A quiet move that refuted a sibling *with a mate score*. Ranked above
     /// ordinary killers because a forced mate is worth more than material. No
@@ -1247,7 +1362,7 @@ enum MovePriority {
     Quiet,
     /// A capture losing material, ordered by how much. Below `Quiet` because a
     /// move that hangs a piece is worse than an untried ordinary move.
-    LosingCapture(Reverse<Score>),
+    LosingCapture,
 }
 
 /// Captures and promotions interleave on one material-gain scale rather than
@@ -1261,6 +1376,14 @@ enum MovePriority {
 /// that check happens before any killer-table lookup, a promotion can never
 /// fall through to `Quiet`, `Killer`, or `MateKiller` either, with or
 /// without a capture attached.
+///
+/// Returns `(MovePriority, Reverse<Score>)`: the coarse tier, then a tiebreak within it,
+/// always wrapped in `Reverse` so "a bigger real number is better" reads the same
+/// direction for every tier (MVV-LVA's delta for captures, `piece_to_history`'s score for
+/// quiets) despite `sort_unstable_by_key`'s ascending sort. Tiers with no real number to
+/// break ties by (`Hash`, `EqualCapture`, `Killer`) carry `Reverse(0)`, a placeholder that
+/// never actually competes against anything: every move landing in one of those tiers
+/// already ties on the first element of the tuple by definition of "same tier."
 #[expect(
     clippy::expect_used,
     reason = "the flags decide which arm runs, so a promotion arm always has a promotion piece and a capture arm always has a victim; the from-square always holds the moving piece"
@@ -1270,9 +1393,10 @@ fn move_priority(
     m: Move,
     tt_move: Option<Move>,
     killers: [Option<Move>; KILLER_SLOTS],
-) -> MovePriority {
+    piece_to_history: Option<&PieceToHistory>,
+) -> (MovePriority, Reverse<Score>) {
     if Some(m) == tt_move {
-        return MovePriority::Hash;
+        return (MovePriority::Hash, Reverse(0));
     }
 
     let flags = m.flags();
@@ -1297,9 +1421,13 @@ fn move_priority(
         | MoveFlags::KingCastle
         | MoveFlags::QueenCastle => {
             if killers.contains(&Some(m)) {
-                return MovePriority::Killer;
+                return (MovePriority::Killer, Reverse(0));
             }
-            return MovePriority::Quiet;
+            let history_score = piece_to_history.map_or(0, |history| {
+                let piece = board.piece_at(m.from()).expect("move has a piece").piece();
+                history.score(board.side_to_move(), piece, m.to())
+            });
+            return (MovePriority::Quiet, Reverse(history_score));
         }
         MoveFlags::Capture => capture_delta(),
         MoveFlags::EnPassant => 0,
@@ -1313,9 +1441,9 @@ fn move_priority(
         | MoveFlags::PromoteCaptureQueen => capture_delta() + promotion_delta(),
     };
     match score_delta.cmp(&0) {
-        std::cmp::Ordering::Greater => MovePriority::WinningCapture(Reverse(score_delta)),
-        std::cmp::Ordering::Equal => MovePriority::EqualCapture,
-        std::cmp::Ordering::Less => MovePriority::LosingCapture(Reverse(score_delta)),
+        std::cmp::Ordering::Greater => (MovePriority::WinningCapture, Reverse(score_delta)),
+        std::cmp::Ordering::Equal => (MovePriority::EqualCapture, Reverse(0)),
+        std::cmp::Ordering::Less => (MovePriority::LosingCapture, Reverse(score_delta)),
     }
 }
 
@@ -1379,12 +1507,12 @@ mod tests {
         let ranked_best_to_worst = [
             PrincipalVariation,
             Hash,
-            WinningCapture(Reverse(0)),
+            WinningCapture,
             EqualCapture,
             MateKiller,
             Killer,
             Quiet,
-            LosingCapture(Reverse(0)),
+            LosingCapture,
         ];
         for pair in ranked_best_to_worst.windows(2) {
             assert!(
@@ -1401,8 +1529,8 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, None, [None, None]),
-            MovePriority::Quiet
+            move_priority(&board, quiet, None, [None, None], None),
+            (MovePriority::Quiet, Reverse(0))
         );
     }
 
@@ -1421,8 +1549,8 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3q4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
         let pawn_takes_queen = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
-            move_priority(&board, pawn_takes_queen, None, [None, None]),
-            MovePriority::WinningCapture(Reverse(800)),
+            move_priority(&board, pawn_takes_queen, None, [None, None], None),
+            (MovePriority::WinningCapture, Reverse(800)),
             "a pawn capturing a queen is the textbook winning capture, gain = 900 - 100"
         );
     }
@@ -1432,8 +1560,8 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3p4/4Q3/8/4K3 w - - 0 1").expect("valid FEN");
         let queen_takes_pawn = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
-            move_priority(&board, queen_takes_pawn, None, [None, None]),
-            MovePriority::LosingCapture(Reverse(-800)),
+            move_priority(&board, queen_takes_pawn, None, [None, None], None),
+            (MovePriority::LosingCapture, Reverse(-800)),
             "a queen capturing an undefended pawn is comparatively unpromising, \
              the opposite end of the scale from a pawn capturing a queen, gain = 100 - 900"
         );
@@ -1444,8 +1572,8 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3r4/8/8/3RK3 w - - 0 1").expect("valid FEN");
         let rook_takes_rook = find_move(&board, Square::D1, Square::D4);
         assert_eq!(
-            move_priority(&board, rook_takes_rook, None, [None, None]),
-            MovePriority::EqualCapture
+            move_priority(&board, rook_takes_rook, None, [None, None], None),
+            (MovePriority::EqualCapture, Reverse(0))
         );
     }
 
@@ -1462,8 +1590,8 @@ mod tests {
             Board::try_from_fen("6k1/8/8/8/8/2n5/1P6/4K3 w - - 0 1").expect("valid FEN");
         let pawn_takes_knight = find_move(&pxn_board, Square::B2, Square::C3);
 
-        let rxq_priority = move_priority(&rxq_board, rook_takes_queen, None, [None, None]);
-        let pxn_priority = move_priority(&pxn_board, pawn_takes_knight, None, [None, None]);
+        let rxq_priority = move_priority(&rxq_board, rook_takes_queen, None, [None, None], None);
+        let pxn_priority = move_priority(&pxn_board, pawn_takes_knight, None, [None, None], None);
 
         assert_ne!(
             rxq_priority, pxn_priority,
@@ -1474,8 +1602,8 @@ mod tests {
             "RxQ must outrank PxN: rook-for-queen is a bigger material swing \
              than pawn-for-knight, even though both are winning captures"
         );
-        assert_eq!(rxq_priority, MovePriority::WinningCapture(Reverse(400)));
-        assert_eq!(pxn_priority, MovePriority::WinningCapture(Reverse(220)));
+        assert_eq!(rxq_priority, (MovePriority::WinningCapture, Reverse(400)));
+        assert_eq!(pxn_priority, (MovePriority::WinningCapture, Reverse(220)));
     }
 
     /// A losing capture must sort behind a quiet move, not ahead of it: hanging
@@ -1489,8 +1617,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
 
         assert!(
-            move_priority(&board, quiet, None, [None, None])
-                < move_priority(&board, losing_capture, None, [None, None]),
+            move_priority(&board, quiet, None, [None, None], None)
+                < move_priority(&board, losing_capture, None, [None, None], None),
             "a losing capture must sort behind a quiet move, not ahead of it"
         );
     }
@@ -1513,8 +1641,8 @@ mod tests {
         let queen_takes_pawn = find_move(&losing_board, Square::E3, Square::D4);
 
         assert!(
-            move_priority(&winning_board, pawn_takes_queen, None, [None, None])
-                < move_priority(&losing_board, queen_takes_pawn, None, [None, None]),
+            move_priority(&winning_board, pawn_takes_queen, None, [None, None], None)
+                < move_priority(&losing_board, queen_takes_pawn, None, [None, None], None),
             "a pawn capturing a queen must be tried before a queen capturing a pawn"
         );
     }
@@ -1526,12 +1654,12 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
 
         assert_eq!(
-            move_priority(&board, capture, Some(capture), [None, None]),
-            MovePriority::Hash
+            move_priority(&board, capture, Some(capture), [None, None], None),
+            (MovePriority::Hash, Reverse(0))
         );
         assert_eq!(
-            move_priority(&board, quiet, Some(quiet), [None, None]),
-            MovePriority::Hash
+            move_priority(&board, quiet, Some(quiet), [None, None], None),
+            (MovePriority::Hash, Reverse(0))
         );
     }
 
@@ -1544,8 +1672,8 @@ mod tests {
         // `quiet` is hinted, but `capture` is the move being scored: the
         // hint shouldn't affect a move it doesn't match.
         assert_eq!(
-            move_priority(&board, capture, Some(quiet), [None, None]),
-            move_priority(&board, capture, None, [None, None]),
+            move_priority(&board, capture, Some(quiet), [None, None], None),
+            move_priority(&board, capture, None, [None, None], None),
             "a tt hint for a different move must not affect this move's own ordering"
         );
     }
@@ -1565,7 +1693,7 @@ mod tests {
         let capture = find_move(&board, Square::E4, Square::D5);
         let quiet_hint = find_move(&board, Square::E1, Square::D1);
 
-        order_moves(&board, &mut moves, Some(quiet_hint), [None, None]);
+        order_moves(&board, &mut moves, Some(quiet_hint), [None, None], None);
 
         assert_eq!(
             moves.as_slice()[0],
@@ -1591,7 +1719,7 @@ mod tests {
 
         for &hint in legal.as_slice() {
             let mut moves = legal_moves(&board);
-            order_moves(&board, &mut moves, Some(hint), [None, None]);
+            order_moves(&board, &mut moves, Some(hint), [None, None], None);
             assert_eq!(
                 moves.as_slice()[0],
                 hint,
@@ -1619,8 +1747,8 @@ mod tests {
         let board = promotion_no_capture_position();
         let queen_promo = find_promotion_move(&board, Square::E7, Square::E8, Piece::Queen);
         assert_eq!(
-            move_priority(&board, queen_promo, None, [None, None]),
-            MovePriority::WinningCapture(Reverse(800)),
+            move_priority(&board, queen_promo, None, [None, None], None),
+            (MovePriority::WinningCapture, Reverse(800)),
             "a non-capture queen promotion must outrank quiet moves, not tie with \
              them: gain = 900 - 100, the same tier a good capture lands in"
         );
@@ -1639,17 +1767,18 @@ mod tests {
         let capturing_promo =
             find_promotion_move(&capture_board, Square::E7, Square::F8, Piece::Queen);
 
-        let plain_priority = move_priority(&plain_board, plain_promo, None, [None, None]);
-        let capturing_priority = move_priority(&capture_board, capturing_promo, None, [None, None]);
+        let plain_priority = move_priority(&plain_board, plain_promo, None, [None, None], None);
+        let capturing_priority =
+            move_priority(&capture_board, capturing_promo, None, [None, None], None);
 
         assert!(
             capturing_priority < plain_priority,
             "capturing a rook while promoting must outrank promoting alone"
         );
-        assert_eq!(plain_priority, MovePriority::WinningCapture(Reverse(800)));
+        assert_eq!(plain_priority, (MovePriority::WinningCapture, Reverse(800)));
         assert_eq!(
             capturing_priority,
-            MovePriority::WinningCapture(Reverse(1200)),
+            (MovePriority::WinningCapture, Reverse(1200)),
             "gain = (900 - 100) promotion + (500 - 100) capture"
         );
     }
@@ -1670,8 +1799,8 @@ mod tests {
             let plain = find_promotion_move(&plain_board, Square::E7, Square::E8, piece);
             assert!(
                 matches!(
-                    move_priority(&plain_board, plain, None, [None, None]),
-                    MovePriority::WinningCapture(_)
+                    move_priority(&plain_board, plain, None, [None, None], None),
+                    (MovePriority::WinningCapture, _)
                 ),
                 "{piece:?} promotion alone must classify as WinningCapture, never Quiet"
             );
@@ -1679,8 +1808,8 @@ mod tests {
             let capturing = find_promotion_move(&capture_board, Square::E7, Square::F8, piece);
             assert!(
                 matches!(
-                    move_priority(&capture_board, capturing, None, [None, None]),
-                    MovePriority::WinningCapture(_)
+                    move_priority(&capture_board, capturing, None, [None, None], None),
+                    (MovePriority::WinningCapture, _)
                 ),
                 "{piece:?} promotion with a capture must classify as WinningCapture, never Quiet"
             );
@@ -1741,8 +1870,8 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, None, [Some(quiet), None]),
-            MovePriority::Killer
+            move_priority(&board, quiet, None, [Some(quiet), None], None),
+            (MovePriority::Killer, Reverse(0))
         );
     }
 
@@ -1752,8 +1881,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
         let other_quiet = find_move(&board, Square::E1, Square::F1);
         assert_eq!(
-            move_priority(&board, quiet, None, [Some(other_quiet), Some(quiet)]),
-            MovePriority::Killer,
+            move_priority(&board, quiet, None, [Some(other_quiet), Some(quiet)], None),
+            (MovePriority::Killer, Reverse(0)),
             "both slots must be checked, not just the first"
         );
     }
@@ -1764,8 +1893,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
         let unrelated = find_move(&board, Square::E1, Square::F1);
         assert_eq!(
-            move_priority(&board, quiet, None, [Some(unrelated), None]),
-            MovePriority::Quiet,
+            move_priority(&board, quiet, None, [Some(unrelated), None], None),
+            (MovePriority::Quiet, Reverse(0)),
             "a killer slot holding a different move must not affect this move's own classification"
         );
     }
@@ -1775,8 +1904,8 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, None, [None, None]),
-            MovePriority::Quiet
+            move_priority(&board, quiet, None, [None, None], None),
+            (MovePriority::Quiet, Reverse(0))
         );
     }
 
@@ -1794,12 +1923,12 @@ mod tests {
         let ply_5_slots = [Some(quiet), None];
         let ply_9_slots = [None, None];
         assert_eq!(
-            move_priority(&board, quiet, None, ply_5_slots),
-            MovePriority::Killer
+            move_priority(&board, quiet, None, ply_5_slots, None),
+            (MovePriority::Killer, Reverse(0))
         );
         assert_eq!(
-            move_priority(&board, quiet, None, ply_9_slots),
-            MovePriority::Quiet
+            move_priority(&board, quiet, None, ply_9_slots, None),
+            (MovePriority::Quiet, Reverse(0))
         );
     }
 
@@ -1808,8 +1937,8 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, Some(quiet), [Some(quiet), None]),
-            MovePriority::Hash,
+            move_priority(&board, quiet, Some(quiet), [Some(quiet), None], None),
+            (MovePriority::Hash, Reverse(0)),
             "the tt hint must outrank a killer slot for the same move"
         );
     }
@@ -1835,8 +1964,8 @@ mod tests {
         // boundary.
         let capture = find_move(&board, Square::E4, Square::D5);
         assert!(matches!(
-            move_priority(&board, capture, None, [Some(capture), None]),
-            MovePriority::LosingCapture(_)
+            move_priority(&board, capture, None, [Some(capture), None], None),
+            (MovePriority::LosingCapture, _)
         ));
     }
 
@@ -1862,7 +1991,7 @@ mod tests {
         let other_quiet = find_move(&board, Square::E1, Square::F1);
 
         let mut moves = legal_moves(&board);
-        order_moves(&board, &mut moves, None, [Some(killer), None]);
+        order_moves(&board, &mut moves, None, [Some(killer), None], None);
 
         let killer_index = moves
             .as_slice()

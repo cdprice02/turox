@@ -20,6 +20,7 @@
 //! later change, not something to fold into this loop silently.
 
 use crate::board::Board;
+use crate::search::piece_to_history::PieceToHistory;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
 use crate::search::{CutoffCause, CutoffStats, Search, SearchResult};
@@ -66,6 +67,12 @@ where
     // conceptually follows the same shape, though it's actually copied into `Search`
     // per call rather than borrowed.
     let mut tt = Tt::new(Tt::DEFAULT_HASH_MB);
+    // Owned here for the same reason `tt` is, not rebuilt fresh every `go` the way
+    // `killers` is inside `Search`: history accumulates over many more nodes than two
+    // killer slots ever see, and its own aging step only makes sense for a table that
+    // survives past one `go` call. See ADR-0005 (contrasting with ADR-0003, the killer
+    // table's opposite answer to this same question).
+    let mut piece_to_history = PieceToHistory::new();
     // On by default: varied play is what a real opponent should meet. Turned off
     // only by a caller that needs the same search twice, which is measurement,
     // not play.
@@ -84,6 +91,7 @@ where
             Command::NewGame => {
                 history.clear();
                 tt.clear();
+                piece_to_history.clear();
             }
             Command::Position(new_board) => {
                 history.push(board.hash());
@@ -98,8 +106,21 @@ where
                     .lock()
                     .expect("active_stop mutex should not be poisoned") = Some(Arc::clone(&stop));
 
-                let (mut search, max_depth) =
-                    build_search(board, history.clone(), &options, stop, &mut tt, randomize);
+                // Decay before this `go`'s own search adds to it, not after: older
+                // evidence (from earlier in the game) should count for less than
+                // whatever this search itself finds. See `PieceToHistory::age`'s own
+                // doc for why this happens once per `go`, not once per node.
+                piece_to_history.age();
+
+                let (mut search, max_depth) = build_search(
+                    board,
+                    history.clone(),
+                    &options,
+                    stop,
+                    &mut tt,
+                    &mut piece_to_history,
+                    randomize,
+                );
                 // `search_with_info`, not plain `search`: streams an `info`
                 // line after every completed depth, so a GUI watching a
                 // long search sees progress instead of silence until
@@ -282,17 +303,21 @@ fn read_commands<R: BufRead>(
     }
 }
 
-/// Turns `options` into a `Search` (seeded with `history`, `stop`, and `tt`) and
-/// the `max_depth` to hand `Search::search`.
+/// Turns `options` into a `Search` (seeded with `history`, `stop`, `tt`, and
+/// `piece_to_history`) and the `max_depth` to hand `Search::search`.
 fn build_search<'a>(
     board: &Board,
     history: Vec<u64>,
     options: &GoOptions,
     stop: Arc<AtomicBool>,
     tt: &'a mut Tt,
+    piece_to_history: &'a mut PieceToHistory,
     randomize: bool,
 ) -> (Search<'a>, u8) {
-    let mut search = Search::new(history).with_stop_flag(stop).with_tt(tt);
+    let mut search = Search::new(history)
+        .with_stop_flag(stop)
+        .with_tt(tt)
+        .with_piece_to_history(piece_to_history);
     if randomize {
         search = search.with_root_randomization(root_seed());
     }

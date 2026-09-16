@@ -11,6 +11,7 @@
 
 pub mod draw;
 mod negamax;
+pub mod piece_to_history;
 pub mod time;
 pub mod tt;
 
