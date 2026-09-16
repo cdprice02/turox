@@ -9,6 +9,7 @@
 //! node makes before recursing further, and `board::zobrist` for the hashes `draw`'s
 //! repetition check and the transposition table (`tt`) both key on.
 
+pub mod cutoff_history;
 pub mod draw;
 mod negamax;
 pub mod time;
