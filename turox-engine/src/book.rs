@@ -8,16 +8,41 @@
 //! from inside `Search` itself: a book hit is a bypass of search, not an
 //! input to it.
 //!
-//! # Interface only, not yet implemented
+//! # Wire format
 //!
-//! Every method here is a stub returning a fixed, honest "empty" answer
-//! rather than `todo!()`/`unimplemented!()`, both denied by this workspace's
-//! lint policy. The real logic (the wire format, the weighted-random
-//! selection algorithm) belongs to whoever picks up this module; the tests
-//! in `tests/book.rs` and `tests/book_props.rs` are written against this
-//! exact interface and are expected to fail until it's filled in.
+//! `Book::to_bytes`'s output: an 8-byte little-endian fingerprint of the
+//! build's `board::zobrist` key table (`from_bytes` checks this first, ahead
+//! of parsing anything else), a 4-byte little-endian entry count, then for
+//! each entry an 8-byte hash, a 4-byte move count, and that many
+//! `(2-byte move bits, 4-byte weight)` pairs, all little-endian.
 
+use crate::board::zobrist;
+use crate::rng::xorshift64star;
 use crate::types::Move;
+
+/// Reads `N` bytes at `*pos` and advances `*pos` by `N`, or `None` if fewer
+/// than `N` bytes remain. The one bounds check every other `read_*` helper
+/// here builds on, so truncation is caught in exactly one place.
+fn read_bytes<const N: usize>(bytes: &[u8], pos: &mut usize) -> Option<[u8; N]> {
+    let chunk = bytes.get(*pos..*pos + N)?.try_into().ok()?;
+    *pos += N;
+    Some(chunk)
+}
+
+/// Reads a little-endian `u64` at `*pos`, advancing past it.
+fn read_u64(bytes: &[u8], pos: &mut usize) -> Option<u64> {
+    read_bytes(bytes, pos).map(u64::from_le_bytes)
+}
+
+/// Reads a little-endian `u32` at `*pos`, advancing past it.
+fn read_u32(bytes: &[u8], pos: &mut usize) -> Option<u32> {
+    read_bytes(bytes, pos).map(u32::from_le_bytes)
+}
+
+/// Reads a little-endian `u16` at `*pos`, advancing past it.
+fn read_u16(bytes: &[u8], pos: &mut usize) -> Option<u16> {
+    read_bytes(bytes, pos).map(u16::from_le_bytes)
+}
 
 /// One followable move for a book position, alongside its weight.
 ///
@@ -68,25 +93,64 @@ impl Book {
     /// The candidate moves recorded for `hash`, or an empty slice if `hash`
     /// isn't in the book (an out-of-book position).
     #[must_use]
-    pub const fn moves(&self, _hash: u64) -> &[BookMove] {
-        &[]
+    pub fn moves(&self, hash: u64) -> &[BookMove] {
+        self.entries
+            .iter()
+            .find(|entry| entry.0 == hash)
+            .map_or(&[], |bm| bm.1.as_slice())
     }
 
     /// A weighted-random choice among `hash`'s candidate moves, seeded for
     /// reproducibility. `None` for an out-of-book position, matching
     /// [`Book::moves`] returning empty.
     #[must_use]
-    pub const fn choose(&self, _hash: u64, _seed: u64) -> Option<Move> {
+    pub fn choose(&self, hash: u64, seed: u64) -> Option<Move> {
+        let moves = self.moves(hash);
+        if moves.is_empty() {
+            return None;
+        }
+
+        let weights = moves.iter().map(|bm| u64::from(bm.weight));
+        let weight_total: u64 = weights.clone().sum();
+
+        let chosen = xorshift64star(seed) % weight_total;
+
+        let mut sum = 0;
+        for (i, b) in weights.enumerate() {
+            sum += b;
+            if sum > chosen {
+                return Some(moves[i].mv);
+            }
+        }
+
         None
     }
 
-    /// Serializes this book to bytes. The first 8 bytes are a
-    /// little-endian fingerprint of this build's `board::zobrist` key
-    /// table, which [`Book::from_bytes`] checks; everything after that is
-    /// implementation-defined.
+    /// Serializes this book to bytes. See the module doc for the exact wire
+    /// format; the first 8 bytes are always this build's `board::zobrist`
+    /// fingerprint, which [`Book::from_bytes`] checks before reading
+    /// anything else.
     #[must_use]
-    pub const fn to_bytes(&self) -> Vec<u8> {
-        Vec::new()
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&zobrist::FINGERPRINT.to_le_bytes());
+
+        let entry_count = u32::try_from(self.entries.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&entry_count.to_le_bytes());
+
+        for (hash, moves) in &self.entries {
+            buf.extend_from_slice(&hash.to_le_bytes());
+
+            let move_count = u32::try_from(moves.len()).unwrap_or(u32::MAX);
+            buf.extend_from_slice(&move_count.to_le_bytes());
+
+            for bm in moves {
+                buf.extend_from_slice(&bm.mv.bits().to_le_bytes());
+                buf.extend_from_slice(&bm.weight.to_le_bytes());
+            }
+        }
+
+        buf
     }
 
     /// Deserializes a book previously written by [`Book::to_bytes`].
@@ -97,7 +161,33 @@ impl Book {
     /// fingerprint header. [`BookLoadError::FingerprintMismatch`] if
     /// `bytes` was written by a build with a different `board::zobrist` key
     /// table.
-    pub const fn from_bytes(_bytes: &[u8]) -> Result<Self, BookLoadError> {
-        Err(BookLoadError::Truncated)
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BookLoadError> {
+        let mut pos = 0;
+
+        let fingerprint = read_u64(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+        if fingerprint != zobrist::FINGERPRINT {
+            return Err(BookLoadError::FingerprintMismatch);
+        }
+
+        let entry_count = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+        let mut entries = Vec::new();
+        for _ in 0..entry_count {
+            let hash = read_u64(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+
+            let move_count = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+            let mut moves = Vec::new();
+            for _ in 0..move_count {
+                let bits = read_u16(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+                let weight = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+                moves.push(BookMove {
+                    mv: Move::from_bits(bits),
+                    weight,
+                });
+            }
+
+            entries.push((hash, moves));
+        }
+
+        Ok(Self { entries })
     }
 }
