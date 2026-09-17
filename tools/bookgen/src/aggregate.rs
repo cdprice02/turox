@@ -10,8 +10,12 @@
 //! reached it, which is what makes a density count meaningful across
 //! transpositions rather than per move-order.
 
-use crate::pgn::PgnGame;
-use turox_engine::Move;
+use std::collections::HashMap;
+
+use crate::pgn::{GameResult, PgnGame};
+use crate::san::resolve_san;
+use turox_engine::board::Board;
+use turox_engine::{Color, Move};
 
 /// One candidate move's observed statistics at some position, before
 /// weighing turns them into a `book::BookMove`.
@@ -57,8 +61,55 @@ pub struct BuildOptions {
 /// Returns the raw counts, not yet checked against `options.min_sample_size`;
 /// see [`filter_by_density`] for that half.
 #[must_use]
-pub fn aggregate(_games: &[PgnGame], _options: &BuildOptions) -> Vec<(u64, Vec<MoveStats>)> {
-    Vec::new()
+pub fn aggregate(games: &[PgnGame], options: &BuildOptions) -> Vec<(u64, Vec<MoveStats>)> {
+    let mut results: HashMap<u64, Vec<MoveStats>> = HashMap::new();
+
+    for game in games.iter().filter(|g| {
+        g.result != GameResult::Unknown
+            && g.white_elo.is_some_and(|elo| elo >= options.min_rating)
+            && g.black_elo.is_some_and(|elo| elo >= options.min_rating)
+    }) {
+        let mut board = Board::start_pos();
+
+        for (ply, san) in game.moves.iter().enumerate() {
+            let ply = u32::try_from(ply).unwrap_or(u32::MAX);
+            if ply >= options.max_ply {
+                break;
+            }
+            let Some(mv) = resolve_san(&board, san) else {
+                break;
+            };
+
+            let (win_delta, draw_delta, loss_delta) = match (board.side_to_move(), game.result) {
+                (Color::White, GameResult::WhiteWins) => (1, 0, 0),
+                (Color::Black, GameResult::WhiteWins) => (0, 0, 1),
+                (Color::White, GameResult::BlackWins) => (0, 0, 1),
+                (Color::Black, GameResult::BlackWins) => (1, 0, 0),
+                (_, GameResult::Draw) => (0, 1, 0),
+                (_, GameResult::Unknown) => (0, 0, 0), // excluded above; never reached
+            };
+
+            let entry = results.entry(board.hash()).or_default();
+            if let Some(existing) = entry.iter_mut().find(|ms| ms.mv == mv) {
+                existing.times_played += 1;
+                existing.wins += win_delta;
+                existing.draws += draw_delta;
+                existing.losses += loss_delta;
+            } else {
+                entry.push(MoveStats {
+                    mv,
+                    times_played: 1,
+                    wins: win_delta,
+                    draws: draw_delta,
+                    losses: loss_delta,
+                });
+            }
+
+            board = board.make_move(mv);
+        }
+    }
+
+    results.into_iter().collect()
 }
 
 /// Drops any position whose candidates' combined `times_played` (summed
@@ -70,6 +121,11 @@ pub fn filter_by_density(
     aggregated: Vec<(u64, Vec<MoveStats>)>,
     min_sample_size: u32,
 ) -> Vec<(u64, Vec<MoveStats>)> {
-    let _ = min_sample_size;
     aggregated
+        .into_iter()
+        .filter(|(_, stats)| {
+            let total: u32 = stats.iter().map(|s| s.times_played).sum();
+            total >= min_sample_size
+        })
+        .collect()
 }
