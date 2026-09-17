@@ -82,6 +82,10 @@ where
     // only by a caller that needs the same search twice, which is measurement,
     // not play.
     let mut randomize = true;
+    // On by default, same reasoning as `randomize`: a book is what real play
+    // should use. Turned off for a measurement that wants search/eval alone,
+    // or that's specifically comparing book against no book.
+    let mut book_enabled = true;
 
     for command in rx {
         match command {
@@ -90,6 +94,7 @@ where
                 send(&mut writer, &Response::IdAuthor);
                 send(&mut writer, &Response::OptionHash);
                 send(&mut writer, &Response::OptionRandomize);
+                send(&mut writer, &Response::OptionBook);
                 send(&mut writer, &Response::UciOk);
             }
             Command::IsReady => send(&mut writer, &Response::ReadyOk),
@@ -117,11 +122,13 @@ where
                 // candidate can ever pass the check, so it falls through to
                 // search below, which already reports the null move `0000`
                 // for that case.
-                if let Some(book) = book {
-                    if let Some(mv) = book.choose(board.hash(), root_seed()) {
-                        if legal_moves(board).as_slice().contains(&mv) {
-                            send(&mut writer, &Response::BestMove(Some(mv)));
-                            continue;
+                if book_enabled {
+                    if let Some(book) = book {
+                        if let Some(mv) = book.choose(board.hash(), root_seed()) {
+                            if legal_moves(board).as_slice().contains(&mv) {
+                                send(&mut writer, &Response::BestMove(Some(mv)));
+                                continue;
+                            }
                         }
                     }
                 }
@@ -185,6 +192,13 @@ where
                     match value.as_deref() {
                         Some("true") => randomize = true,
                         Some("false") => randomize = false,
+                        _ => {}
+                    }
+                }
+                if name == "Book" {
+                    match value.as_deref() {
+                        Some("true") => book_enabled = true,
+                        Some("false") => book_enabled = false,
                         _ => {}
                     }
                 }
