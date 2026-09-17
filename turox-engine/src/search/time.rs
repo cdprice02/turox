@@ -4,6 +4,9 @@
 //! reports (`wtime`/`btime`/`winc`/`binc`/`movestogo`). Pure and stateless; the caller
 //! combines the result with `Instant::now()` and hands it to
 //! [`super::Search::with_deadline`].
+//!
+//! [`should_skip_next_iteration`] is the other half: once a move's budget is
+//! spent iteration by iteration, whether to start one more.
 
 use std::time::Duration;
 
@@ -85,6 +88,55 @@ pub fn allocate_time(
         .saturating_sub(OVERHEAD_RESERVE)
         .max(MIN_BUDGET)
         .min(time_left)
+}
+
+/// The safety-margin multiplier applied to the last completed iteration's
+/// own elapsed time when there is not yet a node-count ratio to estimate
+/// the next iteration's cost from: only one iteration has completed so far,
+/// so there is nothing to measure a growth rate from.
+///
+/// `2`, not the wider margins real branching factors near the horizon can
+/// reach: this is the one guarded decision (whether to start iteration 2)
+/// that always runs blind, on every search, regardless of how well move
+/// ordering is doing right now. A tight margin here costs at most one
+/// iteration's worth of conservatism before real per-search node counts
+/// take over; a loose one throws away reachable depth on every single move.
+const FALLBACK_SAFETY_MARGIN: u32 = 2;
+
+/// Whether iterative deepening should skip starting its next iteration.
+///
+/// Takes the last completed iteration's own elapsed time and node count,
+/// the iteration before that one's own node count (`None` if fewer than two
+/// iterations have completed yet), and how much time actually remains
+/// before the deadline.
+///
+/// With no node-count ratio yet to estimate growth from, this falls back to
+/// `FALLBACK_SAFETY_MARGIN` against `elapsed_last` alone. Once two
+/// iterations have completed, the next iteration's cost is estimated from
+/// this search's own measured growth (`nodes_last` over
+/// `nodes_before_last`), tracking whatever this search's move ordering is
+/// actually doing right now rather than a hand-picked constant that goes
+/// stale the moment ordering changes.
+#[must_use]
+pub fn should_skip_next_iteration(
+    elapsed_last: Duration,
+    nodes_last: u64,
+    nodes_before_last: Option<u64>,
+    remaining: Duration,
+) -> bool {
+    let estimated_cost = match nodes_before_last {
+        Some(before) if before > 0 => {
+            #[expect(
+                clippy::as_conversions,
+                clippy::cast_precision_loss,
+                reason = "node counts as a growth ratio: `f64` has no infallible `From<u64>` since a count past 2^52 would lose precision, but a real search is nowhere near that, and a ratio of two node counts is an estimate already, not a value this cast could meaningfully corrupt"
+            )]
+            let ratio = nodes_last as f64 / before as f64;
+            elapsed_last.mul_f64(ratio)
+        }
+        _ => elapsed_last.saturating_mul(FALLBACK_SAFETY_MARGIN),
+    };
+    estimated_cost > remaining
 }
 
 #[cfg(test)]
@@ -185,5 +237,112 @@ mod tests {
             "budget {budget:?} must never drop below MIN_BUDGET, even with the reserve applied"
         );
         assert!(budget > Duration::ZERO, "budget: {budget:?}");
+    }
+
+    #[test]
+    fn fallback_margin_skips_when_no_ratio_data_and_double_elapsed_exceeds_remaining() {
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(150);
+        assert!(
+            should_skip_next_iteration(elapsed, 1000, None, remaining),
+            "with no ratio data, 2x elapsed ({:?}) exceeds remaining {remaining:?}, so the next iteration must be skipped",
+            elapsed.saturating_mul(FALLBACK_SAFETY_MARGIN)
+        );
+    }
+
+    #[test]
+    fn fallback_margin_does_not_skip_when_remaining_covers_double_elapsed() {
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(250);
+        assert!(
+            !should_skip_next_iteration(elapsed, 1000, None, remaining),
+            "remaining {remaining:?} comfortably covers 2x elapsed {elapsed:?}, so the next iteration must not be skipped"
+        );
+    }
+
+    #[test]
+    fn a_zero_previous_node_count_falls_back_to_the_margin_rather_than_dividing_by_zero() {
+        // `Some(0)` is a degenerate case (an iteration that searched zero
+        // nodes), not the "no data yet" `None`, but a real ratio against it
+        // is meaningless; this must behave exactly like `None` rather than
+        // divide by zero.
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(150);
+        assert!(should_skip_next_iteration(
+            elapsed,
+            1000,
+            Some(0),
+            remaining
+        ));
+    }
+
+    #[test]
+    fn ratio_estimate_skips_when_measured_growth_exceeds_remaining() {
+        // A measured 9x growth (1_000 -> 9_000 nodes) projects a 900ms next
+        // iteration, which does not fit in the 500ms left.
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(500);
+        assert!(should_skip_next_iteration(
+            elapsed,
+            9_000,
+            Some(1_000),
+            remaining
+        ));
+    }
+
+    #[test]
+    fn ratio_estimate_does_not_skip_when_measured_growth_fits_remaining() {
+        // A measured 1.2x growth (1_000 -> 1_200 nodes) projects a 120ms
+        // next iteration, which comfortably fits in the 200ms left.
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(200);
+        assert!(!should_skip_next_iteration(
+            elapsed,
+            1_200,
+            Some(1_000),
+            remaining
+        ));
+    }
+
+    /// The point of measuring a real ratio at all: a search whose own move
+    /// ordering is producing much less growth than the blind fallback
+    /// margin assumes must not be penalized for it. `FALLBACK_SAFETY_MARGIN`
+    /// alone would skip here (2x elapsed is 200ms, past the 180ms left);
+    /// the measured 1.5x growth (120ms) must let it through instead.
+    #[test]
+    fn ratio_estimate_permits_an_iteration_the_fallback_margin_would_have_skipped() {
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(180);
+
+        assert!(
+            elapsed.saturating_mul(FALLBACK_SAFETY_MARGIN) > remaining,
+            "test setup: the fallback margin must actually be the tighter bound here"
+        );
+        assert!(!should_skip_next_iteration(
+            elapsed,
+            1_500,
+            Some(1_000),
+            remaining
+        ));
+    }
+
+    #[test]
+    fn an_estimated_cost_exactly_equal_to_remaining_does_not_skip() {
+        // Matches the fail-soft convention used everywhere else a cutoff or
+        // a limit is checked in this crate: strictly greater trips the
+        // limit, equal does not.
+        let elapsed = Duration::from_millis(100);
+        let remaining = elapsed.saturating_mul(FALLBACK_SAFETY_MARGIN);
+        assert!(!should_skip_next_iteration(elapsed, 1000, None, remaining));
+    }
+
+    #[test]
+    fn zero_elapsed_never_skips() {
+        assert!(!should_skip_next_iteration(
+            Duration::ZERO,
+            1_000,
+            Some(1_000),
+            Duration::ZERO
+        ));
     }
 }
