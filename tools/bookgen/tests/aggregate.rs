@@ -53,7 +53,7 @@ fn a_game_with_either_player_below_min_rating_is_excluded() {
     let strong = game(2400, 2400, GameResult::WhiteWins, &["e4"]);
     let weak = game(1200, 2400, GameResult::WhiteWins, &["d4"]);
 
-    let result = aggregate(&[strong, weak], &LOOSE_OPTIONS);
+    let result = aggregate([strong, weak], &LOOSE_OPTIONS);
 
     let start_hash = Board::start_pos().hash();
     let (_, stats) = result
@@ -73,7 +73,7 @@ fn a_game_missing_either_elo_tag_is_excluded() {
     let mut incomplete = game(2400, 2400, GameResult::WhiteWins, &["e4"]);
     incomplete.black_elo = None;
 
-    let result = aggregate(&[incomplete], &LOOSE_OPTIONS);
+    let result = aggregate([incomplete], &LOOSE_OPTIONS);
     assert!(
         result.is_empty(),
         "a missing rating must exclude the game entirely: {result:?}"
@@ -88,7 +88,7 @@ fn max_ply_stops_recording_positions_past_the_cap() {
         ..LOOSE_OPTIONS
     };
 
-    let result = aggregate(&[g], &options);
+    let result = aggregate([g], &options);
 
     let start_hash = Board::start_pos().hash();
     let after_e4 = Board::start_pos().make_move(e4());
@@ -114,7 +114,7 @@ fn the_same_move_from_two_games_merges_into_one_candidate_with_summed_counts() {
     let g1 = game(2400, 2400, GameResult::WhiteWins, &["e4"]);
     let g2 = game(2400, 2400, GameResult::WhiteWins, &["e4"]);
 
-    let result = aggregate(&[g1, g2], &LOOSE_OPTIONS);
+    let result = aggregate([g1, g2], &LOOSE_OPTIONS);
 
     let start_hash = Board::start_pos().hash();
     let (_, stats) = result
@@ -153,7 +153,7 @@ fn games_reaching_the_same_position_by_different_move_orders_merge() {
         &["Nf3", "e5", "e4", "Nc6", "Bb5"],
     );
 
-    let result = aggregate(&[via_e4_first, via_nf3_first], &LOOSE_OPTIONS);
+    let result = aggregate([via_e4_first, via_nf3_first], &LOOSE_OPTIONS);
 
     let transposed_hash = Board::start_pos()
         .make_move(e4())
@@ -183,7 +183,7 @@ fn wins_draws_and_losses_are_tallied_relative_to_whoever_moved() {
     let white_loses = game(2400, 2400, GameResult::BlackWins, &["d4"]);
     let drawn = game(2400, 2400, GameResult::Draw, &["c4"]);
 
-    let result = aggregate(&[white_wins, white_loses, drawn], &LOOSE_OPTIONS);
+    let result = aggregate([white_wins, white_loses, drawn], &LOOSE_OPTIONS);
     let start_hash = Board::start_pos().hash();
     let (_, stats) = result
         .iter()

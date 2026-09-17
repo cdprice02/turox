@@ -1,1 +1,6 @@
 target
+
+# Downloaded PGN source data (e.g. Lichess Elite Database snapshots), kept
+# locally for reuse across generator runs. Multi-gigabyte third-party data,
+# not something to check in; only the generated .book file output is.
+data/
