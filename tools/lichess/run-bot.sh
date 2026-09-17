@@ -1,7 +1,7 @@
 #!/bin/sh
 # Supervise lichess-bot for long unattended runs.
 #
-# Three failure modes have actually happened here, and a bare
+# Four failure modes have actually happened here, and a bare
 # `nohup python lichess-bot.py &` survives none of them:
 #
 #   1. The process exits (crash, or a fatal API error).
@@ -17,6 +17,15 @@
 #      deep enough that lichess's host stopped answering this address at all:
 #      not an HTTP 429 but a null route, which took the whole household off
 #      lichess until the processes were found and killed by hand.
+#   4. The machine sleeps out from under it. Every time-forfeit loss during an
+#      otherwise clean run lined up, to within 90 seconds, with a sleep/wake
+#      cycle in `pmset -g log`. Idle sleep is on by default on both AC and
+#      battery, and nothing here asserted against it, so a quiet stretch long
+#      enough to hit the idle timer froze the whole process tree until the
+#      next scheduled maintenance wake. Lichess's own clock does not pause for
+#      that, so the game timed out with turox's clock wherever it happened to
+#      be sitting, which reads as a high clock at forfeit rather than one that
+#      drained toward zero.
 #
 # Case 2 is why this does NOT watch the log's modification time. That was the
 # first thing tried and it fails exactly here: a bot stuck in a retry loop
@@ -37,6 +46,10 @@
 # is the one response guaranteed to prolong it. So reachability is checked once
 # per cycle before anything is started, the backoff grows instead of repeating,
 # and a bot that floods its log is stopped rather than left to run.
+#
+# Case 4 is why the supervisor holds its own `caffeinate` assertion for as
+# long as it runs, rather than depending on whatever happened to keep the
+# machine awake for the session that first surfaced the failure.
 #
 # Usage: tools/lichess/run-bot.sh [lichess-bot-dir]
 set -eu
@@ -113,6 +126,19 @@ CONNECT_FAIL_RE='ConnectTimeout|ConnectionError|Max retries exceeded|NewConnecti
 MY_PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || echo "")
 
 log() { printf '%s supervisor: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$SUP_LOG"; }
+
+# `-w "$$"` ties the assertion to this script's own life: caffeinate polls for
+# the pid rather than needing a signal, so it exits on its own whenever the
+# supervisor does, including a SIGKILL, and needs no entry in cleanup(). `-i`
+# covers idle sleep on any power source, since that is what case 4 above was;
+# `-s` backs it up while on AC, where every logged instance of case 4 happened
+# to be.
+if command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -i -s -w "$$" &
+    log "holding the machine awake for this run (caffeinate pid $!)"
+else
+    log "WARNING: caffeinate not found; the machine can sleep mid-game and turn a stall into a time forfeit"
+fi
 
 # Every lichess-bot process, whether or not this supervisor started it, and
 # whichever supervisor started it. Both spellings are needed: lichess-bot
