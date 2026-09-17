@@ -8,7 +8,6 @@
 //! precedent for testing seeded, weighted choice in this crate.
 
 use proptest::prelude::*;
-use proptest::strategy::ValueTree;
 use turox_engine::book::{Book, BookMove};
 use turox_engine::{Move, MoveFlags, Square};
 
@@ -95,21 +94,71 @@ proptest! {
 /// cleanly for `clippy::unusual_byte_groupings`.
 const PROBE_HASH: u64 = 0x00C0_FFEE;
 
-/// Not a `proptest!` property: this needs many *seeds* for one fixed,
-/// generated candidate set, which is a loop over seeds around one proptest
-/// draw rather than a property proptest itself shrinks over. Mirrors
+const fn e2e4() -> Move {
+    Move::new(Square::E2, Square::E4, MoveFlags::DoublePawnPush)
+}
+
+const fn d2d4() -> Move {
+    Move::new(Square::D2, Square::D4, MoveFlags::DoublePawnPush)
+}
+
+const fn b1c3() -> Move {
+    Move::new(Square::B1, Square::C3, MoveFlags::Quiet)
+}
+
+/// Concrete candidate sets, deliberately at moderate weight ratios (no
+/// steeper than 3:2) rather than proptest-drawn ones. A proptest weight in
+/// `1..1000` can land arbitrarily close to 999:1, and at that ratio the
+/// chance that none of 50 fixed seeds lands in the minority slice is real,
+/// not negligible: that is what surfaced as a flaky CI failure once
+/// already. At these ratios, missing a candidate across 50 independent
+/// seeds is astronomically unlikely rather than a coin flip.
+fn moderate_weight_candidate_sets() -> Vec<Vec<BookMove>> {
+    vec![
+        vec![
+            BookMove {
+                mv: e2e4(),
+                weight: 2,
+            },
+            BookMove {
+                mv: d2d4(),
+                weight: 1,
+            },
+        ],
+        vec![
+            BookMove {
+                mv: e2e4(),
+                weight: 3,
+            },
+            BookMove {
+                mv: d2d4(),
+                weight: 2,
+            },
+        ],
+        vec![
+            BookMove {
+                mv: e2e4(),
+                weight: 1,
+            },
+            BookMove {
+                mv: d2d4(),
+                weight: 1,
+            },
+            BookMove {
+                mv: b1c3(),
+                weight: 1,
+            },
+        ],
+    ]
+}
+
+/// Not a `proptest!` property: this needs many *seeds* for a few fixed
+/// candidate sets, which is a loop over seeds rather than a property
+/// proptest itself shrinks over. Mirrors
 /// `root_randomization_actually_varies_the_chosen_move`'s same shape.
 #[test]
 fn chosen_move_varies_across_seeds_when_multiple_candidates_exist() {
-    let mut runner = proptest::test_runner::TestRunner::default();
-    let strategy =
-        any_candidate_set().prop_filter("need at least 2 distinct moves to vary", |c| c.len() >= 2);
-
-    for _ in 0..20 {
-        let candidates = strategy
-            .new_tree(&mut runner)
-            .expect("strategy generation must not fail")
-            .current();
+    for candidates in moderate_weight_candidate_sets() {
         let book = Book::new(vec![(PROBE_HASH, candidates.clone())]);
 
         let chosen: std::collections::HashSet<_> = (0u64..50)
