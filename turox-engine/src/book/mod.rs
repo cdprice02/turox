@@ -8,6 +8,19 @@
 //! from inside `Search` itself: a book hit is a bypass of search, not an
 //! input to it.
 //!
+//! # The embedded default book
+//!
+//! `opening.bin` is `tools/bookgen`'s output from the Lichess Elite
+//! Database (CC0-licensed; see ADR 0006 for why this crate builds its own
+//! format rather than reading Polyglot), covering December 2024 through
+//! November 2025 (twelve monthly snapshots, ~3.4 million games), filtered
+//! to both players at 2000+ and a position reached by at least 10
+//! qualifying games, up to 20 plies (10 moves per side) deep. It's
+//! embedded at compile time via [`default_book`] rather than read from an
+//! external file at startup, matching `turox-engine`'s existing
+//! zero-runtime-dependency policy: the book ships inside the binary
+//! itself.
+//!
 //! # Wire format
 //!
 //! `Book::to_bytes`'s output: an 8-byte little-endian fingerprint of the
@@ -19,6 +32,32 @@
 use crate::board::zobrist;
 use crate::rng::xorshift64star;
 use crate::types::Move;
+
+/// The generated book file itself: see the module doc's "The embedded
+/// default book" section for exactly what source data and settings
+/// produced it.
+const OPENING_BOOK_BYTES: &[u8] = include_bytes!("opening.bin");
+
+/// Decodes the book embedded in this binary.
+///
+/// A build's own compile-time data, not external input, so a real caller
+/// can reasonably treat a mismatch here as a build inconsistency rather
+/// than something to recover from at runtime; this still returns a
+/// `Result` rather than panicking, since deciding how to react to that
+/// (fall back to no book, abort the build, ...) is a policy choice for
+/// the caller, not this function.
+///
+/// # Errors
+///
+/// [`BookLoadError::FingerprintMismatch`] if this build's `board::zobrist`
+/// key table doesn't match the one `opening.bin` was generated against.
+/// [`BookLoadError::Truncated`] should never happen for the embedded
+/// bytes specifically (they're checked in as a known-good `Book`), but
+/// `from_bytes` doesn't get to assume that about its input just because
+/// this caller happens to know better.
+pub fn default_book() -> Result<Book, BookLoadError> {
+    Book::from_bytes(OPENING_BOOK_BYTES)
+}
 
 /// Reads `N` bytes at `*pos` and advances `*pos` by `N`, or `None` if fewer
 /// than `N` bytes remain. The one bounds check every other `read_*` helper

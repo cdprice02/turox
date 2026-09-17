@@ -18,5 +18,18 @@ fn main() {
     Args::parse();
 
     let mut engine = Engine::new();
+    match turox_engine::book::default_book() {
+        Ok(book) => engine = engine.with_book(book),
+        // stderr, not stdout: a real UCI GUI only reads stdout as protocol,
+        // so a diagnostic line here can't corrupt that stream the way one
+        // ahead of Args::parse() above would. An engine that can still
+        // search is more useful than one that refuses to run at all over
+        // its opening book specifically.
+        Err(err) => {
+            eprintln!(
+                "turox: embedded opening book failed to load ({err:?}); continuing without it"
+            );
+        }
+    }
     engine.run();
 }
