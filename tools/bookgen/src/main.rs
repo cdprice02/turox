@@ -3,8 +3,10 @@
 //! in `Book::to_bytes`'s format.
 
 use bookgen::aggregate::BuildOptions;
+use bookgen::pgn::PgnReader;
 use clap::Parser;
 use std::fs;
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -35,23 +37,29 @@ struct Args {
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    let mut pgn_text = String::new();
+    // Opened eagerly (so a missing/unreadable file fails fast, before any
+    // processing starts), but not read: each PgnReader only pulls in as
+    // much of its file as one game needs, at the time aggregate() asks
+    // for the next one. `.flatten()` chains every file's games into a
+    // single stream, in the order the files were given.
+    let mut readers = Vec::with_capacity(args.inputs.len());
     for input in &args.inputs {
-        match fs::read_to_string(input) {
-            Ok(text) => pgn_text.push_str(&text),
+        match fs::File::open(input) {
+            Ok(file) => readers.push(PgnReader::new(BufReader::new(file))),
             Err(err) => {
-                eprintln!("bookgen: failed to read {}: {err}", input.display());
+                eprintln!("bookgen: failed to open {}: {err}", input.display());
                 return ExitCode::FAILURE;
             }
         }
     }
+    let games = readers.into_iter().flatten();
 
     let options = BuildOptions {
         min_rating: args.min_rating,
         min_sample_size: args.min_sample_size,
         max_ply: args.max_ply,
     };
-    let book = bookgen::build_book(&pgn_text, &options);
+    let book = bookgen::build_book_from_games(games, &options);
 
     if let Err(err) = fs::write(&args.output, book.to_bytes()) {
         eprintln!("bookgen: failed to write {}: {err}", args.output.display());

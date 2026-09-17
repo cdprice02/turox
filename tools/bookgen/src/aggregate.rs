@@ -58,13 +58,22 @@ pub struct BuildOptions {
 /// `options.max_ply` plies, recording which move was played from each
 /// position reached and with what eventual result.
 ///
+/// Takes an owned-item iterator, not a slice: `games` is consumed one game
+/// at a time (each dropped once its moves are walked) rather than held as
+/// a pre-collected list, so a caller feeding this from `PgnReader` never
+/// holds more than one game's worth of parsed data alongside the running
+/// accumulator, regardless of how large the underlying source is.
+///
 /// Returns the raw counts, not yet checked against `options.min_sample_size`;
 /// see [`filter_by_density`] for that half.
 #[must_use]
-pub fn aggregate(games: &[PgnGame], options: &BuildOptions) -> Vec<(u64, Vec<MoveStats>)> {
+pub fn aggregate(
+    games: impl IntoIterator<Item = PgnGame>,
+    options: &BuildOptions,
+) -> Vec<(u64, Vec<MoveStats>)> {
     let mut results: HashMap<u64, Vec<MoveStats>> = HashMap::new();
 
-    for game in games.iter().filter(|g| {
+    for game in games.into_iter().filter(|g| {
         g.result != GameResult::Unknown
             && g.white_elo.is_some_and(|elo| elo >= options.min_rating)
             && g.black_elo.is_some_and(|elo| elo >= options.min_rating)

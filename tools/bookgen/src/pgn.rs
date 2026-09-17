@@ -3,6 +3,7 @@
 //! this module's.
 
 use std::collections::VecDeque;
+use std::io::BufRead;
 
 /// One parsed game: the two header fields the generator's filtering
 /// actually uses, and the game's SAN move tokens in order.
@@ -41,6 +42,12 @@ pub enum GameResult {
 /// games, each a block of `[Tag "value"]` header lines followed by
 /// movetext).
 ///
+/// Holds the whole of `text` in memory at once (as both the `&str` itself
+/// and, per game, a small [`VecDeque<char>`] over just that game's slice
+/// of it), which is fine for a small synthetic fixture or a test but not
+/// for a real multi-gigabyte source file; see [`PgnReader`] for the
+/// streaming version a real generator run should use instead.
+///
 /// A game whose headers or movetext don't parse cleanly is dropped rather
 /// than aborting the whole run: one malformed game in a multi-million-game
 /// source file shouldn't cost every other game in it.
@@ -49,50 +56,120 @@ pub fn parse_pgn(text: &str) -> Vec<PgnGame> {
     let mut games = Vec::new();
     let mut rest = text.chars().collect::<VecDeque<_>>();
 
-    // note: ignores an incomplete game at the end of the text
-    loop {
-        while matches!(rest.front(), Some(c) if c.is_whitespace()) {
-            chop_one(&mut rest);
-        }
-        if rest.is_empty() {
-            break;
-        }
-
-        let mut game = PgnGame {
-            white_elo: None,
-            black_elo: None,
-            result: GameResult::Unknown,
-            moves: Vec::new(),
-        };
-
-        while rest.front() == Some(&'[') {
-            chop_one(&mut rest); // the '[' itself
-            let tag_name = split_once(&mut rest, ' ');
-            let raw_value = split_once(&mut rest, ']');
-            let value = strip_quotes(&raw_value);
-            match tag_name.as_str() {
-                "WhiteElo" => game.white_elo = value.parse::<u32>().ok(),
-                "BlackElo" => game.black_elo = value.parse::<u32>().ok(),
-                "Result" => {
-                    game.result = match value {
-                        "1-0" => GameResult::WhiteWins,
-                        "0-1" => GameResult::BlackWins,
-                        "1/2-1/2" => GameResult::Draw,
-                        _ => GameResult::Unknown,
-                    }
-                }
-                _ => {}
-            }
-            while matches!(rest.front(), Some(c) if c.is_whitespace()) {
-                chop_one(&mut rest);
-            }
-        }
-
-        game.moves = parse_movetext(&mut rest);
+    while let Some(game) = parse_one_game(&mut rest) {
         games.push(game);
     }
 
     games
+}
+
+/// Reads PGN games one at a time from `reader`, so a caller processing a
+/// large file never holds more than one game's raw text (read into its
+/// own small buffer, in memory only until it's parsed and yielded) at
+/// once, rather than the whole file plus every game it contains
+/// simultaneously the way [`parse_pgn`] does.
+///
+/// Splits games apart by PGN's own regular shape (a header block, a blank
+/// line, movetext, a blank line before the next header block) rather than
+/// scanning for `[` the way [`parse_one_game`] does over an
+/// already-in-memory `VecDeque`: at this layer nothing has been read yet,
+/// so there's no lookahead to scan.
+pub struct PgnReader<R> {
+    lines: std::io::Lines<R>,
+}
+
+impl<R: BufRead> PgnReader<R> {
+    /// Wraps `reader`. Doesn't read anything yet; each call to `next`
+    /// reads exactly as much as one game needs.
+    #[must_use]
+    pub fn new(reader: R) -> Self {
+        Self {
+            lines: reader.lines(),
+        }
+    }
+}
+
+impl<R: BufRead> Iterator for PgnReader<R> {
+    type Item = PgnGame;
+
+    fn next(&mut self) -> Option<PgnGame> {
+        let mut chunk = String::new();
+        let mut in_movetext = false;
+
+        while let Some(Ok(line)) = self.lines.next() {
+            if line.trim().is_empty() {
+                if chunk.is_empty() {
+                    continue; // a blank line before this game has started
+                }
+                if in_movetext {
+                    break; // the blank line ending this game's movetext
+                }
+                in_movetext = true; // the blank line between headers and movetext
+                continue;
+            }
+
+            chunk.push_str(&line);
+            chunk.push('\n');
+        }
+
+        if chunk.is_empty() {
+            return None;
+        }
+
+        let mut rest: VecDeque<char> = chunk.chars().collect();
+        parse_one_game(&mut rest)
+    }
+}
+
+/// Parses one game (a header block, optionally followed by movetext) from
+/// the front of `rest`, consuming exactly what belongs to that game and
+/// leaving anything after it untouched. `None` once `rest`, after
+/// skipping any leading whitespace, has nothing left to parse.
+///
+/// The one piece [`parse_pgn`] and [`PgnReader`] share: both eventually
+/// need "parse a header block plus movetext out of a character stream",
+/// they just differ in how much of the source text is in memory around
+/// that stream at any one time.
+fn parse_one_game(rest: &mut VecDeque<char>) -> Option<PgnGame> {
+    while matches!(rest.front(), Some(c) if c.is_whitespace()) {
+        chop_one(rest);
+    }
+    if rest.is_empty() {
+        return None;
+    }
+
+    let mut game = PgnGame {
+        white_elo: None,
+        black_elo: None,
+        result: GameResult::Unknown,
+        moves: Vec::new(),
+    };
+
+    while rest.front() == Some(&'[') {
+        chop_one(rest); // the '[' itself
+        let tag_name = split_once(rest, ' ');
+        let raw_value = split_once(rest, ']');
+        let value = strip_quotes(&raw_value);
+        match tag_name.as_str() {
+            "WhiteElo" => game.white_elo = value.parse::<u32>().ok(),
+            "BlackElo" => game.black_elo = value.parse::<u32>().ok(),
+            "Result" => {
+                game.result = match value {
+                    "1-0" => GameResult::WhiteWins,
+                    "0-1" => GameResult::BlackWins,
+                    "1/2-1/2" => GameResult::Draw,
+                    _ => GameResult::Unknown,
+                }
+            }
+            _ => {}
+        }
+        while matches!(rest.front(), Some(c) if c.is_whitespace()) {
+            chop_one(rest);
+        }
+    }
+
+    game.moves = parse_movetext(rest);
+    Some(game)
 }
 
 /// Pops and returns the next character in `rest`, or `None` at the end.
