@@ -90,6 +90,17 @@ jobs:
       - name: Check that the fuzz targets still compile
         run: cargo check --locked --manifest-path turox-fuzz/Cargo.toml
 
+      # `tools/bookgen` opts itself out of the workspace the same way
+      # `turox-fuzz` does, for the same reason it needs its own check here:
+      # every `--workspace` command above skips it, so nothing else would
+      # notice a signature change in turox-engine breaking it. `check`, not
+      # `test`: its own tests are written ahead of its implementation
+      # (opening-book generation) and are expected to fail until that
+      # lands, so gating merges on them passing would block on the wrong
+      # thing; compiling is what this step exists to catch.
+      - name: Check that the opening-book generator still compiles
+        run: cargo check --locked --manifest-path tools/bookgen/Cargo.toml
+
   lint-and-format:
     runs-on: ubuntu-latest
     timeout-minutes: 15
