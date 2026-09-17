@@ -38,6 +38,10 @@ fn nc6() -> Move {
     Move::new(Square::B8, Square::C6, MoveFlags::Quiet)
 }
 
+fn bb5() -> Move {
+    Move::new(Square::F1, Square::B5, MoveFlags::Quiet)
+}
+
 const LOOSE_OPTIONS: BuildOptions = BuildOptions {
     min_rating: 2300,
     min_sample_size: 1,
@@ -130,21 +134,23 @@ fn the_same_move_from_two_games_merges_into_one_candidate_with_summed_counts() {
 
 #[test]
 fn games_reaching_the_same_position_by_different_move_orders_merge() {
-    // 1.e4 e5 2.Nf3 Nc6 and 1.Nf3 e5 2.e4 Nc6 reach the identical position
-    // after 3 plies (same placement, same side to move, no en passant
-    // difference), so both games' 4th move should merge into one
-    // candidate at that shared hash.
+    // 1.e4 e5 2.Nf3 Nc6 and 1.Nf3 e5 2.e4 Nc6 reach the same placement,
+    // side to move, and castling rights after 4 plies, but NOT after 3:
+    // whichever order plays e4 last still has its one-ply en passant
+    // availability live, while the other order's already expired. So the
+    // shared hash to check is after 4 plies (once Nc6 is common to both),
+    // with a 5th, also-shared move as the candidate that should merge.
     let via_e4_first = game(
         2400,
         2400,
         GameResult::WhiteWins,
-        &["e4", "e5", "Nf3", "Nc6"],
+        &["e4", "e5", "Nf3", "Nc6", "Bb5"],
     );
     let via_nf3_first = game(
         2400,
         2400,
         GameResult::WhiteWins,
-        &["Nf3", "e5", "e4", "Nc6"],
+        &["Nf3", "e5", "e4", "Nc6", "Bb5"],
     );
 
     let result = aggregate(&[via_e4_first, via_nf3_first], &LOOSE_OPTIONS);
@@ -153,6 +159,7 @@ fn games_reaching_the_same_position_by_different_move_orders_merge() {
         .make_move(e4())
         .make_move(e5())
         .make_move(nf3())
+        .make_move(nc6())
         .hash();
     let (_, stats) = result
         .iter()
@@ -161,9 +168,9 @@ fn games_reaching_the_same_position_by_different_move_orders_merge() {
     assert_eq!(
         stats.len(),
         1,
-        "both games play the same 4th move: {stats:?}"
+        "both games play the same 5th move: {stats:?}"
     );
-    assert_eq!(stats[0].mv, nc6());
+    assert_eq!(stats[0].mv, bb5());
     assert_eq!(
         stats[0].times_played, 2,
         "a transposition must merge counts across move orders: {stats:?}"
