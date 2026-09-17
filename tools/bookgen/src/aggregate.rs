@@ -1,0 +1,131 @@
+//! Walking a set of parsed games into per-position move statistics: how
+//! many times each candidate move was played from each position reached,
+//! and with what results, subject to a rating floor and a ply cap.
+//!
+//! Two passes, deliberately: [`aggregate`] applies the rating floor and the
+//! ply cap (the "backstop" half of the density-plus-ply-cap depth rule) and
+//! counts everything within them; [`filter_by_density`] is the "density"
+//! half, dropping any position too few games actually reached. Games
+//! merge into the same position by hash regardless of the move order that
+//! reached it, which is what makes a density count meaningful across
+//! transpositions rather than per move-order.
+
+use std::collections::HashMap;
+
+use crate::pgn::{GameResult, PgnGame};
+use crate::san::resolve_san;
+use turox_engine::board::Board;
+use turox_engine::{Color, Move};
+
+/// One candidate move's observed statistics at some position, before
+/// weighing turns them into a `book::BookMove`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoveStats {
+    /// The move itself.
+    pub mv: Move,
+    /// How many qualifying games played this move from this position.
+    pub times_played: u32,
+    /// Of those, how many were eventually won by whoever played it.
+    pub wins: u32,
+    /// Of those, how many were eventually drawn.
+    pub draws: u32,
+    /// Of those, how many were eventually lost by whoever played it.
+    pub losses: u32,
+}
+
+/// Tuning knobs for [`aggregate`] and [`filter_by_density`]. Deliberately
+/// not fixed constants: the right values are found by measuring the
+/// generator's own output (book size, coverage, plausibility of the lines
+/// it keeps), not decided in the abstract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildOptions {
+    /// Both players must meet this rating for a game to count at all. A
+    /// game missing either player's rating is excluded, not assumed to
+    /// pass.
+    pub min_rating: u32,
+    /// A position survives [`filter_by_density`] only if at least this
+    /// many qualifying games reached it.
+    pub min_sample_size: u32,
+    /// The hard ply cap: at most `max_ply` positions are recorded from any
+    /// one game (the position before its 1st move through the position
+    /// before its `max_ply`-th move), regardless of how well-attested a
+    /// longer line is.
+    pub max_ply: u32,
+}
+
+/// Walks every qualifying game in `games` (both ratings at least
+/// `options.min_rating`, a known result) from the start position, up to
+/// `options.max_ply` plies, recording which move was played from each
+/// position reached and with what eventual result.
+///
+/// Returns the raw counts, not yet checked against `options.min_sample_size`;
+/// see [`filter_by_density`] for that half.
+#[must_use]
+pub fn aggregate(games: &[PgnGame], options: &BuildOptions) -> Vec<(u64, Vec<MoveStats>)> {
+    let mut results: HashMap<u64, Vec<MoveStats>> = HashMap::new();
+
+    for game in games.iter().filter(|g| {
+        g.result != GameResult::Unknown
+            && g.white_elo.is_some_and(|elo| elo >= options.min_rating)
+            && g.black_elo.is_some_and(|elo| elo >= options.min_rating)
+    }) {
+        let mut board = Board::start_pos();
+
+        for (ply, san) in game.moves.iter().enumerate() {
+            let ply = u32::try_from(ply).unwrap_or(u32::MAX);
+            if ply >= options.max_ply {
+                break;
+            }
+            let Some(mv) = resolve_san(&board, san) else {
+                break;
+            };
+
+            let (win_delta, draw_delta, loss_delta) = match (board.side_to_move(), game.result) {
+                (Color::White, GameResult::WhiteWins) => (1, 0, 0),
+                (Color::Black, GameResult::WhiteWins) => (0, 0, 1),
+                (Color::White, GameResult::BlackWins) => (0, 0, 1),
+                (Color::Black, GameResult::BlackWins) => (1, 0, 0),
+                (_, GameResult::Draw) => (0, 1, 0),
+                (_, GameResult::Unknown) => (0, 0, 0), // excluded above; never reached
+            };
+
+            let entry = results.entry(board.hash()).or_default();
+            if let Some(existing) = entry.iter_mut().find(|ms| ms.mv == mv) {
+                existing.times_played += 1;
+                existing.wins += win_delta;
+                existing.draws += draw_delta;
+                existing.losses += loss_delta;
+            } else {
+                entry.push(MoveStats {
+                    mv,
+                    times_played: 1,
+                    wins: win_delta,
+                    draws: draw_delta,
+                    losses: loss_delta,
+                });
+            }
+
+            board = board.make_move(mv);
+        }
+    }
+
+    results.into_iter().collect()
+}
+
+/// Drops any position whose candidates' combined `times_played` (summed
+/// across every move [`aggregate`] recorded for it, since every qualifying
+/// game reaching a position plays exactly one move from it) falls short of
+/// `min_sample_size`.
+#[must_use]
+pub fn filter_by_density(
+    aggregated: Vec<(u64, Vec<MoveStats>)>,
+    min_sample_size: u32,
+) -> Vec<(u64, Vec<MoveStats>)> {
+    aggregated
+        .into_iter()
+        .filter(|(_, stats)| {
+            let total: u32 = stats.iter().map(|s| s.times_played).sum();
+            total >= min_sample_size
+        })
+        .collect()
+}

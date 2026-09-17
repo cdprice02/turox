@@ -1,0 +1,19 @@
+[package]
+name = "bookgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# Matches turox-engine's floor (see its Cargo.toml), which this depends on.
+rust-version = "1.87"
+
+# Not a workspace member, the same reason turox-fuzz isn't: this is offline
+# tooling that consumes turox-engine as a library, not part of the engine
+# itself, and free to take on dependencies turox-engine's zero-runtime-
+# dependency policy would otherwise rule out. This empty table opts it out
+# of the parent workspace at ../../Cargo.toml rather than being silently
+# pulled in.
+[workspace]
+
+[dependencies]
+clap = { version = "4.5.37", features = ["derive"] }
+turox-engine = { path = "../../turox-engine" }
