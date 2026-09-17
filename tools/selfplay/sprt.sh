@@ -33,6 +33,7 @@ openings="$script_dir/openings.epd"
 fastchess="${FASTCHESS:-fastchess}"
 pgnout=""
 seed="42"
+book="false"
 
 usage() {
     cat <<'USAGE'
@@ -57,6 +58,11 @@ Match:
   --openings FILE EPD opening suite           (default: ./openings.epd)
   --seed N        opening shuffle seed        (default: 42)
   --pgnout FILE   where to write the games    (default: under target/selfplay)
+  --book BOOL     use each engine's own compiled-in opening book
+                  (true/false); off by default so a search/eval match
+                  measures the search, not book coverage. Turn it on only
+                  when the book itself is what changed between base and
+                  test.                                    (default: false)
 
 SPRT:
   --elo0 N        H0: the change is worth no more than this  (default: 0)
@@ -81,6 +87,7 @@ while [ $# -gt 0 ]; do
         --openings) openings="$2"; shift 2 ;;
         --seed) seed="$2"; shift 2 ;;
         --pgnout) pgnout="$2"; shift 2 ;;
+        --book) book="$2"; shift 2 ;;
         --elo0) elo0="$2"; shift 2 ;;
         --elo1) elo1="$2"; shift 2 ;;
         --alpha) alpha="$2"; shift 2 ;;
@@ -99,6 +106,11 @@ command -v "$fastchess" >/dev/null 2>&1 || die \
 "fastchess not found (looked for '$fastchess').
   It has no Homebrew formula; build it from source and either put the binary
   on PATH or point FASTCHESS at it. See README.md in this directory."
+
+case "$book" in
+    true|false) ;;
+    *) die "--book must be 'true' or 'false', got: $book" ;;
+esac
 
 [ -f "$openings" ] || die "opening suite not found: $openings"
 
@@ -206,6 +218,7 @@ printf 'budget:      %s\n' "$budget_label"
 printf 'openings:    %s (%s positions)\n' "$openings" "$suite_size"
 printf 'rounds:      %s (up to %s games)\n' "$rounds" "$((rounds * 2))"
 printf 'concurrency: %s\n' "$concurrency"
+printf 'book:        %s\n' "$book"
 printf 'sprt:        elo0=%s elo1=%s alpha=%s beta=%s (logistic)\n' \
     "$elo0" "$elo1" "$alpha" "$beta"
 printf 'games:       %s\n\n' "$pgnout"
@@ -231,7 +244,7 @@ printf 'games:       %s\n\n' "$pgnout"
 exec "$fastchess" \
     -engine "cmd=$test_bin" "name=test" \
     -engine "cmd=$base_bin" "name=base" \
-    -each "$budget" "timemargin=$timemargin" proto=uci \
+    -each "$budget" "timemargin=$timemargin" "option.Book=$book" proto=uci \
     -openings "file=$openings" format=epd order=random \
     -srand "$seed" \
     -config "outname=$work_dir/config.json" \

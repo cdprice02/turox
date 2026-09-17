@@ -58,16 +58,23 @@ def build(ref: str) -> Path:
     src = BUILD_ROOT / "src" / ref.replace("/", "_")
     src.mkdir(parents=True, exist_ok=True)
     sha = subprocess.run(
-        ["git", "rev-parse", "--short", ref], cwd=REPO,
-        capture_output=True, text=True, check=True,
+        ["git", "rev-parse", "--short", ref],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     subprocess.run(
         ["git", "--work-tree", str(src), "checkout", ref, "--", "."],
-        cwd=REPO, check=True, capture_output=True,
+        cwd=REPO,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         ["cargo", "build", "--release", "-p", "turox-cli"],
-        cwd=src, check=True, capture_output=True,
+        cwd=src,
+        check=True,
+        capture_output=True,
     )
     out = BUILD_ROOT / "bin" / f"{ref.replace('/', '_')}-{sha}"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -85,12 +92,14 @@ def run_position(binary: Path, fen, depth: int):
     shallower iterations that preceded it, which is what a real search pays.
     """
     pos = "position startpos" if fen is None else f"position fen {fen}"
-    # Randomization off, or the node counts this exists to compare vary by half
-    # between runs of the same binary. Builds predating the option ignore the
-    # line, per UCI's own convention for an unrecognized option name, so the
-    # same script drives old and new builds alike.
+    # Randomization and the book both off, or a run varies by half between
+    # runs of the same binary (randomization), or `startpos` skips search
+    # entirely and reports no `info depth` lines at all (the book). Builds
+    # predating either option ignore the corresponding line, per UCI's own
+    # convention for an unrecognized option name, so the same script drives
+    # old and new builds alike.
     script = (
-        "uci\nsetoption name Randomize value false\n"
+        "uci\nsetoption name Randomize value false\nsetoption name Book value false\n"
         f"ucinewgame\n{pos}\ngo depth {depth}\nquit\n"
     )
     proc = subprocess.run(
@@ -104,7 +113,9 @@ def run_position(binary: Path, fen, depth: int):
 
 def report(label: str, results: dict, depth: int):
     print(f"\n=== {label} ===")
-    print(f"{'position':10} {'depth':>5} {'nodes':>12} {'time_ms':>8} {'nps':>9} {'EBF':>6}")
+    print(
+        f"{'position':10} {'depth':>5} {'nodes':>12} {'time_ms':>8} {'nps':>9} {'EBF':>6}"
+    )
     ebfs = []
     for name, per_depth in results.items():
         prev = None
@@ -131,8 +142,12 @@ def report(label: str, results: dict, depth: int):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", action="append", default=[], help="git ref to build and measure")
-    ap.add_argument("--bin", action="append", default=[], help="prebuilt binary to measure")
+    ap.add_argument(
+        "--ref", action="append", default=[], help="git ref to build and measure"
+    )
+    ap.add_argument(
+        "--bin", action="append", default=[], help="prebuilt binary to measure"
+    )
     ap.add_argument("--depth", type=int, default=7)
     args = ap.parse_args()
 
