@@ -111,7 +111,7 @@ const FALLBACK_SAFETY_MARGIN: u32 = 2;
 /// before the deadline.
 ///
 /// With no node-count ratio yet to estimate growth from, this falls back to
-/// [`FALLBACK_SAFETY_MARGIN`] against `elapsed_last` alone. Once two
+/// `FALLBACK_SAFETY_MARGIN` against `elapsed_last` alone. Once two
 /// iterations have completed, the next iteration's cost is estimated from
 /// this search's own measured growth (`nodes_last` over
 /// `nodes_before_last`), tracking whatever this search's move ordering is

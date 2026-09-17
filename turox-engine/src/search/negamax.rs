@@ -684,7 +684,7 @@ impl<'a> Search<'a> {
     /// aborts, there is no previous completed iteration to fall back on,
     /// and a position with legal moves must never report `best_move: None`
     /// regardless; see `search_with_info`'s handling of that case. Before
-    /// starting each iteration past the first, [`time::should_skip_next_iteration`]
+    /// starting each iteration past the first, [`should_skip_next_iteration`]
     /// may also stop the loop early rather than start a doomed one; see its
     /// own doc.
     pub fn search(&mut self, board: &Board, max_depth: u8) -> SearchResult {
