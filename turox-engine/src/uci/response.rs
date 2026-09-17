@@ -40,6 +40,17 @@ pub enum Response {
     /// counts are the one search metric that is otherwise exact enough to
     /// compare two builds on a busy machine.
     OptionRandomize,
+    /// `option name Book type check default true`: advertises whether an
+    /// attached opening book is consulted before a `go` reaches `Search`.
+    ///
+    /// Exists so a measurement can turn it off: `sprt.sh`'s self-play
+    /// harness starts every game from a prescribed opening-suite position,
+    /// so a book firing identically on both sides of an ordinary
+    /// search/eval comparison only spends plies without adding
+    /// information about whatever is actually under test. Also what a
+    /// book-vs-no-book comparison itself needs, whether run as a cheap
+    /// self-play sanity check or as the real thing on lichess.
+    OptionBook,
     /// `uciok`: done identifying, ready to receive commands.
     UciOk,
     /// `readyok`: reply to `isready`.
@@ -162,6 +173,7 @@ impl fmt::Display for Response {
             Self::OptionRandomize => {
                 write!(f, "option name Randomize type check default true")
             }
+            Self::OptionBook => write!(f, "option name Book type check default true"),
             Self::UciOk => write!(f, "uciok"),
             Self::ReadyOk => write!(f, "readyok"),
             Self::BestMove(m) => {

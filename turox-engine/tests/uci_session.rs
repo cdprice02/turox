@@ -537,6 +537,84 @@ fn uci_advertises_the_randomize_option() {
     );
 }
 
+/// The option has to be advertised, or a GUI has no way to discover it.
+#[test]
+fn uci_advertises_the_book_option() {
+    let output = run_session("uci\n");
+    assert!(
+        output
+            .lines()
+            .any(|l| l == "option name Book type check default true"),
+        "expected the Book option in the uci block, got: {output:?}"
+    );
+}
+
+/// A book attached to the session is consulted by default: this is the
+/// same fixture and position as `a_book_hit_returns_the_book_move_with_no_search_at_all`,
+/// just asserting the on-by-default half rather than the hit behavior
+/// itself.
+#[test]
+fn book_is_consulted_by_default_when_one_is_attached() {
+    let e2e4 = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .iter()
+        .find(|m| m.to_uci() == "e2e4")
+        .expect("e2e4 is legal from startpos");
+    let book = Book::new(vec![(
+        Board::start_pos().hash(),
+        vec![BookMove {
+            mv: e2e4,
+            weight: 1,
+        }],
+    )]);
+
+    let output = run_session_with_book(
+        book,
+        "position startpos
+go depth 5
+quit
+",
+    );
+
+    assert!(
+        output.contains("bestmove e2e4") && !output.contains("info "),
+        "a book should be consulted with no setoption at all, output: {output:?}"
+    );
+}
+
+/// `setoption name Book value false` must make an attached book behave as
+/// if it weren't there: a real search runs (an `info depth` line appears)
+/// even for a position the book has a hit for.
+#[test]
+fn book_off_falls_through_to_search_even_for_a_position_the_book_covers() {
+    let e2e4 = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .iter()
+        .find(|m| m.to_uci() == "e2e4")
+        .expect("e2e4 is legal from startpos");
+    let book = Book::new(vec![(
+        Board::start_pos().hash(),
+        vec![BookMove {
+            mv: e2e4,
+            weight: 1,
+        }],
+    )]);
+
+    let output = run_session_with_book(
+        book,
+        "setoption name Book value false
+position startpos
+go depth 3
+quit
+",
+    );
+
+    assert!(
+        output.contains("info depth"),
+        "Book=false must still run a real search even though the book has a hit here, output: {output:?}"
+    );
+}
+
 /// Plays `moves` one at a time, resending the whole growing move list on
 /// every `position` command and running `go depth depth` after each.
 /// `clear_between_every_go` interleaves `ucinewgame` before every `position`,
