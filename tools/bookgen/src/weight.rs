@@ -4,35 +4,40 @@
 use crate::aggregate::MoveStats;
 use turox_engine::book::BookMove;
 
-/// How much a move's classical points-per-game score (win = 1, draw = 0.5,
-/// loss = 0) contributes to its weight, relative to [`TIMES_PLAYED_WEIGHT`].
-const WIN_PROBABILITY_WEIGHT: u64 = 1600;
-
-/// How much raw sample size contributes to a move's weight, on its own,
-/// independent of how well it scored.
-const TIMES_PLAYED_WEIGHT: u64 = 2;
-
 /// Weighs `stats`, one position's candidate moves, into `BookMove`s.
 ///
-/// The exact formula is a tuning knob, not a fixed rule (see
-/// `aggregate::BuildOptions`'s own doc on why these are found by measuring
-/// output rather than decided up front), but two properties any formula
-/// here should hold, since they're what "weighted by frequency and win
-/// rate" actually means: holding win rate fixed, more games played must
-/// weigh strictly more; holding times played fixed, a higher win rate must
-/// weigh strictly more. A move with zero recorded games has no weight to
-/// give it, but nothing in [`aggregate`](crate::aggregate::aggregate)
-/// should ever produce one of those in the first place.
+/// `weight = times_played * (0.5 + score)`, where `score` is the classical
+/// points-per-game chess score (win = 1, draw = 0.5, loss = 0). Frequency
+/// and win rate multiply rather than add: `score` always stays in a fixed
+/// `0.5..=1.5` band regardless of how large `times_played` gets, so a
+/// move's quality can never be swamped by (or swamp) its own sample size
+/// the way it would if the two were added with separately-tuned
+/// coefficients instead. That's what makes this formula scale-invariant:
+/// "more games at the same rate weighs more" and "a better rate at the
+/// same sample size weighs more" both hold whether a position has been
+/// seen 10 times or 10 million times, with no constant to retune between
+/// those two cases.
 ///
-/// A draw counts as exactly half a win, the classical chess-scoring
-/// convention, rather than its own independently-tuned term: `2 * wins +
-/// draws` over `2 * times_played` is that points-per-game score, kept in
-/// integer arithmetic by doubling both sides instead of working in floats.
-/// Every intermediate product is computed in `u64` and only narrowed back
-/// to `u32` (clamped, not wrapped) at the very end, since `wins *
-/// WIN_PROBABILITY_WEIGHT` alone can exceed `u32::MAX` once a move has
-/// been played a few million times, well within reach of a real
-/// multi-year Lichess Elite Database run for a common first move.
+/// The algebra collapses to pure integers with nothing left to tune:
+/// `times_played * score` is exactly `wins + 0.5 * draws` (a draw is
+/// worth half a win, folded in rather than weighted separately), so
+/// `weight = 0.5 * times_played + wins + 0.5 * draws`, and doubling both
+/// sides to stay in integers gives `(times_played + 2 * wins + draws) /
+/// 2`. Rounding that division up rather than down (`div_ceil`, not `/`)
+/// matters for exactly one case: a single played-and-lost game
+/// (`times_played = 1, wins = 0, draws = 0`) would otherwise compute
+/// `(1 + 0 + 0) / 2 = 0`, the one way this formula could violate "a move
+/// with at least one recorded game must never weigh zero" (nothing in
+/// [`aggregate`](crate::aggregate::aggregate) should ever hand this
+/// function a move with zero recorded games in the first place, so
+/// that's the only case worth guarding).
+///
+/// Every intermediate value is computed in `u64` and only narrowed back
+/// to `u32` (clamped via `unwrap_or(u32::MAX)`, not wrapped) at the very
+/// end, since `2 * wins` alone can exceed `u32::MAX` once a move has been
+/// played a couple billion times over... which won't happen, but the
+/// headroom costs nothing and a wrapped weight silently corrupting a
+/// book's move ordering is a far worse failure than one that saturates.
 #[must_use]
 pub fn weigh(stats: &[MoveStats]) -> Vec<BookMove> {
     stats
@@ -42,8 +47,7 @@ pub fn weigh(stats: &[MoveStats]) -> Vec<BookMove> {
             let wins = u64::from(s.wins);
             let draws = u64::from(s.draws);
 
-            let score_weight = (2 * wins + draws) * WIN_PROBABILITY_WEIGHT / (2 * times_played);
-            let weight = times_played * TIMES_PLAYED_WEIGHT + score_weight;
+            let weight = (times_played + 2 * wins + draws).div_ceil(2);
 
             BookMove {
                 mv: s.mv,
