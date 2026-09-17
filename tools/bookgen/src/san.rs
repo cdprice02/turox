@@ -6,7 +6,8 @@
 //! needs the actual position, not just the token text.
 
 use turox_engine::board::Board;
-use turox_engine::{File, Move, Piece, Rank, Square};
+use turox_engine::move_gen::legal::legal_moves;
+use turox_engine::{File, Move, MoveFlags, Piece, Rank, Square};
 
 /// A SAN token's parsed shape, before it's checked against any position.
 ///
@@ -64,14 +65,127 @@ pub fn resolve_san(board: &Board, token: &str) -> Option<Move> {
 /// Parses `token`'s text alone, with no board context at all: see
 /// [`SanMove`]'s own doc for why that's as far as text-only parsing can
 /// ever go. `None` for a token that isn't well-formed SAN.
-fn parse_san(_token: &str) -> Option<SanMove> {
-    None
+///
+/// Works entirely in ASCII bytes, on the strength of the `is_ascii` check
+/// up front: every real SAN token is pure ASCII, which is what licenses
+/// slicing at fixed byte offsets below without ever risking a
+/// char-boundary panic (the same trick `Move::from_uci` uses for the same
+/// reason).
+fn parse_san(token: &str) -> Option<SanMove> {
+    if !token.is_ascii() {
+        return None;
+    }
+
+    let token = token.strip_suffix(['+', '#']).unwrap_or(token);
+
+    if token == "O-O" || token == "0-0" {
+        return Some(SanMove::Castle(CastleSide::King));
+    }
+    if token == "O-O-O" || token == "0-0-0" {
+        return Some(SanMove::Castle(CastleSide::Queen));
+    }
+
+    let bytes = token.as_bytes();
+    let (token, promotion) = if bytes.len() >= 2 && bytes[bytes.len() - 2] == b'=' {
+        let piece = match bytes[bytes.len() - 1] {
+            b'N' => Piece::Knight,
+            b'B' => Piece::Bishop,
+            b'R' => Piece::Rook,
+            b'Q' => Piece::Queen,
+            _ => return None,
+        };
+        (&token[..token.len() - 2], Some(piece))
+    } else {
+        (token, None)
+    };
+
+    if token.len() < 2 {
+        return None;
+    }
+    let (front, dest_str) = token.split_at(token.len() - 2);
+    let to = Square::try_from_algebraic(dest_str)?;
+
+    let (piece, front) = match front.as_bytes().first() {
+        Some(b'N') => (Piece::Knight, &front[1..]),
+        Some(b'B') => (Piece::Bishop, &front[1..]),
+        Some(b'R') => (Piece::Rook, &front[1..]),
+        Some(b'Q') => (Piece::Queen, &front[1..]),
+        Some(b'K') => (Piece::King, &front[1..]),
+        _ => (Piece::Pawn, front),
+    };
+
+    let front = front.strip_suffix('x').unwrap_or(front);
+    if front.len() > 2 {
+        return None;
+    }
+
+    let mut disambiguate_file = None;
+    let mut disambiguate_rank = None;
+    for &b in front.as_bytes() {
+        if (b'a'..=b'h').contains(&b) {
+            if disambiguate_file.is_some() {
+                return None;
+            }
+            disambiguate_file = Some(File::from_u8(b - b'a')?);
+        } else if (b'1'..=b'8').contains(&b) {
+            if disambiguate_rank.is_some() {
+                return None;
+            }
+            disambiguate_rank = Some(Rank::from_u8(b - b'1')?);
+        } else {
+            return None;
+        }
+    }
+
+    Some(SanMove::Normal {
+        piece,
+        disambiguate_file,
+        disambiguate_rank,
+        to,
+        promotion,
+    })
 }
 
 /// Filters `board`'s legal moves down to the one `parsed` names: matching
 /// piece (or the castling flag), destination square, promotion, and, if
 /// present, the file/rank disambiguator. `None` if that's zero moves or
 /// more than one.
-fn resolve(_board: &Board, _parsed: SanMove) -> Option<Move> {
-    None
+fn resolve(board: &Board, parsed: SanMove) -> Option<Move> {
+    let candidates = legal_moves(board);
+    let mut matches = candidates
+        .as_slice()
+        .iter()
+        .copied()
+        .filter(|&mv| matches_parsed(board, mv, parsed));
+
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+/// Whether `mv`, a legal move in whatever position it came from, is the
+/// one `parsed` describes.
+fn matches_parsed(board: &Board, mv: Move, parsed: SanMove) -> bool {
+    match parsed {
+        SanMove::Castle(CastleSide::King) => mv.flags() == MoveFlags::KingCastle,
+        SanMove::Castle(CastleSide::Queen) => mv.flags() == MoveFlags::QueenCastle,
+        SanMove::Normal {
+            piece,
+            disambiguate_file,
+            disambiguate_rank,
+            to,
+            promotion,
+        } => {
+            let Some(moved) = board.piece_at(mv.from()) else {
+                return false;
+            };
+            moved.piece() == piece
+                && mv.to() == to
+                && mv.flags().promotion_piece() == promotion
+                && disambiguate_file.is_none_or(|f| mv.from().file() == f)
+                && disambiguate_rank.is_none_or(|r| mv.from().rank() == r)
+        }
+    }
 }
