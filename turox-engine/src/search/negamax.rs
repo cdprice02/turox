@@ -14,6 +14,7 @@ use crate::move_gen::move_list::MoveList;
 use crate::rng::xorshift64star;
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::draw::is_draw;
+use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
 use crate::types::Move;
 use crate::MoveFlags;
@@ -107,22 +108,6 @@ pub const fn is_mate_score(score: Score) -> bool {
 /// identical cap, not a hand-copied literal that could drift out of sync and silently
 /// turn the property test into a comparison between two different search depths.
 pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
-
-/// The safety-margin multiplier `search`'s soft time limit applies to the
-/// previous iteration's own elapsed time, as its estimate of the *next*
-/// iteration's cost: don't start iteration N+1 unless at least
-/// `elapsed(N) * ITERATION_TIME_SAFETY_MARGIN` still remains before
-/// `self.deadline`.
-///
-/// Real branching factors near the horizon run roughly 7-9x between
-/// iterations; `4` is deliberately below that rather than matching it,
-/// because the two ways this can be wrong aren't equally costly. Too high
-/// (skip too eagerly) throws away reachable search depth, a direct
-/// strength cost. Too low (skip too rarely) just falls back to today's
-/// waste-a-doomed-iteration behavior, a time cost but not a strength one.
-/// So this stays biased toward under-triggering: it only vetoes iterations
-/// that would need less than half the typical growth factor to fit.
-const ITERATION_TIME_SAFETY_MARGIN: u32 = 4;
 
 /// What produced a beta cutoff, for [`CutoffStats::by_cause`].
 ///
@@ -699,7 +684,7 @@ impl<'a> Search<'a> {
     /// aborts, there is no previous completed iteration to fall back on,
     /// and a position with legal moves must never report `best_move: None`
     /// regardless; see `search_with_info`'s handling of that case. Before
-    /// starting each iteration past the first, `ITERATION_TIME_SAFETY_MARGIN`
+    /// starting each iteration past the first, [`time::should_skip_next_iteration`]
     /// may also stop the loop early rather than start a doomed one; see its
     /// own doc.
     pub fn search(&mut self, board: &Board, max_depth: u8) -> SearchResult {
@@ -741,15 +726,31 @@ impl<'a> Search<'a> {
             quiescence_cutoffs: CutoffStats::default(),
         };
         // Only tracked when `self.deadline` is set: a `max_nodes`-bounded or
-        // fully unbounded search has nothing to estimate against, so this
-        // stays `None` the whole loop and the soft-limit check below never
+        // fully unbounded search has nothing to estimate against, so these
+        // stay `None` the whole loop and the soft-limit check below never
         // fires, leaving that path byte-for-byte unaffected by this check.
         let mut previous_iteration_elapsed: Option<Duration> = None;
+        // This iteration's and the one before it's own node count (the
+        // growth `should_skip_next_iteration` measures a ratio from), not
+        // `self.nodes()`'s running total across the whole search.
+        let mut previous_iteration_nodes: Option<u64> = None;
+        let mut nodes_before_previous_iteration: Option<u64> = None;
 
         for depth in 1..=max_depth {
-            if let (Some(deadline), Some(elapsed)) = (self.deadline, previous_iteration_elapsed) {
+            let nodes_before_this_iteration = self.nodes();
+
+            if let (Some(deadline), Some(elapsed), Some(nodes_last)) = (
+                self.deadline,
+                previous_iteration_elapsed,
+                previous_iteration_nodes,
+            ) {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                if elapsed.saturating_mul(ITERATION_TIME_SAFETY_MARGIN) > remaining {
+                if should_skip_next_iteration(
+                    elapsed,
+                    nodes_last,
+                    nodes_before_previous_iteration,
+                    remaining,
+                ) {
                     break;
                 }
             }
@@ -793,6 +794,8 @@ impl<'a> Search<'a> {
             }
             if let Some(started) = iteration_started {
                 previous_iteration_elapsed = Some(started.elapsed());
+                nodes_before_previous_iteration = previous_iteration_nodes;
+                previous_iteration_nodes = Some(self.nodes() - nodes_before_this_iteration);
             }
         }
         result

@@ -356,10 +356,13 @@ fn quiescence_avoids_a_poisoned_pawn() {
 /// chance of finishing before `self.deadline`. Self-calibrates against
 /// this machine's own timings rather than a hardcoded duration: times an
 /// unbounded `depth`-ply search first, then gives a fresh search only `2x`
-/// that as its whole budget and asks for `depth + 1`. Kiwipete's real
-/// branching factor clears the `4x` safety margin easily, so the ~1x left
-/// after `depth` completes is nowhere near enough for `depth + 1`; the
-/// soft limit must catch that and return `depth`'s own result.
+/// that as its whole budget and asks for `depth + 1`. By depth 3, two
+/// completed iterations' own node counts already exist, so this exercises
+/// `should_skip_next_iteration`'s measured-ratio estimate, not its
+/// no-data fallback; kiwipete's real branching factor is well above 1x
+/// either way, so the ~1x left after `depth` completes is nowhere near
+/// enough for `depth + 1`, and the soft limit must catch that and return
+/// `depth`'s own result.
 #[test]
 fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
     let board =
@@ -380,9 +383,10 @@ fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
     let result = bounded.search(&board, depth + 1);
 
     assert_eq!(
-        result.depth, depth,
+        result.depth,
+        depth,
         "a budget of only ~2x depth {depth}'s own measured time must not be enough for depth {} \
-         on a position whose real branching factor is well above this soft limit's 4x margin, got depth {}",
+         on a position whose real branching factor is well above 1x, got depth {}",
         depth + 1,
         result.depth
     );
