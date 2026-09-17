@@ -48,9 +48,9 @@ const DEFAULT_MAX_DEPTH: u8 = 64;
 /// otherwise receive it is busy blocking inside `Search::search`. `writer`
 /// stays on this thread; nothing here ever writes concurrently.
 ///
-/// `_book`: not yet consulted; every `go` searches exactly as it always
-/// has regardless of what's passed here. Threaded through so
-/// `Engine::with_book` has somewhere to pass one.
+/// `book`, if given, is consulted before every `go` reaches `Search` at
+/// all: a hit answers immediately from the book, a miss (or `None` here)
+/// searches exactly as it always has.
 #[expect(
     clippy::expect_used,
     reason = "`active_stop` is only ever held across an Option assignment, which cannot panic, so the mutex cannot become poisoned"
