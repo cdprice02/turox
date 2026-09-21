@@ -11,6 +11,7 @@ fn stats(times_played: u32, wins: u32, draws: u32, losses: u32) -> MoveStats {
         wins,
         draws,
         losses,
+        opening_name: None,
     }
 }
 
@@ -55,4 +56,20 @@ fn a_draw_counts_as_a_half_win_not_a_full_loss() {
         all_draws, half_and_half,
         "both average a 50% score across 10 games and must weigh the same"
     );
+}
+
+#[test]
+fn a_move_with_no_opening_name_weighs_unnamed() {
+    let weighed = weigh(&[stats(1, 1, 0, 0)]);
+    assert_eq!(weighed[0].name, None);
+}
+
+#[test]
+fn a_moves_opening_name_carries_through_to_its_book_move() {
+    let mut with_name = stats(1, 1, 0, 0);
+    with_name.opening_name = Some("Sicilian Defense".to_string());
+
+    let weighed = weigh(&[with_name]);
+
+    assert_eq!(weighed[0].name, Some("Sicilian Defense".to_string()));
 }

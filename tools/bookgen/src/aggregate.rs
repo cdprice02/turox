@@ -19,7 +19,7 @@ use turox_engine::{Color, Move};
 
 /// One candidate move's observed statistics at some position, before
 /// weighing turns them into a `book::BookMove`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MoveStats {
     /// The move itself.
     pub mv: Move,
@@ -31,6 +31,13 @@ pub struct MoveStats {
     pub draws: u32,
     /// Of those, how many were eventually lost by whoever played it.
     pub losses: u32,
+    /// The opening name of the first qualifying game recorded to play this
+    /// move from this position, or `None` if that game's own
+    /// `PgnGame::opening_name` was itself `None`. First-seen, not
+    /// necessarily the most common name among every game that played this
+    /// move: still names the move, just not guaranteed to pick the
+    /// majority's name when sources disagree.
+    pub opening_name: Option<String>,
 }
 
 /// Tuning knobs for [`aggregate`] and [`filter_by_density`]. Deliberately
@@ -111,6 +118,7 @@ pub fn aggregate(
                     wins: win_delta,
                     draws: draw_delta,
                     losses: loss_delta,
+                    opening_name: game.opening_name.clone(),
                 });
             }
 

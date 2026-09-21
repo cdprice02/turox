@@ -5,8 +5,8 @@
 use std::collections::VecDeque;
 use std::io::BufRead;
 
-/// One parsed game: the two header fields the generator's filtering
-/// actually uses, and the game's SAN move tokens in order.
+/// One parsed game: the header fields the generator's filtering and
+/// opening-name attribution use, and the game's SAN move tokens in order.
 ///
 /// Everything else a PGN header carries (site, date, event name, ...) is
 /// deliberately not kept here: nothing downstream of this module reads it.
@@ -18,6 +18,12 @@ pub struct PgnGame {
     pub black_elo: Option<u32>,
     /// The `Result` tag.
     pub result: GameResult,
+    /// A human-readable name for this game's opening, if its headers
+    /// carried one: the `Opening` tag's own value if present, else the
+    /// `ECO` tag's code as a compact fallback identifier, else `None`.
+    /// `Opening` wins when both are present since it's the readable name
+    /// (e.g. "Ruy Lopez: Berlin Defense") an ECO code alone doesn't convey.
+    pub opening_name: Option<String>,
     /// SAN move tokens in play order, move numbers and comments already
     /// stripped. Resolving one against a position is `san::resolve_san`'s
     /// job, not this module's: SAN is context-dependent, and this module
@@ -142,8 +148,14 @@ fn parse_one_game(rest: &mut VecDeque<char>) -> Option<PgnGame> {
         white_elo: None,
         black_elo: None,
         result: GameResult::Unknown,
+        opening_name: None,
         moves: Vec::new(),
     };
+    // `Opening` wins over `ECO` regardless of which tag the header names
+    // first: PGN's Seven Tag Roster orders them together but doesn't
+    // guarantee which comes first, so this is resolved once after the
+    // whole header block rather than by "whichever tag is seen first".
+    let mut eco: Option<String> = None;
 
     while rest.front() == Some(&'[') {
         chop_one(rest); // the '[' itself
@@ -161,12 +173,15 @@ fn parse_one_game(rest: &mut VecDeque<char>) -> Option<PgnGame> {
                     _ => GameResult::Unknown,
                 }
             }
+            "Opening" if !value.is_empty() => game.opening_name = Some(value.to_string()),
+            "ECO" if !value.is_empty() => eco = Some(value.to_string()),
             _ => {}
         }
         while matches!(rest.front(), Some(c) if c.is_whitespace()) {
             chop_one(rest);
         }
     }
+    game.opening_name = game.opening_name.or(eco);
 
     game.moves = parse_movetext(rest);
     Some(game)

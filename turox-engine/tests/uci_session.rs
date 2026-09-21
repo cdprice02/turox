@@ -562,10 +562,7 @@ fn book_is_consulted_by_default_when_one_is_attached() {
         .expect("e2e4 is legal from startpos");
     let book = Book::new(vec![(
         Board::start_pos().hash(),
-        vec![BookMove {
-            mv: e2e4,
-            weight: 1,
-        }],
+        vec![BookMove::new(e2e4, 1)],
     )]);
 
     let output = run_session_with_book(
@@ -577,7 +574,7 @@ quit
     );
 
     assert!(
-        output.contains("bestmove e2e4") && !output.contains("info "),
+        output.contains("bestmove e2e4") && !output.contains("info depth"),
         "a book should be consulted with no setoption at all, output: {output:?}"
     );
 }
@@ -594,10 +591,7 @@ fn book_off_falls_through_to_search_even_for_a_position_the_book_covers() {
         .expect("e2e4 is legal from startpos");
     let book = Book::new(vec![(
         Board::start_pos().hash(),
-        vec![BookMove {
-            mv: e2e4,
-            weight: 1,
-        }],
+        vec![BookMove::new(e2e4, 1)],
     )]);
 
     let output = run_session_with_book(
@@ -677,9 +671,10 @@ fn shared_table_no_longer_leaks_a_repetition_tainted_score_across_go_commands() 
 }
 
 /// A book hit answers instantly: `bestmove` matches the book's own choice,
-/// and no `info` line of any kind appears, since a hit never reaches
-/// `Search` at all (no depth line, no cutoff-stats line, nothing to
-/// stream).
+/// and no depth-iteration or cutoff-stats line appears, since a hit never
+/// reaches `Search` at all. It still reports itself via its own `info
+/// string`, ahead of `bestmove`, the only trace of a book hit anywhere in
+/// the engine's output.
 #[test]
 fn a_book_hit_returns_the_book_move_with_no_search_at_all() {
     let e2e4 = *legal_moves(&Board::start_pos())
@@ -689,18 +684,81 @@ fn a_book_hit_returns_the_book_move_with_no_search_at_all() {
         .expect("e2e4 is legal from startpos");
     let book = Book::new(vec![(
         Board::start_pos().hash(),
-        vec![BookMove {
-            mv: e2e4,
-            weight: 1,
-        }],
+        vec![BookMove::new(e2e4, 1)],
     )]);
 
     let output = run_session_with_book(book, "position startpos\ngo depth 5\nquit\n");
 
     assert!(output.contains("bestmove e2e4"), "output: {output:?}");
     assert!(
-        !output.contains("info "),
-        "a book hit must never reach Search, so no info line should appear, output: {output:?}"
+        !output.contains("info depth"),
+        "a book hit must never reach Search, so no depth-iteration line should appear, \
+         output: {output:?}"
+    );
+    assert!(
+        !output.contains("info string cutoffs"),
+        "a book hit must never reach Search, so no cutoff-stats line should appear, \
+         output: {output:?}"
+    );
+}
+
+/// The book-hit `info string` itself: names the move played, in the same
+/// order every other pre-`bestmove` `info` line does.
+#[test]
+fn a_book_hit_reports_the_move_via_info_string_before_bestmove() {
+    let e2e4 = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .iter()
+        .find(|m| m.to_uci() == "e2e4")
+        .expect("e2e4 is legal from startpos");
+    let book = Book::new(vec![(
+        Board::start_pos().hash(),
+        vec![BookMove::new(e2e4, 1)],
+    )]);
+
+    let output = run_session_with_book(book, "position startpos\ngo depth 5\nquit\n");
+
+    let lines: Vec<&str> = output.lines().collect();
+    let info_string_index = lines
+        .iter()
+        .position(|line| line.starts_with("info string book move "))
+        .unwrap_or_else(|| panic!("expected an info string book move line, output: {output:?}"));
+    let bestmove_index = lines
+        .iter()
+        .position(|line| line.starts_with("bestmove "))
+        .unwrap_or_else(|| panic!("expected a bestmove line, output: {output:?}"));
+
+    assert_eq!(lines[info_string_index], "info string book move e2e4");
+    assert!(
+        info_string_index < bestmove_index,
+        "the book-hit info string must arrive before bestmove, output: {output:?}"
+    );
+}
+
+/// A book move carrying an opening name reports it in the same `info
+/// string`; one with no name reports just the move, no trailing `opening`
+/// field at all rather than an empty one.
+#[test]
+fn a_book_hits_info_string_names_the_opening_when_the_move_carries_one() {
+    let e2e4 = *legal_moves(&Board::start_pos())
+        .as_slice()
+        .iter()
+        .find(|m| m.to_uci() == "e2e4")
+        .expect("e2e4 is legal from startpos");
+    let book = Book::new(vec![(
+        Board::start_pos().hash(),
+        vec![BookMove::with_name(
+            e2e4,
+            1,
+            "King's Pawn Opening".to_string(),
+        )],
+    )]);
+
+    let output = run_session_with_book(book, "position startpos\ngo depth 5\nquit\n");
+
+    assert!(
+        output.contains("info string book move e2e4 opening King's Pawn Opening"),
+        "output: {output:?}"
     );
 }
 
@@ -717,10 +775,10 @@ fn an_out_of_book_position_falls_through_to_search_unchanged() {
     let unrelated_hash = 0xDEAD_BEEF_0000_0001;
     let book = Book::new(vec![(
         unrelated_hash,
-        vec![BookMove {
-            mv: Move::new(Square::A2, Square::A3, MoveFlags::Quiet),
-            weight: 1,
-        }],
+        vec![BookMove::new(
+            Move::new(Square::A2, Square::A3, MoveFlags::Quiet),
+            1,
+        )],
     )]);
 
     let output = run_session_with_book(book, "position startpos\ngo depth 3\nquit\n");
@@ -767,13 +825,7 @@ fn a_later_go_can_hit_the_book_again_after_an_earlier_miss() {
 
     // Startpos is deliberately absent, so the first `go` below is a miss;
     // only the position after 1.e4 is in the book.
-    let book = Book::new(vec![(
-        after_e4.hash(),
-        vec![BookMove {
-            mv: e7e5,
-            weight: 1,
-        }],
-    )]);
+    let book = Book::new(vec![(after_e4.hash(), vec![BookMove::new(e7e5, 1)])]);
 
     let output = run_session_with_book(
         book,
