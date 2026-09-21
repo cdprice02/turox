@@ -707,6 +707,37 @@ fn killer_table_is_consulted_during_a_real_search() {
     );
 }
 
+// ---- Mate-killer instrumentation ----
+
+/// Same shape and reasoning as `killer_table_is_consulted_during_a_real_search`
+/// above, for the mate-killer table instead: not a specific count, just proof
+/// the feature engages at all. A mate-indicating fail-high is much rarer
+/// than an ordinary one: depth 6 and 7 on the same position produce none at
+/// all, and depth 8 is the shallowest that reliably does. Attaching a table
+/// (the real, un-artificial way to search: `killer_table_is_consulted_during_a_real_search`
+/// deliberately searches without one, but depth 8 without one is minutes
+/// long even in `--release`) brings this down to ~20s, still the single
+/// slowest thing in the suite it would join, hence still `#[ignore]`d.
+#[test]
+#[ignore = "depth 8 to get a real mate-killer hit, ~20-25s even with a table attached; \
+            run with --run-ignored all"]
+fn mate_killer_table_is_consulted_during_a_real_search() {
+    use turox_engine::search::tt::Tt;
+
+    let board =
+        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .expect("valid FEN");
+    let mut tt = Tt::new(16);
+    let result = Search::new(Vec::new()).with_tt(&mut tt).search(&board, 8);
+
+    assert!(
+        result.negamax_cutoffs.by_cause[CutoffCause::MateKiller.index()] > 0,
+        "a depth-8 search of a position this open must cause at least one beta cutoff on a \
+         move that was already sitting in the mate-killer slot, or the table isn't being \
+         consulted from the real move loop"
+    );
+}
+
 // ---- Cutoff history wiring ----
 
 /// The same "is this actually wired into a real move loop" question
