@@ -2041,13 +2041,10 @@ mod tests {
     }
 
     /// A lone king and a pawn one push from queening, against a lone king:
-    /// no capture exists anywhere on the board, so under the old
-    /// captures-only `retain`, `qmoves` would be empty and this call would
-    /// return exactly `Some(stand_pat)` without ever looking at the
-    /// promotion. Widening `retain` to include promotions means the queening
-    /// push is now a real qmove, and searching it one ply deeper (where the
-    /// queen's material swing dwarfs the pre-promotion stand-pat score)
-    /// should beat standing pat outright.
+    /// no capture exists anywhere on the board, so quiescence's only real
+    /// qmove here is the pawn's own non-capturing promotion. Searching it
+    /// one ply deeper, where the queen's material swing dwarfs the
+    /// pre-promotion stand-pat score, must beat standing pat outright.
     #[test]
     fn quiescence_searches_a_winning_non_capturing_promotion_instead_of_standing_pat() {
         let board = Board::try_from_fen("8/P7/8/8/8/4k3/8/4K3 w - - 0 1").expect("valid FEN");
