@@ -556,11 +556,15 @@ fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() 
 // `Search::search`, not a hand-computed number that eval retuning could
 // silently invalidate.
 
-fn expected_quiescence(board: &Board, ply: u8, qdepth: u8) -> i16 {
+fn expected_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64>) -> i16 {
     use turox_engine::eval::evaluate;
     use turox_engine::move_gen::attacks::in_check;
+    use turox_engine::search::draw::is_draw;
 
     if in_check(board, board.side_to_move()) {
+        if is_draw(board, history, board.hash()) {
+            return 0;
+        }
         let evasions = legal_moves(board);
         if evasions.is_empty() {
             return i16::from(ply) - MATE;
@@ -568,7 +572,12 @@ fn expected_quiescence(board: &Board, ply: u8, qdepth: u8) -> i16 {
         return evasions
             .as_slice()
             .iter()
-            .map(|&m| -expected_quiescence(&board.make_move(m), ply + 1, qdepth))
+            .map(|&m| {
+                history.push(board.hash());
+                let score = -expected_quiescence(&board.make_move(m), ply + 1, qdepth, history);
+                history.pop();
+                score
+            })
             .max()
             .expect("evasions is non-empty");
     }
@@ -578,7 +587,9 @@ fn expected_quiescence(board: &Board, ply: u8, qdepth: u8) -> i16 {
         let mut captures = legal_moves(board);
         captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
         for &m in captures.as_slice() {
-            let score = -expected_quiescence(&board.make_move(m), ply + 1, qdepth - 1);
+            history.push(board.hash());
+            let score = -expected_quiescence(&board.make_move(m), ply + 1, qdepth - 1, history);
+            history.pop();
             best = best.max(score);
         }
     }
@@ -602,9 +613,12 @@ fn quiescence_finds_a_forced_non_capture_evasion() {
     let result = search.search(&root, 1);
 
     assert_eq!(result.best_move(), Some(rxa4));
+    // Seeded with `root`'s own hash: `search_root`'s move loop pushes it
+    // before recursing into ply 1, so that's what the real search's own
+    // `history` holds by the time it reaches quiescence here too.
     assert_eq!(
         result.score,
-        -expected_quiescence(&after_rxa4, 1, MAX_QUIESCENCE_DEPTH)
+        -expected_quiescence(&after_rxa4, 1, MAX_QUIESCENCE_DEPTH, &mut vec![root.hash()])
     );
 }
 
@@ -629,7 +643,12 @@ fn quiescence_finds_a_mate_inside_its_own_recursion() {
     let after_chosen_move = root.make_move(chosen_move);
     assert_eq!(
         result.score,
-        -expected_quiescence(&after_chosen_move, 1, MAX_QUIESCENCE_DEPTH)
+        -expected_quiescence(
+            &after_chosen_move,
+            1,
+            MAX_QUIESCENCE_DEPTH,
+            &mut vec![root.hash()]
+        )
     );
     assert!(
         is_mate_score(result.score),

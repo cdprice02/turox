@@ -78,15 +78,6 @@ const MAX_PV_PLY: usize = 64;
 /// makes the *type* generic, not the *policy*.
 const KILLER_SLOTS: usize = 2;
 
-/// The depth-equivalent [`CutoffHistory`]'s bonus/malus formula uses for cutoffs found in
-/// quiescence's evasion loop, which (unlike `negamax`'s move loop) has no real `depth` to
-/// weight by: `ply` means something different there (distance from root, not remaining
-/// search) and `qdepth` is frozen/unused on the evasion path (see `quiescence`'s own doc).
-/// A fixed `1` rather than deriving one from either keeps this real but deliberately
-/// minimal weight, on the theory that a quiescence-depth refutation is a far lower-quality
-/// signal than a main-search one.
-const QUIESCENCE_HISTORY_DEPTH: u8 = 1;
-
 /// Whether `score` encodes a forced mate rather than an ordinary evaluation.
 ///
 /// The single definition of that boundary. It used to be answered in two
@@ -319,19 +310,23 @@ struct LoopCtx {
     is_pv: bool,
 }
 
-/// What [`Search::negamax`] returned: the fail-soft score, and whether the
-/// subtree that produced it passed through a threefold-repetition draw
-/// anywhere.
+/// What [`Search::negamax`] and [`Search::quiescence`] both return: the
+/// fail-soft score, and whether the subtree that produced it passed
+/// through a threefold-repetition draw anywhere, in either function (a
+/// repetition reachable only through a forced sequence of quiescence
+/// evasions taints exactly the same way one reachable through `negamax`'s
+/// own move loop does).
 ///
 /// A tainted score is still correct to use for comparisons, cutoffs, and PV
 /// bookkeeping at the calling node: what a tainted score is *not* safe for is
 /// a transposition-table store, since the table is keyed on board state
 /// alone and a repetition's availability depends on the path taken to reach
-/// it. `negamax` checks this flag itself, immediately before its own store,
-/// and every caller that goes on to store anything of its own must OR its
+/// it. `negamax` checks this flag itself, immediately before its own store
+/// (`quiescence` has no store of its own to guard: see its own doc), and
+/// every caller that goes on to store anything of its own must OR its
 /// children's `tainted` into its own before doing the same.
 #[derive(Debug, Clone, Copy)]
-struct NegamaxResult {
+struct TaintedScore {
     /// Fail-soft: the real best score found, not a clamped bound.
     score: Score,
     /// Whether some node in the subtree that produced `score` was a
@@ -745,10 +740,11 @@ impl<'a> Search<'a> {
     /// when the loop ran to completion without a cutoff, `Some(i)` when it broke at index `i`.
     ///
     /// `depth` is the caller's own remaining-depth parameter for `search_root`/`negamax`;
-    /// quiescence's evasion loop has no such quantity and passes [`QUIESCENCE_HISTORY_DEPTH`]
-    /// instead; see that constant's own doc. Called independently of, and after,
-    /// `note_cutoff_move`: the two tables answer different questions over the same event
-    /// stream and neither is scoped by the other's outcome.
+    /// quiescence's evasion loop has no such quantity and passes a depth-equivalent derived
+    /// from `qdepth`'s own countdown instead; see `quiescence`'s own doc for `qdepth`.
+    /// Called independently of, and after, `note_cutoff_move`: the two tables answer
+    /// different questions over the same event stream and neither is scoped by the other's
+    /// outcome.
     #[expect(
         clippy::expect_used,
         reason = "moves is the position's own already-ordered move list, so a move's from-square always holds the piece that made it"
@@ -1181,8 +1177,8 @@ impl<'a> Search<'a> {
         if depth == 0 {
             return self
                 .quiescence(board, alpha, beta, 0, MAX_QUIESCENCE_DEPTH, Some(moves))
-                .map_or(RootOutcome::Aborted { best_so_far: None }, |score| {
-                    RootOutcome::Completed(score, pv)
+                .map_or(RootOutcome::Aborted { best_so_far: None }, |result| {
+                    RootOutcome::Completed(result.score, pv)
                 });
         }
 
@@ -1270,7 +1266,7 @@ impl<'a> Search<'a> {
         alpha: Score,
         beta: Score,
         is_pv: bool,
-    ) -> Option<NegamaxResult> {
+    ) -> Option<TaintedScore> {
         self.nodes += 1;
         if self.should_abort() {
             return None;
@@ -1298,7 +1294,7 @@ impl<'a> Search<'a> {
         // it's gated on impossible to attribute to either one.
         let repetition = is_threefold_repetition(&self.history, board.hash());
         if is_fifty_move_draw(board) || repetition {
-            return Some(NegamaxResult {
+            return Some(TaintedScore {
                 score: 0,
                 tainted: repetition,
             });
@@ -1310,7 +1306,7 @@ impl<'a> Search<'a> {
             if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
                 // Untainted: post-suppression, the table never holds an
                 // entry stored from a draw-tainted subtree to read back.
-                return Some(NegamaxResult {
+                return Some(TaintedScore {
                     score,
                     tainted: false,
                 });
@@ -1324,19 +1320,14 @@ impl<'a> Search<'a> {
             } else {
                 0
             };
-            return Some(NegamaxResult {
+            return Some(TaintedScore {
                 score,
                 tainted: false,
             });
         }
 
         if depth == 0 {
-            return self
-                .quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves))
-                .map(|score| NegamaxResult {
-                    score,
-                    tainted: false,
-                });
+            return self.quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
         let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
@@ -1388,7 +1379,7 @@ impl<'a> Search<'a> {
             }
         }
 
-        Some(NegamaxResult {
+        Some(TaintedScore {
             score: outcome.max,
             tainted: any_child_tainted,
         })
@@ -1409,13 +1400,14 @@ impl<'a> Search<'a> {
     /// `qdepth`'s own doc below), and returns [`MATE`]'s formula outright
     /// when none exist rather than a misleading material score for what is
     /// actually checkmate. Same fail-soft alpha-beta and abort propagation
-    /// as `negamax` either way. Deliberately still out of scope: repetition
-    /// detection. Captures and promotions can never repeat a position
-    /// (both are irreversible), but evasions (plain king or blocking moves)
-    /// now can; `self.history` isn't threaded into this function; a real
-    /// repetition reachable only through an evasion line is a narrower
-    /// version of the same path-dependence gap the transposition table
-    /// already accepts elsewhere, not a new one this change introduces.
+    /// as `negamax` either way.
+    ///
+    /// Threads `self.history` the same way `negamax` does, but only checks
+    /// it for a repetition on the evasion path: captures and promotions can
+    /// never repeat a position (both are irreversible), so checking there
+    /// too would only cost cycles for an answer that's always "no." The
+    /// fifty-move clock is still out of scope on both paths, the same gap
+    /// `negamax`'s own repetition-only suppression leaves open elsewhere.
     ///
     /// `ply` is `negamax`'s own distance-from-root, passed through so an
     /// empty evasion list scores `Score::from(ply) - MATE`, the identical
@@ -1426,8 +1418,12 @@ impl<'a> Search<'a> {
     /// to `ply`: it bounds how many more plies of *captures* this call will
     /// still resolve while not in check, not the distance from the root. At
     /// `qdepth == 0`, this behaves as if no captures were available, falling
-    /// back to `stand_pat`. Passed through unchanged (not decremented) on
-    /// the evasion path, since that path ignores it entirely.
+    /// back to `stand_pat`. The evasion path keeps counting it down too
+    /// (`saturating_sub`, since evasions can run past what would be `qdepth
+    /// == 0` on the capture side), but never gates on it reaching zero:
+    /// there, it exists purely so a cutoff can be weighted by how deep into
+    /// quiescence as a whole (captures and evasions both) the position
+    /// already is, not to bound the search itself.
     ///
     /// `moves`: `Some` when the caller (`negamax`/`search_root`) already
     /// generated the full move list for its own mate/stalemate check, so
@@ -1445,7 +1441,7 @@ impl<'a> Search<'a> {
         ply: u8,
         qdepth: u8,
         moves: Option<MoveList>,
-    ) -> Option<Score> {
+    ) -> Option<TaintedScore> {
         self.nodes += 1;
         if self.should_abort() {
             return None;
@@ -1457,41 +1453,76 @@ impl<'a> Search<'a> {
         self.set_hash_move(ply, None);
 
         if in_check(board, board.side_to_move()) {
+            let repetition = is_threefold_repetition(&self.history, board.hash());
+            if repetition {
+                return Some(TaintedScore {
+                    score: 0,
+                    tainted: true,
+                });
+            }
+
             let mut evasions = moves.unwrap_or_else(|| legal_moves(board));
             if evasions.is_empty() {
-                return Some(Score::from(ply) - MATE);
+                return Some(TaintedScore {
+                    score: Score::from(ply) - MATE,
+                    tainted: false,
+                });
             }
 
             self.order_moves(board, &mut evasions, ply);
 
+            let mut any_child_tainted = false;
             let outcome =
                 self.quiescence_loop(&evasions, ply, alpha, beta, Score::MIN, |s, m, a, b| {
+                    s.history.push(board.hash());
                     let child = board.make_move(m);
-                    s.quiescence(&child, a, b, ply + 1, qdepth, None)
+                    let result =
+                        s.quiescence(&child, a, b, ply + 1, qdepth.saturating_sub(1), None);
+                    s.history.pop();
+                    result.map(|r| {
+                        any_child_tainted |= r.tainted;
+                        r.score
+                    })
                 });
 
             if outcome.aborted {
                 return None;
             }
+            // `.max(1)` floors only the degenerate case (a check reached
+            // with the full budget still available, `qdepth ==
+            // MAX_QUIESCENCE_DEPTH`) at a real, if minimal, weight instead
+            // of `0`: `cutoff_delta(0)` is a silent no-op. Every other
+            // value is left alone rather than uniformly shifted up, so the
+            // scale still tops out at `MAX_QUIESCENCE_DEPTH` itself.
+            let evasion_history_depth = MAX_QUIESCENCE_DEPTH.saturating_sub(qdepth).max(1);
             self.update_cutoff_history(
                 board,
                 &evasions,
                 outcome.cutoff_index,
-                QUIESCENCE_HISTORY_DEPTH,
+                evasion_history_depth,
             );
-            return Some(outcome.max);
+            return Some(TaintedScore {
+                score: outcome.max,
+                tainted: any_child_tainted,
+            });
         }
 
         let stand_pat = evaluate(board);
         if stand_pat >= beta {
-            return Some(stand_pat);
+            return Some(TaintedScore {
+                score: stand_pat,
+                tainted: false,
+            });
         }
         if stand_pat > alpha {
             alpha = stand_pat;
         }
 
         if qdepth == 0 {
-            return Some(stand_pat);
+            return Some(TaintedScore {
+                score: stand_pat,
+                tainted: false,
+            });
         }
 
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
@@ -1499,15 +1530,25 @@ impl<'a> Search<'a> {
 
         self.order_moves(board, &mut qmoves, ply);
 
+        let mut any_child_tainted = false;
         let outcome = self.quiescence_loop(&qmoves, ply, alpha, beta, stand_pat, |s, m, a, b| {
+            s.history.push(board.hash());
             let child = board.make_move(m);
-            s.quiescence(&child, a, b, ply + 1, qdepth - 1, None)
+            let result = s.quiescence(&child, a, b, ply + 1, qdepth - 1, None);
+            s.history.pop();
+            result.map(|r| {
+                any_child_tainted |= r.tainted;
+                r.score
+            })
         });
 
         if outcome.aborted {
             return None;
         }
-        Some(outcome.max)
+        Some(TaintedScore {
+            score: outcome.max,
+            tainted: any_child_tainted,
+        })
     }
 }
 
@@ -1690,7 +1731,8 @@ enum MovePriority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Piece, Square};
+    use crate::search::cutoff_history::CutoffHistory;
+    use crate::types::{Color, Piece, Square};
 
     /// `move_priority` is private to this module, and so is `order_moves`;
     /// both are pure enough (no board mutation, no search recursion) to test
@@ -2132,12 +2174,140 @@ mod tests {
 
         let score = search
             .quiescence(&board, -MATE, MATE, 0, MAX_QUIESCENCE_DEPTH, None)
-            .expect("no abort condition is configured, so this can't return None");
+            .expect("no abort condition is configured, so this can't return None")
+            .score;
 
         assert!(
             score > stand_pat,
             "quiescence must search past a legal non-capturing promotion rather than standing \
              pat on the pre-promotion material: stand_pat={stand_pat}, score={score}"
+        );
+    }
+
+    // ---- Quiescence: repetition detection and taint ----
+
+    /// White's king in check from a rook on an open file, with nothing to
+    /// capture: every legal reply is a quiet king step, so this stays on
+    /// the evasion path with no way to exit through a capture instead.
+    fn check_with_only_quiet_evasions() -> Board {
+        Board::try_from_fen("4r2k/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN")
+    }
+
+    #[test]
+    fn quiescence_scores_a_seeded_repetition_as_a_tainted_draw_on_the_evasion_path() {
+        let board = check_with_only_quiet_evasions();
+        // Two prior occurrences of this exact position, matching
+        // `is_threefold_repetition`'s own contract: the position `quiescence`
+        // is about to search is itself the third.
+        let history = vec![board.hash(), board.hash()];
+        let mut search = Search::new(history);
+
+        let result = search
+            .quiescence(&board, -MATE, MATE, 0, MAX_QUIESCENCE_DEPTH, None)
+            .expect("no abort condition is configured, so this can't return None");
+
+        assert_eq!(
+            result.score, 0,
+            "a threefold repetition on the evasion path must score as a draw, not \
+             recurse into evasions as if it weren't one"
+        );
+        assert!(
+            result.tainted,
+            "a repetition-drawn score must be reported tainted, the same as negamax's own"
+        );
+    }
+
+    /// White's queen captures the only Black pawn while also giving check
+    /// (`h5` to `f7` is a clear diagonal, and a queen on `f7` is adjacent
+    /// to a king on `e8`): `board` itself is not in check (the capture
+    /// path), but the position right after `Qxf7+` is, crossing from the
+    /// capture branch into the evasion branch one ply into the recursion.
+    #[test]
+    fn quiescence_propagates_a_childs_repetition_taint_across_the_capture_to_evasion_boundary() {
+        let board = Board::try_from_fen("4k3/5p2/8/7Q/8/8/8/4K3 w - - 0 1").expect("valid FEN");
+        let qxf7 = find_move(&board, Square::H5, Square::F7);
+        let after_qxf7 = board.make_move(qxf7);
+        assert!(
+            in_check(&after_qxf7, after_qxf7.side_to_move()),
+            "Qxf7 must deliver check for this test to exercise the evasion path at all"
+        );
+
+        // `board` itself is not the repeated position (no prior occurrences
+        // seeded), but `after_qxf7` is: two prior occurrences of *its*
+        // hash, so the taint has to come from the child's own result, not
+        // from `board`'s own top-of-function check (which never even runs,
+        // since `board` isn't in check and never reaches that branch).
+        let history = vec![after_qxf7.hash(), after_qxf7.hash()];
+        let mut search = Search::new(history);
+
+        let result = search
+            .quiescence(&board, -MATE, MATE, 0, MAX_QUIESCENCE_DEPTH, None)
+            .expect("no abort condition is configured, so this can't return None");
+
+        assert!(
+            result.tainted,
+            "a repetition found in a child reached via the capture path must still taint \
+             the parent's own result, the same `any_child_tainted` propagation negamax's \
+             own move loop uses"
+        );
+    }
+
+    // ---- Quiescence: evasion-depth history weighting ----
+
+    /// A cutoff on the evasion path weights `CutoffHistory` by how much of
+    /// `qdepth`'s shared budget is already spent, not a flat constant: the
+    /// same forced-cutoff scenario started with less budget remaining
+    /// (simulating a check reached after several captures already ran)
+    /// must move the table more than the same scenario started fresh.
+    #[test]
+    fn quiescence_weights_an_evasion_cutoff_more_the_deeper_into_quiescence_it_is() {
+        let board = check_with_only_quiet_evasions();
+        // A window so narrow that whichever evasion `order_moves` tries
+        // first causes an immediate cutoff at index 0, regardless of its
+        // real evaluation: deterministic without needing to know or care
+        // which of the five equally-quiet king steps that turns out to be.
+        // `Score::MIN` itself can't be negated (no positive counterpart;
+        // see `is_mate_score`'s own doc on `saturating_abs`), so `MIN + 1`
+        // is as narrow as this window can safely go.
+        let alpha = Score::MIN + 1;
+        let beta = Score::MIN + 2;
+
+        let mut shallow_history = CutoffHistory::new();
+        Search::new(Vec::new())
+            .with_cutoff_history(&mut shallow_history)
+            .quiescence(&board, alpha, beta, 0, MAX_QUIESCENCE_DEPTH, None);
+
+        let mut deep_history = CutoffHistory::new();
+        Search::new(Vec::new())
+            .with_cutoff_history(&mut deep_history)
+            .quiescence(&board, alpha, beta, 0, 2, None);
+
+        let touched_cell = |history: &CutoffHistory| {
+            Color::ALL.into_iter().find_map(|side| {
+                Piece::ALL.into_iter().find_map(|piece| {
+                    Square::ALL
+                        .into_iter()
+                        .find(|&to| history.score(side, piece, to) != 0)
+                        .map(|to| (side, piece, to))
+                })
+            })
+        };
+        let (side, piece, to) = touched_cell(&shallow_history)
+            .expect("the forced cutoff must record something in a fresh table");
+
+        assert_eq!(
+            touched_cell(&deep_history),
+            Some((side, piece, to)),
+            "order_moves is deterministic given identical fresh state in both runs, so the \
+             same move must cause the cutoff either way"
+        );
+        assert!(
+            deep_history.score(side, piece, to).abs()
+                > shallow_history.score(side, piece, to).abs(),
+            "starting with less of qdepth's shared budget remaining (2 vs {MAX_QUIESCENCE_DEPTH}) \
+             must weigh the same cutoff more, not the same: shallow={}, deep={}",
+            shallow_history.score(side, piece, to),
+            deep_history.score(side, piece, to)
         );
     }
 
