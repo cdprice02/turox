@@ -576,7 +576,7 @@ fn expected_quiescence(board: &Board, ply: u8, qdepth: u8) -> i16 {
     let mut best = evaluate(board);
     if qdepth > 0 {
         let mut captures = legal_moves(board);
-        captures.retain(|m| m.flags().is_capture());
+        captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
         for &m in captures.as_slice() {
             let score = -expected_quiescence(&board.make_move(m), ply + 1, qdepth - 1);
             best = best.max(score);
