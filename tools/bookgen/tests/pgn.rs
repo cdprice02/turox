@@ -109,3 +109,68 @@ fn strips_castling_check_and_mate_suffixes_as_plain_tokens() {
 fn an_empty_file_produces_no_games() {
     assert_eq!(parse_pgn(""), Vec::new());
 }
+
+#[test]
+fn opening_tag_is_preferred_over_eco_when_both_are_present() {
+    let pgn = r#"[Event "e"]
+[White "a"]
+[Black "b"]
+[Result "1-0"]
+[ECO "C65"]
+[Opening "Ruy Lopez: Berlin Defense"]
+
+1. e4 e5 1-0
+"#;
+    let games = parse_pgn(pgn);
+    assert_eq!(
+        games[0].opening_name,
+        Some("Ruy Lopez: Berlin Defense".to_string())
+    );
+}
+
+#[test]
+fn eco_is_used_when_opening_is_absent() {
+    let pgn = r#"[Event "e"]
+[White "a"]
+[Black "b"]
+[Result "1-0"]
+[ECO "C65"]
+
+1. e4 e5 1-0
+"#;
+    let games = parse_pgn(pgn);
+    assert_eq!(
+        games[0].opening_name,
+        Some("C65".to_string()),
+        "ECO must be the fallback identifier when no Opening tag names the line"
+    );
+}
+
+#[test]
+fn opening_name_is_none_when_neither_tag_is_present() {
+    let games = parse_pgn(SIMPLE_GAME);
+    assert_eq!(
+        games[0].opening_name, None,
+        "SIMPLE_GAME carries neither an Opening nor an ECO tag"
+    );
+}
+
+#[test]
+fn opening_wins_over_eco_regardless_of_which_header_line_comes_first() {
+    // The Seven Tag Roster orders these together but doesn't guarantee
+    // which of the two comes first; `Opening` must win either way, not just
+    // when it happens to be the later tag `parse_one_game` overwrites with.
+    let opening_first = r#"[Event "e"]
+[White "a"]
+[Black "b"]
+[Result "1-0"]
+[Opening "Sicilian Defense"]
+[ECO "B20"]
+
+1. e4 c5 1-0
+"#;
+    assert_eq!(
+        parse_pgn(opening_first)[0].opening_name,
+        Some("Sicilian Defense".to_string())
+    );
+}

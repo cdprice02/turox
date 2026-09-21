@@ -38,7 +38,7 @@ fn any_candidate_set() -> impl Strategy<Value = Vec<BookMove>> {
         pairs
             .into_iter()
             .filter(|(mv, _)| seen.insert((mv.from(), mv.to())))
-            .map(|(mv, weight)| BookMove { mv, weight })
+            .map(|(mv, weight)| BookMove::new(mv, weight))
             .collect()
     })
 }
@@ -115,39 +115,12 @@ const fn b1c3() -> Move {
 /// seeds is astronomically unlikely rather than a coin flip.
 fn moderate_weight_candidate_sets() -> Vec<Vec<BookMove>> {
     vec![
+        vec![BookMove::new(e2e4(), 2), BookMove::new(d2d4(), 1)],
+        vec![BookMove::new(e2e4(), 3), BookMove::new(d2d4(), 2)],
         vec![
-            BookMove {
-                mv: e2e4(),
-                weight: 2,
-            },
-            BookMove {
-                mv: d2d4(),
-                weight: 1,
-            },
-        ],
-        vec![
-            BookMove {
-                mv: e2e4(),
-                weight: 3,
-            },
-            BookMove {
-                mv: d2d4(),
-                weight: 2,
-            },
-        ],
-        vec![
-            BookMove {
-                mv: e2e4(),
-                weight: 1,
-            },
-            BookMove {
-                mv: d2d4(),
-                weight: 1,
-            },
-            BookMove {
-                mv: b1c3(),
-                weight: 1,
-            },
+            BookMove::new(e2e4(), 1),
+            BookMove::new(d2d4(), 1),
+            BookMove::new(b1c3(), 1),
         ],
     ]
 }

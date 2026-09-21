@@ -20,7 +20,7 @@
 //! later change, not something to fold into this loop silently.
 
 use crate::board::Board;
-use crate::book::Book;
+use crate::book::{Book, BookMove};
 use crate::move_gen::legal::legal_moves;
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::time::allocate_time;
@@ -113,20 +113,21 @@ where
                 // calls `Search::search`, so it never needs `stop` to exist
                 // at all. Validated against the real board's own legal
                 // moves before being trusted, not just handed straight to
-                // the GUI: `book.choose` only knows the position's hash, so
-                // a hash collision, a stale book, or the coarser-than-strictly-
-                // legal en passant hashing gap (`board::zobrist`'s own module
-                // doc) could otherwise hand back a move that isn't actually
-                // playable here. A position with no legal moves at all
-                // (checkmate, stalemate) falls out of this the same way: no
-                // candidate can ever pass the check, so it falls through to
-                // search below, which already reports the null move `0000`
-                // for that case.
+                // the GUI: `book.choose_move` only knows the position's
+                // hash, so a hash collision, a stale book, or the
+                // coarser-than-strictly-legal en passant hashing gap
+                // (`board::zobrist`'s own module doc) could otherwise hand
+                // back a move that isn't actually playable here. A position
+                // with no legal moves at all (checkmate, stalemate) falls
+                // out of this the same way: no candidate can ever pass the
+                // check, so it falls through to search below, which already
+                // reports the null move `0000` for that case.
                 if book_enabled {
                     if let Some(book) = book {
-                        if let Some(mv) = book.choose(board.hash(), root_seed()) {
-                            if legal_moves(board).as_slice().contains(&mv) {
-                                send(&mut writer, &Response::BestMove(Some(mv)));
+                        if let Some(bm) = book.choose_move(board.hash(), root_seed()) {
+                            if legal_moves(board).as_slice().contains(&bm.mv) {
+                                send(&mut writer, &book_hit_info_string(bm));
+                                send(&mut writer, &Response::BestMove(Some(bm.mv)));
                                 continue;
                             }
                         }
@@ -242,6 +243,21 @@ fn info_response(result: &SearchResult) -> Response {
         hashfull: result.hashfull,
         pv: result.pv.into_iter().map_while(|m| m).collect(),
     }
+}
+
+/// Builds the `info string` line reporting a book hit: which move was
+/// played from the book, and the opening or variation name it belongs to,
+/// if the book carries one for it. The only trace a book hit leaves in the
+/// engine's own output otherwise, since `Command::Go`'s book-hit path
+/// answers with `bestmove` alone and skips `Search` entirely: without this,
+/// nothing in a GUI's log (or a human watching one) can tell a book move
+/// happened at all, let alone which line it was.
+fn book_hit_info_string(bm: &BookMove) -> Response {
+    let opening = bm
+        .name
+        .as_deref()
+        .map_or(String::new(), |name| format!(" opening {name}"));
+    Response::InfoString(format!("book move {}{opening}", bm.mv.to_uci()))
 }
 
 /// Builds the `info string` line reporting the cutoff-index histogram, the
