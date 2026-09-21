@@ -656,16 +656,16 @@ fn final_scores(output: &str) -> Vec<i32> {
 /// A king and queen both shuffling back and forth gives this decisively-won
 /// position genuine repetitions without a pawn move or capture ever masking
 /// them by resetting anything. Depth 7 is empirically the shallowest depth at
-/// which this shuffle produces a reproducible divergence between reusing the
-/// table across every `go` and clearing it before each one.
-/// Expected to fail, on the same footing as the fifty-move-boundary gap in
-/// `tests/search.rs`, and excluded the same two ways. It asserts that reusing
-/// the table across every `go` scores identically to clearing it between each
-/// one, which is what path information in the key would buy.
+/// which this shuffle would have produced a reproducible divergence between
+/// reusing the table across every `go` and clearing it before each one, back
+/// when this gap was still open (ADR 0002; ADR 0002 owes an update to
+/// reflect the suppression this pins). It asserts that reusing the table
+/// across every `go` scores identically to clearing it between each one,
+/// which suppressing the store on a repetition-tainted subtree now buys for
+/// the repetition half specifically; the fifty-move half in `tests/search.rs`
+/// is still open and still `#[ignore]`d.
 #[test]
-#[ignore = "expected to fail; pins an accepted transposition-table gap, run \
-            via the accepted-gaps nextest profile"]
-fn accepted_gap_shared_table_leaks_a_repetition_tainted_score_across_go_commands() {
+fn shared_table_no_longer_leaks_a_repetition_tainted_score_across_go_commands() {
     let moves = [
         "h1h2", "h8g8", "h2h1", "g8h8", "h1h2", "h8g8", "h2h1", "g8h8",
     ];

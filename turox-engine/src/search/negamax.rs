@@ -13,7 +13,7 @@ use crate::move_gen::legal::legal_moves;
 use crate::move_gen::move_list::MoveList;
 use crate::rng::xorshift64star;
 use crate::search::cutoff_history::CutoffHistory;
-use crate::search::draw::is_draw;
+use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
 use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
 use crate::types::Move;
@@ -314,6 +314,27 @@ struct LoopCtx {
     /// all -- a cut node's local best move is bookkeeping for alpha-beta, not
     /// part of the real principal variation.
     is_pv: bool,
+}
+
+/// What [`Search::negamax`] returned: the fail-soft score, and whether the
+/// subtree that produced it passed through a threefold-repetition draw
+/// anywhere.
+///
+/// A tainted score is still correct to use for comparisons, cutoffs, and PV
+/// bookkeeping at the calling node: what a tainted score is *not* safe for is
+/// a transposition-table store, since the table is keyed on board state
+/// alone and a repetition's availability depends on the path taken to reach
+/// it (ADR 0002). `negamax` checks this flag itself, immediately before its
+/// own store, and every caller that goes on to store anything of its own
+/// must OR its children's `tainted` into its own before doing the same.
+#[derive(Debug, Clone, Copy)]
+struct NegamaxResult {
+    /// Fail-soft: the real best score found, not a clamped bound.
+    score: Score,
+    /// Whether some node in the subtree that produced `score` was a
+    /// threefold-repetition draw. See this struct's own doc for what that
+    /// does and doesn't license a caller to do with `score`.
+    tainted: bool,
 }
 
 /// What one [`Search::alpha_beta_loop`] call produced.
@@ -1147,9 +1168,9 @@ impl<'a> Search<'a> {
             |s, m, a, b, is_pv| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let score = s.negamax(&child, depth - 1, 1, a, b, is_pv);
+                let result = s.negamax(&child, depth - 1, 1, a, b, is_pv);
                 s.history.pop();
-                score
+                result.map(|r| r.score)
             },
         );
 
@@ -1213,7 +1234,7 @@ impl<'a> Search<'a> {
         alpha: Score,
         beta: Score,
         is_pv: bool,
-    ) -> Option<Score> {
+    ) -> Option<NegamaxResult> {
         self.nodes += 1;
         if self.should_abort() {
             return None;
@@ -1235,29 +1256,51 @@ impl<'a> Search<'a> {
             self.pv[usize::from(ply).min(MAX_PV_PLY - 1)] = [None; MAX_PV_PLY];
         }
 
-        if is_draw(board, &self.history, board.hash()) {
-            return Some(0);
+        // The fifty-move half of `is_draw` is scored the same way but never
+        // taints: ADR 0002 scopes this suppression to the repetition half
+        // alone, since mixing both would make the node-count/hashfull
+        // measurement it's gated on impossible to attribute to either one.
+        let repetition = is_threefold_repetition(&self.history, board.hash());
+        if is_fifty_move_draw(board) || repetition {
+            return Some(NegamaxResult {
+                score: 0,
+                tainted: repetition,
+            });
         }
 
         let hash = board.hash();
         let tt_entry = self.tt.as_deref().and_then(|tt| tt.probe(hash));
         if let Some(entry) = tt_entry {
             if let Some(score) = entry.cutoff_score(depth, alpha, beta, ply) {
-                return Some(score);
+                // Untainted: post-suppression, the table never holds an
+                // entry stored from a draw-tainted subtree to read back.
+                return Some(NegamaxResult {
+                    score,
+                    tainted: false,
+                });
             }
         }
 
         let mut moves = legal_moves(board);
         if moves.is_empty() {
-            return if in_check(board, board.side_to_move()) {
-                Some(Score::from(ply) - MATE)
+            let score = if in_check(board, board.side_to_move()) {
+                Score::from(ply) - MATE
             } else {
-                Some(0)
+                0
             };
+            return Some(NegamaxResult {
+                score,
+                tainted: false,
+            });
         }
 
         if depth == 0 {
-            return self.quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves));
+            return self
+                .quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves))
+                .map(|score| NegamaxResult {
+                    score,
+                    tainted: false,
+                });
         }
 
         let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
@@ -1266,6 +1309,7 @@ impl<'a> Search<'a> {
         self.set_hash_move(ply, tt_move);
         self.order_moves(board, &mut moves, ply);
 
+        let mut any_child_tainted = false;
         let outcome = self.alpha_beta_loop(
             &moves,
             LoopCtx {
@@ -1277,9 +1321,12 @@ impl<'a> Search<'a> {
             |s, m, a, b, is_pv| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let score = s.negamax(&child, depth - 1, ply + 1, a, b, is_pv);
+                let result = s.negamax(&child, depth - 1, ply + 1, a, b, is_pv);
                 s.history.pop();
-                score
+                result.map(|r| {
+                    any_child_tainted |= r.tainted;
+                    r.score
+                })
             },
         );
 
@@ -1288,22 +1335,27 @@ impl<'a> Search<'a> {
         }
         self.update_cutoff_history(board, &moves, outcome.cutoff_index, depth);
 
-        if let Some(tt) = self.tt.as_deref_mut() {
-            let best_move = outcome
-                .best_move
-                .expect("moves is non-empty, so the loop always finds a best move");
-            tt.store(
-                hash,
-                ply,
-                depth,
-                outcome.max,
-                original_alpha,
-                beta,
-                best_move,
-            );
+        if !any_child_tainted {
+            if let Some(tt) = self.tt.as_deref_mut() {
+                let best_move = outcome
+                    .best_move
+                    .expect("moves is non-empty, so the loop always finds a best move");
+                tt.store(
+                    hash,
+                    ply,
+                    depth,
+                    outcome.max,
+                    original_alpha,
+                    beta,
+                    best_move,
+                );
+            }
         }
 
-        Some(outcome.max)
+        Some(NegamaxResult {
+            score: outcome.max,
+            tainted: any_child_tainted,
+        })
     }
 
     /// Quiescence search: like `negamax`, but only ever considers captures
@@ -2025,6 +2077,7 @@ mod tests {
             search
                 .negamax(&board, 2, 0, -MATE, MATE, true)
                 .expect("no abort condition is configured, so this can't return None")
+                .score
         };
 
         let entry = tt
