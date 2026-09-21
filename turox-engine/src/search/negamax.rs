@@ -132,6 +132,9 @@ pub enum CutoffCause {
     HashMove,
     /// A quiet move already sitting in a killer slot for this ply.
     Killer,
+    /// A quiet move already sitting in this ply's mate-killer slot: it
+    /// refuted an earlier sibling with a mate-indicating score.
+    MateKiller,
     /// Anything else: ordinary move ordering got there without a technique
     /// tracked here claiming credit.
     Other,
@@ -418,6 +421,15 @@ pub struct Search<'a> {
     /// the same tree, just re-explored at increasing depth, so a killer
     /// found at iteration 3 is still valid information for iteration 4.
     killers: [[Option<Move>; KILLER_SLOTS]; MAX_TRACKED_PLY],
+    /// This ply's mate killer: a quiet move that refuted an earlier sibling
+    /// with a mate-indicating score, one slot rather than `killers`'s two.
+    /// A forced mate is rare enough at a fail-high that a second slot would
+    /// mostly sit empty; see [`Self::note_cutoff_move`] for how this gets
+    /// populated and [`MovePriority::MateKiller`] for how it outranks
+    /// `killers`. Always-replace, the same policy `killers`' own second
+    /// slot promotion converges toward anyway, just without the two-slot
+    /// bookkeeping a single slot has no use for.
+    mate_killers: [Option<Move>; MAX_TRACKED_PLY],
     /// The move this ply's move loop ordered by, if any: the transposition
     /// table's move for the position being searched there.
     ///
@@ -489,6 +501,7 @@ impl<'a> Search<'a> {
             stop: Arc::new(AtomicBool::new(false)),
             tt: None,
             killers: [[None; KILLER_SLOTS]; MAX_TRACKED_PLY],
+            mate_killers: [None; MAX_TRACKED_PLY],
             hash_moves: [None; MAX_TRACKED_PLY],
             pv: [[None; MAX_PV_PLY]; MAX_PV_PLY],
             previous_pv_line: [None; MAX_TRACKED_PLY],
@@ -630,6 +643,11 @@ impl<'a> Search<'a> {
         self.killers[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
+    /// This ply's mate killer, clamped the same way [`Self::killer_slots`] is.
+    fn mate_killer(&self, ply: u8) -> Option<Move> {
+        self.mate_killers[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
+    }
+
     /// Records what this ply's move loop is ordering by, which every loop must
     /// do before running, including the loops that order by nothing.
     ///
@@ -653,41 +671,59 @@ impl<'a> Search<'a> {
         self.previous_pv_line[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
-    /// Called whenever a move causes a beta cutoff: updates the killer table
-    /// and reports which ordering technique put `m` early enough to cut off.
+    /// Called whenever a move causes a beta cutoff: updates the killer and
+    /// mate-killer tables and reports which ordering technique put `m` early
+    /// enough to cut off.
     ///
     /// Classification lives here rather than at the call site because this is
     /// already the one place that knows what each technique holds, and the
-    /// techniques queued behind killers (mate killers, history, countermoves)
-    /// each add their own table to `Search` and a branch here, not another
-    /// return value threaded out to the loop.
+    /// techniques queued behind killers and mate killers (history,
+    /// countermoves) each add their own table to `Search` and a branch here,
+    /// not another return value threaded out to the loop.
     ///
     /// The hash move is read from [`Self::hash_move`] like the killers are
     /// read from their own table, so every ordering input this classifies
     /// against lives on `Self`. Checked first, because a stored move that is
     /// *also* a killer was tried early because the table named it, and
-    /// crediting the killer table would overstate what it does.
+    /// crediting the killer table would overstate what it does. The mate
+    /// killer is checked next, ahead of the ordinary killer table, matching
+    /// [`MovePriority`]'s own ranking: a move can sit in both tables at once
+    /// (mate killers are recorded into the ordinary table too, since neither
+    /// recording is conditional on the other), and when it does, the mate
+    /// killer is the more specific, higher-value fact about it.
+    ///
+    /// `score` is `m`'s own resulting score, the same value the caller's
+    /// `max` already holds at the point it decides `alpha >= beta`: what
+    /// decides whether this cutoff also populates the mate-killer table,
+    /// via [`is_mate_score`].
     ///
     /// Recording is a no-op for anything that isn't a plain quiet move:
     /// captures and promotions are already ordered by MVV-LVA/material gain,
     /// so recording them as killers would duplicate that and waste a slot on
     /// information the ordering already has. Such a move can still *cause* a
     /// cutoff, and is still classified.
-    fn note_cutoff_move(&mut self, ply: u8, m: Move) -> CutoffCause {
+    fn note_cutoff_move(&mut self, ply: u8, m: Move, score: Score) -> CutoffCause {
         // Recording happens whatever the cause turns out to be. Skipping it for
-        // a hash move would quietly change which moves the killer table holds,
-        // and so the move ordering and the tree, which classification must not.
-        let was_already_a_killer = if m.flags().is_material_neutral() {
+        // a hash move would quietly change which tables hold what, and so the
+        // move ordering and the tree, which classification must not.
+        let (was_already_a_killer, was_already_the_mate_killer) = if m.flags().is_material_neutral()
+        {
             let idx = usize::from(ply).min(MAX_TRACKED_PLY - 1);
             let was_already_a_killer = self.killers[idx].contains(&Some(m));
+            let was_already_the_mate_killer = self.mate_killers[idx] == Some(m);
             self.killers[idx] = record_killer(self.killers[idx], m);
-            was_already_a_killer
+            if is_mate_score(score) {
+                self.mate_killers[idx] = Some(m);
+            }
+            (was_already_a_killer, was_already_the_mate_killer)
         } else {
-            false
+            (false, false)
         };
 
         if self.hash_move(ply) == Some(m) {
             CutoffCause::HashMove
+        } else if was_already_the_mate_killer {
+            CutoffCause::MateKiller
         } else if was_already_a_killer {
             CutoffCause::Killer
         } else {
@@ -1005,7 +1041,7 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let cause = self.note_cutoff_move(ply, m);
+                let cause = self.note_cutoff_move(ply, m, max);
                 self.negamax_cutoffs.record(i, cause);
                 cutoff_index = Some(i);
                 break;
@@ -1065,7 +1101,7 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let cause = self.note_cutoff_move(ply, m);
+                let cause = self.note_cutoff_move(ply, m, max);
                 self.quiescence_cutoffs.record(i, cause);
                 cutoff_index = Some(i);
                 break;
@@ -1577,6 +1613,9 @@ impl Search<'_> {
             | MoveFlags::DoublePawnPush
             | MoveFlags::KingCastle
             | MoveFlags::QueenCastle => {
+                if self.mate_killer(ply) == Some(m) {
+                    return (MovePriority::MateKiller, 0);
+                }
                 if self.killer_slots(ply).contains(&Some(m)) {
                     return (MovePriority::Killer, 0);
                 }
@@ -1618,19 +1657,6 @@ impl Search<'_> {
 /// among captures, [`CutoffHistory`]'s score among quiets) has one shared
 /// place to live rather than a separate payload per variant that needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-// `cfg_attr(not(test), ...)` because the ordering test below names the
-// variant, so `dead_code` fires in a normal build and not in a test one, and
-// a bare `expect` would then be unfulfilled exactly where the test build runs.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "MateKiller has no producer yet: a deliberately separate, later change from \
-                  ordinary killers, split out to keep each one's SPRT measuring only one \
-                  technique. The ranking scheme is designed to be complete for when it lands, \
-                  rather than needing to be reshuffled later."
-    )
-)]
 enum MovePriority {
     /// A capture losing material, ordered by how much. Below `Quiet` because a
     /// move that hangs a piece is worse than an untried ordinary move.
@@ -1640,8 +1666,8 @@ enum MovePriority {
     /// A quiet move that caused a beta cutoff at a sibling of this ply.
     Killer,
     /// A quiet move that refuted a sibling *with a mate score*. Ranked above
-    /// ordinary killers because a forced mate is worth more than material. No
-    /// producer yet.
+    /// ordinary killers because a forced mate is worth more than material.
+    /// See [`Search::mate_killer`]/[`Search::note_cutoff_move`].
     MateKiller,
     /// An even trade. Gain is exactly `0` by definition, so unlike the winning and losing
     /// tiers it needs no tiebreak beyond ordinary declaration order.
@@ -2196,6 +2222,174 @@ mod tests {
             priority_search(Some(quiet), [Some(quiet), None]).move_priority(&board, quiet, 0),
             (MovePriority::Hash, 0),
             "the tt hint must outrank a killer slot for the same move"
+        );
+    }
+
+    // ---- Mate-killer classification ----
+    //
+    // Same shape as the ordinary killer tests above, poking
+    // `Search::mate_killers` directly rather than driving a real search to
+    // populate it: `move_priority`'s own lookup is what's under test, not
+    // `note_cutoff_move`'s population logic, which has its own section below.
+
+    #[test]
+    fn move_priority_with_matching_mate_killer_classifies_as_mate_killer() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = Search::new(Vec::new());
+        search.mate_killers[0] = Some(quiet);
+        assert_eq!(
+            search.move_priority(&board, quiet, 0),
+            (MovePriority::MateKiller, 0)
+        );
+    }
+
+    #[test]
+    fn move_priority_with_no_matching_mate_killer_falls_back_to_ordinary_classification() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let unrelated = find_move(&board, Square::E1, Square::F1);
+        let mut search = Search::new(Vec::new());
+        search.mate_killers[0] = Some(unrelated);
+        assert_eq!(
+            search.move_priority(&board, quiet, 0),
+            (MovePriority::Quiet, 0),
+            "a mate-killer slot holding a different move must not affect this move's own \
+             classification"
+        );
+    }
+
+    /// The whole reason `MateKiller` is a separate rank from `Killer`: a move
+    /// sitting in both tables at once (recording one is never conditional on
+    /// the other; see `note_cutoff_move`) must classify by the more specific,
+    /// higher-value fact about it.
+    #[test]
+    fn move_priority_prefers_mate_killer_over_ordinary_killer_when_a_move_matches_both() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = priority_search(None, [Some(quiet), None]);
+        search.mate_killers[0] = Some(quiet);
+        assert_eq!(
+            search.move_priority(&board, quiet, 0),
+            (MovePriority::MateKiller, 0),
+            "a move sitting in both tables must classify as the mate killer, not the ordinary one"
+        );
+    }
+
+    #[test]
+    fn move_priority_prefers_hash_over_mate_killer_when_a_move_matches_both() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = priority_search(Some(quiet), [None, None]);
+        search.mate_killers[0] = Some(quiet);
+        assert_eq!(
+            search.move_priority(&board, quiet, 0),
+            (MovePriority::Hash, 0),
+            "the tt hint must outrank a mate-killer slot for the same move"
+        );
+    }
+
+    /// Ply-scoping, the same property `move_priority_trusts_whichever_ply_it_is_asked_about`
+    /// pins for the ordinary killer table: a mate killer recorded at one ply
+    /// must not leak into a classification call for a different ply.
+    #[test]
+    fn move_priority_trusts_whichever_ply_its_mate_killer_is_asked_about() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = Search::new(Vec::new());
+        search.mate_killers[5] = Some(quiet);
+        assert_eq!(
+            search.move_priority(&board, quiet, 5),
+            (MovePriority::MateKiller, 0)
+        );
+        assert_eq!(
+            search.move_priority(&board, quiet, 9),
+            (MovePriority::Quiet, 0),
+            "ply 9's own (empty) mate-killer slot must be consulted, not ply 5's"
+        );
+    }
+
+    // ---- Mate-killer recording (`note_cutoff_move`) ----
+    //
+    // `move_priority`'s own lookup is covered above; these instead drive
+    // `note_cutoff_move` itself, the write side, directly. `note_cutoff_move`
+    // is private and pure enough (no recursion, no board mutation beyond
+    // `self`'s own tables) to test the same way `move_priority`/`order_moves`
+    // are, per this module's convention.
+
+    #[test]
+    fn note_cutoff_move_records_a_mate_killer_on_a_quiet_move_with_a_mate_score() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = Search::new(Vec::new());
+        let cause = search.note_cutoff_move(0, quiet, MATE - 1);
+        assert_eq!(
+            search.mate_killers[0],
+            Some(quiet),
+            "a quiet move causing a cutoff with a mate score must populate this ply's mate killer"
+        );
+        assert_eq!(
+            cause,
+            CutoffCause::Other,
+            "the first time a move is recorded, nothing had predicted it yet: crediting the \
+             mate-killer technique here would overstate what it did, the same reasoning \
+             `note_cutoff_move`'s own doc gives for the ordinary killer table"
+        );
+    }
+
+    #[test]
+    fn note_cutoff_move_credits_mate_killer_once_the_same_move_repeats_at_the_same_ply() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = Search::new(Vec::new());
+        search.note_cutoff_move(0, quiet, MATE - 1);
+        let cause = search.note_cutoff_move(0, quiet, MATE - 1);
+        assert_eq!(
+            cause,
+            CutoffCause::MateKiller,
+            "a move already sitting in this ply's mate-killer slot must be credited to it \
+             on its next cutoff"
+        );
+    }
+
+    #[test]
+    fn note_cutoff_move_does_not_record_a_mate_killer_for_an_ordinary_score() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = Search::new(Vec::new());
+        search.note_cutoff_move(0, quiet, 100);
+        assert_eq!(
+            search.mate_killers[0], None,
+            "an ordinary (non-mate) cutoff score must never populate the mate-killer slot"
+        );
+    }
+
+    #[test]
+    fn note_cutoff_move_never_records_a_mate_killer_for_a_capture() {
+        let board = capture_and_quiet_position();
+        let capture = find_move(&board, Square::E4, Square::D5);
+        let mut search = Search::new(Vec::new());
+        search.note_cutoff_move(0, capture, MATE - 1);
+        assert_eq!(
+            search.mate_killers[0], None,
+            "captures are already ordered by MVV-LVA; recording one as a mate killer would \
+             waste the slot the same way recording it as an ordinary killer would"
+        );
+    }
+
+    #[test]
+    fn note_cutoff_move_mate_killer_slot_always_replaces() {
+        let board = capture_and_quiet_position();
+        let first = find_move(&board, Square::E1, Square::D1);
+        let second = find_move(&board, Square::E1, Square::F1);
+        let mut search = Search::new(Vec::new());
+        search.note_cutoff_move(0, first, MATE - 1);
+        search.note_cutoff_move(0, second, MATE - 1);
+        assert_eq!(
+            search.mate_killers[0],
+            Some(second),
+            "one slot, always-replace: the most recent mate-scoring cutoff move wins, with no \
+             promote/shift policy the way the two-slot ordinary killer table has"
         );
     }
 
