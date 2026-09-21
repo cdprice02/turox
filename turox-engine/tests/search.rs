@@ -43,7 +43,7 @@ fn white_delivers_mate_in_one() {
     let mut search = Search::new(Vec::new());
     let result = search.search(&board, 1);
     assert_eq!(
-        result.best_move,
+        result.best_move(),
         Some(find_move(&board, Square::A1, Square::A8))
     );
     assert_eq!(result.score, MATE - 1);
@@ -57,7 +57,7 @@ fn black_delivers_mate_in_one() {
     let mut search = Search::new(Vec::new());
     let result = search.search(&board, 1);
     assert_eq!(
-        result.best_move,
+        result.best_move(),
         Some(find_move(&board, Square::A8, Square::A1))
     );
     assert_eq!(result.score, MATE - 1);
@@ -80,7 +80,7 @@ fn philidors_legacy_smothered_mate() {
     let mut search = Search::new(Vec::new());
     let result = search.search(&board, 3);
     assert_eq!(
-        result.best_move,
+        result.best_move(),
         Some(find_move(&board, Square::E6, Square::G8))
     );
     assert_eq!(result.score, MATE - 3);
@@ -94,7 +94,7 @@ fn checkmate_scores_exactly_negative_mate_for_white() {
     let board = Board::try_from_fen("4k3/8/8/8/8/8/5PPP/r5K1 w - - 0 1").expect("valid FEN");
     let mut search = Search::new(Vec::new());
     let result = search.search(&board, 3);
-    assert_eq!(result.best_move, None);
+    assert_eq!(result.best_move(), None);
     assert_eq!(result.score, -MATE);
 }
 
@@ -104,7 +104,7 @@ fn checkmate_scores_exactly_negative_mate_for_black() {
     let board = Board::try_from_fen("R5k1/5ppp/8/8/8/8/8/4K3 b - - 1 1").expect("valid FEN");
     let mut search = Search::new(Vec::new());
     let result = search.search(&board, 3);
-    assert_eq!(result.best_move, None);
+    assert_eq!(result.best_move(), None);
     assert_eq!(result.score, -MATE);
 }
 
@@ -116,7 +116,7 @@ fn stalemate_scores_exactly_zero() {
     let board = Board::try_from_fen("k7/2Q5/1K6/8/8/8/8/8 b - - 0 1").expect("valid FEN");
     let mut search = Search::new(Vec::new());
     let result = search.search(&board, 3);
-    assert_eq!(result.best_move, None);
+    assert_eq!(result.best_move(), None);
     assert_eq!(result.score, 0);
 }
 
@@ -144,7 +144,7 @@ fn fifty_move_draw_at_root_still_returns_a_legal_move() {
     let result = search.search(&board, 4);
     assert_eq!(result.score, 0);
     let best_move = result
-        .best_move
+        .best_move()
         .expect("dozens of legal moves exist; search must not report None");
     assert!(legal_moves(&board).as_slice().contains(&best_move));
 }
@@ -160,7 +160,7 @@ fn threefold_repetition_at_root_still_returns_a_legal_move() {
     let result = search.search(&board, 4);
     assert_eq!(result.score, 0);
     let best_move = result
-        .best_move
+        .best_move()
         .expect("dozens of legal moves exist; search must not report None");
     assert!(legal_moves(&board).as_slice().contains(&best_move));
 }
@@ -204,7 +204,7 @@ fn interrupted_first_iteration_still_returns_a_partial_bestmove() {
     let result = bounded.search(&board, 1);
 
     let best_move = result
-        .best_move
+        .best_move()
         .expect("depth 1 aborted, but some moves fully resolved before the abort hit");
     assert_eq!(
         result.depth, 0,
@@ -252,7 +252,7 @@ fn interrupted_iteration_keeps_the_last_completed_result() {
         "a tiny node budget must not reach the full requested depth"
     );
     assert!(
-        result.best_move.is_some(),
+        result.best_move().is_some(),
         "an earlier iteration completed before the budget tripped, so its move must survive"
     );
 }
@@ -325,7 +325,7 @@ fn movetime_deadline_returns_within_a_generous_tolerance() {
         result.nodes > 0,
         "some search work must have actually happened"
     );
-    assert!(result.best_move.is_some());
+    assert!(result.best_move().is_some());
 }
 
 /// A poisoned pawn: `Qd4xd5` looks like a free pawn one ply deep (White up
@@ -346,7 +346,7 @@ fn quiescence_avoids_a_poisoned_pawn() {
 
     let poisoned_capture = find_move(&board, Square::D4, Square::D5);
     assert_ne!(
-        result.best_move,
+        result.best_move(),
         Some(poisoned_capture),
         "quiescence must see past the horizon that Qxd5 loses the queen to cxd5, not just the immediate material gain"
     );
@@ -391,7 +391,8 @@ fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
         result.depth
     );
     assert_eq!(
-        result.best_move, baseline.best_move,
+        result.best_move(),
+        baseline.best_move(),
         "the soft limit must return depth {depth}'s own result unchanged, not some other move"
     );
 }
@@ -450,7 +451,7 @@ fn root_randomization_varies_the_chosen_move_across_seeds() {
             Search::new(Vec::new())
                 .with_root_randomization(seed)
                 .search(&board, 3)
-                .best_move
+                .best_move()
                 .map(Move::to_uci)
         })
         .collect();
@@ -476,8 +477,8 @@ fn root_randomization_is_reproducible_for_a_given_seed() {
     let first = run();
     let second = run();
     assert_eq!(
-        first.best_move.map(Move::to_uci),
-        second.best_move.map(Move::to_uci),
+        first.best_move().map(Move::to_uci),
+        second.best_move().map(Move::to_uci),
         "the same seed must produce the same move"
     );
     assert_eq!(
@@ -600,7 +601,7 @@ fn quiescence_finds_a_forced_non_capture_evasion() {
     let mut search = Search::new(Vec::new());
     let result = search.search(&root, 1);
 
-    assert_eq!(result.best_move, Some(rxa4));
+    assert_eq!(result.best_move(), Some(rxa4));
     assert_eq!(
         result.score,
         -expected_quiescence(&after_rxa4, 1, MAX_QUIESCENCE_DEPTH)
@@ -624,7 +625,7 @@ fn quiescence_finds_a_mate_inside_its_own_recursion() {
     let mut search = Search::new(Vec::new());
     let result = search.search(&root, 1);
 
-    let chosen_move = result.best_move.expect("Black has legal moves here");
+    let chosen_move = result.best_move().expect("Black has legal moves here");
     let after_chosen_move = root.make_move(chosen_move);
     assert_eq!(
         result.score,
@@ -741,5 +742,31 @@ fn search_with_cutoff_history_actually_updates_it() {
         "a depth-6 search of a position this open must record at least one quiet-move \
          cutoff or malus somewhere in the table, or it isn't being consulted from the \
          real move loop"
+    );
+}
+
+/// `philidors_legacy_smothered_mate` above only pins the first move; this
+/// pins the *whole* reported line, since that move alone doesn't prove the
+/// engine actually found the mate, only that it's willing to sacrifice the
+/// queen. `result.pv` should show all three plies of the real combination
+/// (`Qe6-g8+ Rxg8 Nf7#`), not just the first move with the rest silently
+/// dropped from `info pv`.
+#[test]
+fn philidors_legacy_reports_the_full_mating_line_not_just_the_first_move() {
+    let board = Board::try_from_fen("5r1k/6pp/4Q2N/8/8/8/5PPP/6K1 w - - 4 3").expect("valid FEN");
+    let mut search = Search::new(Vec::new());
+    let result = search.search(&board, 3);
+    let line: Vec<_> = result.pv.into_iter().flatten().collect();
+
+    let queen_sac = find_move(&board, Square::E6, Square::G8);
+    let after_sac = board.make_move(queen_sac);
+    let forced_recapture = find_move(&after_sac, Square::F8, Square::G8);
+    let after_recapture = after_sac.make_move(forced_recapture);
+    let knight_mate = find_move(&after_recapture, Square::H6, Square::F7);
+
+    assert_eq!(
+        line,
+        vec![queen_sac, forced_recapture, knight_mate],
+        "the reported pv must be the full three-ply mating combination, not just move 1"
     );
 }

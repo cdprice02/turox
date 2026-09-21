@@ -174,7 +174,7 @@ where
                     send(&mut writer, &info_response(&result));
                 }
                 send(&mut writer, &cutoff_info_string(&result));
-                send(&mut writer, &Response::BestMove(result.best_move));
+                send(&mut writer, &Response::BestMove(result.best_move()));
             }
             // Already handled by `read_commands` setting `active_stop`
             // directly: that's the only way to reach a search still
@@ -228,6 +228,11 @@ where
 /// `SearchResult`, shared between the per-depth streaming callback and the
 /// zero-iterations fallback in `Command::Go`'s handling above, so both
 /// paths format identically.
+///
+/// `pv` stops at the first `None` in `result.pv` (`map_while`, not
+/// `flatten`): a `None` there means the line wasn't tracked any deeper,
+/// per `SearchResult::pv`'s own doc, not that a move is merely missing from
+/// the middle of an otherwise-real line.
 fn info_response(result: &SearchResult) -> Response {
     Response::Info {
         depth: result.depth,
@@ -235,7 +240,7 @@ fn info_response(result: &SearchResult) -> Response {
         nodes: result.nodes,
         time: result.time,
         hashfull: result.hashfull,
-        pv: result.best_move.into_iter().collect(),
+        pv: result.pv.into_iter().map_while(|m| m).collect(),
     }
 }
 

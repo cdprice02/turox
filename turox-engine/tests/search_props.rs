@@ -150,8 +150,43 @@ proptest! {
     fn best_move_is_always_legal(board in any_board_with_legal_move(), depth in 1u8..=2) {
         let mut search = Search::new(Vec::new());
         let result = search.search(&board, depth);
-        let best_move = result.best_move.expect("board has a legal move, so search must return one");
+        let best_move = result.best_move().expect("board has a legal move, so search must return one");
         prop_assert!(legal_moves(&board).as_slice().contains(&best_move));
+    }
+
+    /// Every move in `result.pv` must be legal at the point it's reached: replaying
+    /// the line from `board` one move at a time, each move has to be in that
+    /// position's own `legal_moves`. This is what would catch the PV table
+    /// recording a move from an unrelated branch of the tree -- a legal-looking
+    /// move at the wrong position, not an illegal one, so nothing shorter than an
+    /// actual replay would notice.
+    ///
+    /// Filters out positions where the side *not* to move is already in check:
+    /// `any_board()` picks piece placement and side-to-move independently, so it
+    /// can (rarely) generate a board no real game reaches, where the side to
+    /// move can legally "capture" the opposing king. That's a pre-existing gap
+    /// in the generator, not a PV-table one, and unrelated to what this test is
+    /// checking; excluded here rather than widening `any_board_with_legal_move`
+    /// itself, which other tests may be relying on as-is.
+    #[test]
+    fn pv_line_is_always_playable_from_root(
+        board in any_board_with_legal_move().prop_filter(
+            "opponent must not already be in check: that position can't arise from real play",
+            |board| !in_check(board, board.side_to_move().flip()),
+        ),
+        depth in 1u8..=3,
+    ) {
+        let mut search = Search::new(Vec::new());
+        let result = search.search(&board, depth);
+        let mut position = board;
+        for m in result.pv.into_iter().map_while(|m| m) {
+            let legal = legal_moves(&position);
+            prop_assert!(
+                legal.as_slice().contains(&m),
+                "{m:?} is not legal in the position reached by the pv so far"
+            );
+            position = position.make_move(m);
+        }
     }
 
     #[test]
@@ -265,7 +300,7 @@ fn root_randomization_actually_varies_the_chosen_move() {
             Search::new(Vec::new())
                 .with_root_randomization(seed)
                 .search(&board, 3)
-                .best_move
+                .best_move()
                 .expect("start position has legal moves")
         })
         .collect();

@@ -59,6 +59,16 @@ pub const MAX_MATE_PLY: Score = 512;
 /// one table and not another, which is a difference nothing would report.
 const MAX_TRACKED_PLY: usize = 512;
 
+/// Ply bound for [`PV`] and `Search::pv`, deliberately not [`MAX_TRACKED_PLY`]: that
+/// constant's own justification is defensive slack for pathological recursion depth
+/// (quiescence's uncapped in-check evasion chases), which has nothing to do with how
+/// deep a *reported* principal variation can realistically go. A PV line's real ceiling
+/// is `search_with_info`'s own iterative-deepening bound (`uci::session`'s
+/// `DEFAULT_MAX_DEPTH` is `64`), so bounding it there instead saves the same factor of
+/// `MAX_TRACKED_PLY / MAX_PV_PLY` squared on `Search::pv`, since that one is triangular
+/// (`[PV; MAX_PV_PLY]`, one row per ply) rather than flat.
+const MAX_PV_PLY: usize = 64;
+
 /// Killer slots per ply: the single place that number is spelled out, so
 /// every array shaped by it (`Search::killers`, `move_priority`'s and
 /// `order_moves`'s `killers` parameter, `record_killer`'s slots) resizes
@@ -163,6 +173,12 @@ impl CutoffStats {
     }
 }
 
+/// A principal variation, one move per ply starting from wherever it was read: `None`
+/// past however deep the line actually runs, the same "untouched slot" convention
+/// `Search`'s other per-ply tables carry. Sized to [`MAX_PV_PLY`], not
+/// [`MAX_TRACKED_PLY`]; see that constant's own doc for why the two bounds differ.
+pub type PV = [Option<Move>; MAX_PV_PLY];
+
 /// One completed call to [`Search::search`]: the best move and score found, and the depth
 /// actually reached.
 ///
@@ -175,10 +191,8 @@ impl CutoffStats {
 /// earlier completed iteration to fall back on instead.
 #[derive(Debug, Clone, Copy, Eq)]
 pub struct SearchResult {
-    /// `None` only when the position handed to `search` has no legal moves at all
-    /// (checkmate or stalemate); every other case, including an aborted first
-    /// iteration, still has a real move to report.
-    pub best_move: Option<Move>,
+    /// The principal variation searched
+    pub pv: PV,
     /// Side-to-move-relative, same convention as [`evaluate`].
     pub score: Score,
     /// The depth actually completed; see the struct doc for when this is
@@ -209,6 +223,16 @@ pub struct SearchResult {
     pub quiescence_cutoffs: CutoffStats,
 }
 
+impl SearchResult {
+    /// `None` only when the position handed to `search` has no legal moves at all
+    /// (checkmate or stalemate); every other case, including an aborted first
+    /// iteration, still has a real move to report.
+    #[must_use]
+    pub const fn best_move(&self) -> Option<Move> {
+        self.pv[0]
+    }
+}
+
 /// Compares every field except `time`, mirroring how `Board` excludes its
 /// Zobrist hash: elapsed wall-clock is an observation about one particular
 /// run, not part of what a search *found*, so two runs that reached the same
@@ -220,7 +244,7 @@ pub struct SearchResult {
 /// to dodge the problem would give up the check it exists for.
 impl PartialEq for SearchResult {
     fn eq(&self, other: &Self) -> bool {
-        self.best_move == other.best_move
+        self.pv == other.pv
             && self.score == other.score
             && self.depth == other.depth
             && self.nodes == other.nodes
@@ -235,45 +259,44 @@ impl PartialEq for SearchResult {
 enum RootOutcome {
     /// The move loop finished every move at this depth. `best_move` is `None` only for
     /// the genuine terminal case: no legal moves at all.
-    Completed(Score, Option<Move>),
+    Completed(Score, PV),
     /// The abort hit before every move at this depth could be tried. `best_so_far` is
     /// the best move and score among moves whose subtree had already fully resolved
     /// before the interruption, if any had; `None` when the abort landed before the
     /// move loop could report anything (the top-of-function check, or the depth-0
     /// quiescence-only path, which has no per-move loop to have made progress in).
+    /// If `Some`, the `[Option<Move>; ...]` should have at least one move.
     Aborted {
         /// See this variant's own doc above.
-        best_so_far: Option<(Score, Move)>,
+        best_so_far: Option<(Score, PV)>,
     },
-}
-
-/// Which cutoff histogram an [`Search::alpha_beta_loop`] call reports to.
-///
-/// An enum rather than a `&mut CutoffStats` parameter because the loop already
-/// holds `&mut self`, and handing it a second mutable borrow into the same
-/// struct would not borrow-check.
-#[derive(Clone, Copy)]
-enum CutoffSink {
-    /// `search_root` and interior `negamax`, which share one histogram.
-    Negamax,
-    /// Both of `quiescence`'s loops, evasions and captures alike.
-    Quiescence,
 }
 
 /// The non-move inputs to one [`Search::alpha_beta_loop`] call.
 ///
-/// A struct rather than five more parameters: the loop already takes a closure
-/// and a move list, and the pruning techniques queued behind this seam (late
-/// move reductions, futility margins, a principal-variation flag) each want to
-/// add another knob here. Growing a named struct is the difference between
-/// that staying readable and the signature becoming positional guesswork.
+/// A struct rather than four more parameters: the loop already takes a
+/// closure and a move list, and the pruning techniques queued behind this
+/// seam (late move reductions, futility margins) each want to add another
+/// knob here. Growing a named struct is the difference between that staying
+/// readable and the signature becoming positional guesswork.
+///
+/// Negamax-only now: quiescence's two loops stopped sharing this one once
+/// PVS's windowing and PV bookkeeping became something only `negamax` and
+/// `search_root` need (see [`Search::quiescence_loop`] for quiescence's own,
+/// much simpler copy). `initial_max` and the `CutoffSink` enum this struct
+/// used to carry both existed only to keep that sharing working: `initial_max`
+/// was quiescence's capture loop threading `stand_pat` in as its floor, and
+/// `CutoffSink` was choosing which histogram to record to. Neither has a
+/// reason to exist now that there is exactly one caller shape and exactly one
+/// histogram (`self.negamax_cutoffs`).
 ///
 /// `Copy` because every field is: it is passed by value so the loop can
 /// destructure and shadow `alpha` without the caller losing its own copy,
 /// which is exactly what `negamax` relies on to keep `original_alpha`.
 #[derive(Clone, Copy)]
 struct LoopCtx {
-    /// Distance from the root, for the killer table and the mate formula.
+    /// Distance from the root, for the killer table, the mate formula, and
+    /// indexing [`Search::pv`]'s row for this node.
     ply: u8,
     /// Lower bound on entry. The loop raises its own copy as moves improve on
     /// it; the caller's value is untouched, which is what lets `negamax` keep
@@ -281,11 +304,16 @@ struct LoopCtx {
     alpha: Score,
     /// Upper bound. Never modified: a cutoff is `alpha >= beta`.
     beta: Score,
-    /// The score to beat. `Score::MIN` everywhere except quiescence's capture
-    /// loop, where standing pat is already a floor no capture has to beat.
-    initial_max: Score,
-    /// Which histogram this loop's cutoffs belong to.
-    sink: CutoffSink,
+    /// Whether this node was reached via a genuinely wide window from its
+    /// parent (the root always is; a child is only if its parent was *and*
+    /// it's either the parent's first move or the target of a re-search).
+    /// Gates two things: whether move 0's own child inherits PV status
+    /// (`is_pv` propagates unchanged to move 0; every later move's initial
+    /// probe is `false`, becoming `true` only for that move's own re-search),
+    /// and whether an improvement here is worth recording into `self.pv` at
+    /// all -- a cut node's local best move is bookkeeping for alpha-beta, not
+    /// part of the real principal variation.
+    is_pv: bool,
 }
 
 /// What one [`Search::alpha_beta_loop`] call produced.
@@ -383,6 +411,25 @@ pub struct Search<'a> {
     /// table. Attribution has to follow the ordering, or it credits a technique
     /// that did not put the move first.
     hash_moves: [Option<Move>; MAX_TRACKED_PLY],
+    /// The triangular PV table.
+    pv: [PV; MAX_PV_PLY],
+    /// The previous iterative-deepening iteration's completed best line, one move
+    /// per ply, frozen once that iteration finishes and consulted (never mutated)
+    /// by [`Search::move_priority`] for the whole of the next. `None` past however
+    /// deep that line actually ran, the same convention `hash_moves`/`killers`
+    /// carry for an untouched ply, and unconditionally `None` at ply 0 of the very
+    /// first iteration, when there is no previous iteration yet.
+    ///
+    /// Deliberately flat, not the triangular structure PVS's own in-progress PV
+    /// tracking needs: once an iteration completes, its whole best line collapses
+    /// to exactly one move per ply, so this only ever needs to answer "what was
+    /// the move at this ply," never "what is the rest of the line from here."
+    /// Trusted ahead of `hash_moves` for that ply (see [`MovePriority`]'s own
+    /// doc): a hash move can be a different, more recently searched, position's
+    /// entry if the table's replacement scheme has since overwritten this one, but
+    /// this line is this search's own, uncorrupted record of what actually played
+    /// out.
+    previous_pv_line: [Option<Move>; MAX_TRACKED_PLY],
     /// Quiet-move ordering scores independent of any one search tree, unlike `killers`:
     /// it accumulates over many more nodes than two killer slots ever see, so it is
     /// threaded in from `uci::session::run` rather than owned here, the same way `tt` is.
@@ -422,6 +469,8 @@ impl<'a> Search<'a> {
             tt: None,
             killers: [[None; KILLER_SLOTS]; MAX_TRACKED_PLY],
             hash_moves: [None; MAX_TRACKED_PLY],
+            pv: [[None; MAX_PV_PLY]; MAX_PV_PLY],
+            previous_pv_line: [None; MAX_TRACKED_PLY],
             cutoff_history: None,
             root_rng: None,
             negamax_cutoffs: CutoffStats::default(),
@@ -574,6 +623,15 @@ impl<'a> Search<'a> {
         self.hash_moves[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
+    /// This ply's move in the previous iteration's completed best line; see
+    /// [`Self::previous_pv_line`]. No setter alongside this one the way
+    /// `hash_move` has `set_hash_move`: populating this is PVS's own job, done
+    /// once per completed iteration from whatever in-progress structure it
+    /// builds the line in, not once per node the way a hash move is recorded.
+    fn previous_pv_move(&self, ply: u8) -> Option<Move> {
+        self.previous_pv_line[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
+    }
+
     /// Called whenever a move causes a beta cutoff: updates the killer table
     /// and reports which ordering technique put `m` early enough to cut off.
     ///
@@ -716,7 +774,7 @@ impl<'a> Search<'a> {
     ) -> SearchResult {
         let started = Instant::now();
         let mut result = SearchResult {
-            best_move: None,
+            pv: [None; MAX_PV_PLY],
             score: 0,
             depth: 0,
             nodes: 0,
@@ -757,9 +815,9 @@ impl<'a> Search<'a> {
 
             let iteration_started = self.deadline.is_some().then(Instant::now);
             match self.search_root(board, depth) {
-                RootOutcome::Completed(score, best_move) => {
+                RootOutcome::Completed(score, pv) => {
                     result = SearchResult {
-                        best_move,
+                        pv,
                         score,
                         depth,
                         nodes: self.nodes(),
@@ -771,14 +829,14 @@ impl<'a> Search<'a> {
                     on_iteration_complete(&result);
                 }
                 RootOutcome::Aborted { best_so_far } => {
-                    // Only depth 1 aborting can reach here with `result.best_move`
-                    // still `None`: every later depth has a completed iteration
+                    // Only depth 1 aborting can reach here with `result.pv`
+                    // still full of `None`: every later depth has a completed iteration
                     // already sitting in `result` to fall back on instead, per
                     // this method's own doc.
-                    if result.best_move.is_none() {
-                        if let Some((score, best_move)) = best_so_far {
+                    if result.best_move().is_none() {
+                        if let Some((score, pv)) = best_so_far {
                             result = SearchResult {
-                                best_move: Some(best_move),
+                                pv,
                                 score,
                                 depth: 0,
                                 nodes: self.nodes(),
@@ -801,49 +859,52 @@ impl<'a> Search<'a> {
         result
     }
 
-    /// One ply of root move loop: like `negamax`, but remembers *which*
-    /// move produced the best score, not just the score, so it's a
-    /// separate small loop rather than a `ply == 0` special case buried
-    /// inside `negamax`.
-    ///
-    /// The move loop itself is shared with `negamax` and both quiescence
-    /// paths (see [`Search::alpha_beta_loop`]); what remains here is the
-    /// handful of things the root genuinely does differently, which this doc
-    /// previously undercounted as "exactly one place". There are four. It
-    /// scores mate as `-MATE` rather than `Score::from(ply) - MATE`, since
-    /// `ply` is zero here by definition. It neither probes nor stores the
-    /// transposition table. It shuffles the move list before ordering, when
-    /// randomization is on. And when the position is
-    /// already a draw, an interior node can just return `0` and stop (see
-    /// `negamax`'s own doc), but the root still needs a real move to hand
-    /// back to UCI so play can continue, so it generates and orders the
-    /// move list here instead. `Completed(0, None)` stays reserved for the
-    /// true terminal case below: no legal moves at all.
-    ///
-    /// Returns [`RootOutcome::Aborted`] if the search was interrupted
-    /// before every move at this depth could be tried. Moves already tried
-    /// only ever update `max`/`best_move` after their subtree search
-    /// returns a real score, never from a partially-searched one, so
-    /// whatever `max`/`best_move` hold at the moment of abort are still
-    /// trustworthy minimax values; only the one move that was mid-flight
-    /// The alpha-beta move loop, shared by all four places that run one:
-    /// the root, interior `negamax`, and quiescence's evasion and capture
-    /// paths. Before this existed each kept its own copy of the same twenty
-    /// lines, and they had already drifted apart in ways their doc comments
-    /// denied.
+    /// The alpha-beta move loop shared by `negamax` and `search_root` (see
+    /// `search_root`'s own doc for the handful of things it does differently
+    /// around this call, not within it). Quiescence's two loops used to share
+    /// this too; they now have their own, much simpler
+    /// [`Search::quiescence_loop`], because PVS's windowing and PV bookkeeping
+    /// are `negamax`/`search_root`-only (see `LoopCtx`'s own doc for why the
+    /// split), and forcing both shapes through one generic function was
+    /// costing more in accreted, per-caller branching than the sharing was
+    /// buying.
     ///
     /// `search_child` receives `&mut Self` rather than capturing it, which is
-    /// what lets a closure own the parts that genuinely differ (which
-    /// function to recurse into, and whether the repetition stack is
-    /// maintained across it) while the loop keeps the parts that must not:
-    /// fail-soft score comparison, alpha raising, the cutoff test, and
-    /// recording the cutoff to the killer table and the histogram. The
-    /// window is passed in already negated, so the caller never repeats
-    /// negamax's sign convention either.
+    /// what lets a closure own the parts that genuinely differ (which ply the
+    /// recursive call is at, and whether the repetition stack is maintained
+    /// across it) while the loop keeps the parts that must not: fail-soft
+    /// score comparison, alpha raising, the cutoff test, and recording the
+    /// cutoff to the killer table and the histogram. The window is passed in
+    /// already negated, so the caller never repeats negamax's sign convention
+    /// either. The closure's `bool` parameter is `is_pv` for *that specific
+    /// call*: move 0 gets `ctx.is_pv` itself (a PV node's first move stays on
+    /// the principal variation; a cut node's first move was never on it to
+    /// begin with), every other move's initial probe gets `false` (a null
+    /// window can only ever prove a bound, never hand back an exact score
+    /// worth recording), and a re-search (see below) gets `true` regardless of
+    /// `ctx.is_pv`, since a move that just proved itself better than
+    /// everything else found so far is a live candidate for the real line.
+    ///
+    /// The null-window probe and its possible re-search: for every move after
+    /// the first, `search_child` first runs with a one-point window just
+    /// above the current `alpha` (`-alpha - 1, -alpha`). That can only tell
+    /// you "at most alpha" or "better than alpha, exact value unknown" -- so
+    /// if, once negated back into this node's own frame, the probe's score
+    /// lands strictly between `alpha` and `beta`, it's re-run with the real
+    /// window to get the precise value. A probe failing high past `beta` is
+    /// already exact (fail-soft returns the real score found, not a clamped
+    /// bound) and would have caused the same cutoff on a full-window search
+    /// too, so it's trusted outright *unless this is a PV node*, where it's
+    /// re-searched anyway purely so `self.pv` gets a real line for this move
+    /// -- see the match arm's own comment for why that's free here. Losing
+    /// the exact-vs-ambiguous distinction -- treating "probe didn't need a
+    /// re-search" as an abort, or vice versa -- is the easy way to get this
+    /// backwards; `None` from `search_child` means only one thing anywhere in
+    /// this function: the search was interrupted.
     ///
     /// Generic over `F` rather than taking `&mut dyn FnMut`: this is the
     /// innermost loop of the entire engine, so it monomorphizes per call
-    /// site and inlines exactly as the hand-written copies did.
+    /// site and inlines exactly as hand-written copies would.
     fn alpha_beta_loop<F>(
         &mut self,
         moves: &MoveList,
@@ -851,16 +912,114 @@ impl<'a> Search<'a> {
         mut search_child: F,
     ) -> LoopOutcome
     where
-        F: FnMut(&mut Self, Move, Score, Score) -> Option<Score>,
+        F: FnMut(&mut Self, Move, Score, Score, bool) -> Option<Score>,
     {
         let LoopCtx {
             ply,
             mut alpha,
             beta,
-            initial_max,
-            sink,
+            is_pv: node_is_pv,
         } = ctx;
 
+        let mut max = Score::MIN;
+        let mut best_move = None;
+        let mut cutoff_index = None;
+
+        for (i, &m) in moves.as_slice().iter().enumerate() {
+            let mut is_pv = node_is_pv;
+            let child_result = if i == 0 {
+                search_child(self, m, -beta, -alpha, is_pv)
+            } else {
+                is_pv = false;
+                match search_child(self, m, -alpha - 1, -alpha, is_pv) {
+                    None => None,
+                    // Re-search whenever the probe beats alpha and either the
+                    // score is still ambiguous (could be anywhere above alpha,
+                    // needs the real window to pin down) or this is a PV node,
+                    // where a probe failing high past beta is *not* ambiguous
+                    // (fail-soft already returned its real, trustworthy score,
+                    // which is why the non-PV case below doesn't bother) but
+                    // still isn't PV-worthy without this: a null-window probe
+                    // never sets `is_pv: true`, so without a PV-node re-search
+                    // here, this move's own line in `self.pv` would never get
+                    // built, and this exact move is always the one about to
+                    // become `max` and get reported. Free at a PV node: this
+                    // move already forces an immediate cutoff-and-break right
+                    // after (`alpha` rises to at least `beta`), so there is no
+                    // later sibling left in this loop that a stale re-search
+                    // could ever get overwritten by.
+                    Some(probe) if -probe > alpha && (-probe < beta || node_is_pv) => {
+                        is_pv = true;
+                        search_child(self, m, -beta, -alpha, is_pv)
+                    }
+                    probe => probe,
+                }
+            };
+            let Some(score) = child_result else {
+                return LoopOutcome {
+                    max,
+                    best_move,
+                    aborted: true,
+                    cutoff_index,
+                };
+            };
+
+            let score = -score;
+            if score > max {
+                max = score;
+                best_move = Some(m);
+                if is_pv {
+                    let row = usize::from(ply).min(MAX_PV_PLY - 1);
+                    // would ideally be `self.pv[row] = self.pv[row+1]; self.pv[row].shift_right::<1>([Some(m)]);` but that is behind an unstable feature
+                    if row != MAX_PV_PLY - 1 {
+                        for i in 0..MAX_PV_PLY - 1 {
+                            self.pv[row][i + 1] = self.pv[row + 1][i];
+                        }
+                    }
+                    self.pv[row][0] = Some(m);
+                }
+            }
+
+            if max > alpha {
+                alpha = max;
+            }
+            if alpha >= beta {
+                let cause = self.note_cutoff_move(ply, m);
+                self.negamax_cutoffs.record(i, cause);
+                cutoff_index = Some(i);
+                break;
+            }
+        }
+
+        LoopOutcome {
+            max,
+            best_move,
+            aborted: false,
+            cutoff_index,
+        }
+    }
+
+    /// Quiescence's own move loop: the simple half of what used to be one
+    /// generic [`Search::alpha_beta_loop`] shared with `negamax`/`search_root`
+    /// (see that method's own doc, and `LoopCtx`'s, for why they split).
+    /// Every move gets the caller's own window once, full stop -- no PVS
+    /// windowing, no re-search, no PV bookkeeping, because quiescence nodes
+    /// never carry `is_pv` at all. `initial_max` is `Score::MIN` for the
+    /// evasion loop and `stand_pat` for the capture loop, the one place these
+    /// two calls still genuinely differ.
+    fn quiescence_loop<F>(
+        &mut self,
+        moves: &MoveList,
+        ply: u8,
+        alpha: Score,
+        beta: Score,
+        initial_max: Score,
+        mut search_child: F,
+    ) -> LoopOutcome
+    where
+        F: FnMut(&mut Self, Move, Score, Score) -> Option<Score>,
+    {
+        let mut alpha = alpha;
         let mut max = initial_max;
         let mut best_move = None;
         let mut cutoff_index = None;
@@ -886,10 +1045,7 @@ impl<'a> Search<'a> {
             }
             if alpha >= beta {
                 let cause = self.note_cutoff_move(ply, m);
-                match sink {
-                    CutoffSink::Negamax => self.negamax_cutoffs.record(i, cause),
-                    CutoffSink::Quiescence => self.quiescence_cutoffs.record(i, cause),
-                }
+                self.quiescence_cutoffs.record(i, cause);
                 cutoff_index = Some(i);
                 break;
             }
@@ -903,8 +1059,29 @@ impl<'a> Search<'a> {
         }
     }
 
-    /// when the abort hit is genuinely unknown, hence `best_so_far` reports
-    /// the finished moves' result rather than discarding it wholesale.
+    /// One ply of root move loop: like `negamax`, but remembers *which*
+    /// move produced the best score, not just the score, so it's a
+    /// separate small loop rather than a `ply == 0` special case buried
+    /// inside `negamax`. The move loop itself is shared with `negamax` (see
+    /// [`Search::alpha_beta_loop`]); what remains here is the handful of
+    /// things the root genuinely does differently. It's always a PV node
+    /// (there is no ancestor to have narrowed its window). It scores mate as
+    /// `-MATE` rather than `Score::from(ply) - MATE`, since `ply` is zero
+    /// here by definition. It neither probes nor stores the transposition
+    /// table. It shuffles the move list before ordering, when randomization
+    /// is on. And when the position is already a draw, an interior node can
+    /// just return `0` and stop (see `negamax`'s own doc), but the root still
+    /// needs a real move to hand back to UCI so play can continue, so it
+    /// generates and orders the move list here instead.
+    ///
+    /// Returns [`RootOutcome::Aborted`] if the search was interrupted before
+    /// every move at this depth could be tried. Moves already tried only ever
+    /// update `max`/`best_move`/`self.pv[0]` after their subtree search
+    /// returns a real score, never from a partially-searched one, so
+    /// whatever they hold at the moment of abort are still trustworthy
+    /// values; only the one move that was mid-flight is discarded, which is
+    /// why `best_so_far` reports the finished moves' result rather than
+    /// discarding it wholesale.
     fn search_root(&mut self, board: &Board, depth: u8) -> RootOutcome {
         self.nodes += 1;
         if self.should_abort() {
@@ -916,27 +1093,24 @@ impl<'a> Search<'a> {
         // hash move whichever way it exits.
         self.set_hash_move(0, None);
 
+        let mut pv: PV = [None; MAX_PV_PLY];
+
         if is_draw(board, &self.history, board.hash()) {
             let mut drawn_moves = legal_moves(board);
             if drawn_moves.is_empty() {
-                return RootOutcome::Completed(0, None);
+                return RootOutcome::Completed(0, pv);
             }
-            order_moves(
-                board,
-                &mut drawn_moves,
-                self.hash_move(0),
-                self.killer_slots(0),
-                self.cutoff_history.as_deref(),
-            );
-            return RootOutcome::Completed(0, Some(drawn_moves.as_slice()[0]));
+            self.order_moves(board, &mut drawn_moves, 0);
+            pv[0] = Some(drawn_moves.as_slice()[0]);
+            return RootOutcome::Completed(0, pv);
         }
 
         let mut moves = legal_moves(board);
         if moves.is_empty() {
             return if in_check(board, board.side_to_move()) {
-                RootOutcome::Completed(-MATE, None)
+                RootOutcome::Completed(-MATE, pv)
             } else {
-                RootOutcome::Completed(0, None)
+                RootOutcome::Completed(0, pv)
             };
         }
 
@@ -951,7 +1125,7 @@ impl<'a> Search<'a> {
             return self
                 .quiescence(board, alpha, beta, 0, MAX_QUIESCENCE_DEPTH, Some(moves))
                 .map_or(RootOutcome::Aborted { best_so_far: None }, |score| {
-                    RootOutcome::Completed(score, None)
+                    RootOutcome::Completed(score, pv)
                 });
         }
 
@@ -960,13 +1134,7 @@ impl<'a> Search<'a> {
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
-        order_moves(
-            board,
-            &mut moves,
-            self.hash_move(0),
-            self.killer_slots(0),
-            self.cutoff_history.as_deref(),
-        );
+        self.order_moves(board, &mut moves, 0);
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -974,24 +1142,23 @@ impl<'a> Search<'a> {
                 ply: 0,
                 alpha,
                 beta,
-                initial_max: Score::MIN,
-                sink: CutoffSink::Negamax,
+                is_pv: true,
             },
-            |s, m, a, b| {
+            |s, m, a, b, is_pv| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let score = s.negamax(&child, depth - 1, 1, a, b);
+                let score = s.negamax(&child, depth - 1, 1, a, b, is_pv);
                 s.history.pop();
                 score
             },
         );
 
         if outcome.aborted {
-            let best_so_far = outcome.best_move.map(|m| (outcome.max, m));
+            let best_so_far = outcome.best_move.map(|_| (outcome.max, self.pv[0]));
             return RootOutcome::Aborted { best_so_far };
         }
         self.update_cutoff_history(board, &moves, outcome.cutoff_index, depth);
-        RootOutcome::Completed(outcome.max, outcome.best_move)
+        RootOutcome::Completed(outcome.max, self.pv[0])
     }
 
     /// Fail-soft negamax with alpha-beta pruning: on a beta cutoff, returns
@@ -1029,6 +1196,11 @@ impl<'a> Search<'a> {
     /// kept around past the cutoff check (it's `Copy`, so this costs nothing): even when it
     /// doesn't license an outright cutoff, its stored move is still worth trying first in
     /// this node's own move loop, so it survives long enough to feed `order_moves`.
+    ///
+    /// `is_pv`: whether this node was reached via a genuinely wide window
+    /// from its parent, not a null-window probe; see [`LoopCtx`]'s own doc
+    /// for the full propagation rule. Threaded straight through to
+    /// [`Self::alpha_beta_loop`]'s `ctx.is_pv`.
     #[expect(
         clippy::expect_used,
         reason = "the move list's emptiness is checked and returned on well above this point, so the loop always records a best move before the store"
@@ -1040,10 +1212,27 @@ impl<'a> Search<'a> {
         ply: u8,
         alpha: Score,
         beta: Score,
+        is_pv: bool,
     ) -> Option<Score> {
         self.nodes += 1;
         if self.should_abort() {
             return None;
+        }
+
+        // Every return below this point that doesn't reach the move loop --
+        // the draw check, a TT cutoff, checkmate/stalemate, and the depth-0
+        // handoff to quiescence -- leaves without ever writing `self.pv[ply]`.
+        // Clearing it here first (only when this call is actually on the PV,
+        // since nothing else ever reads or writes `self.pv`) means every one
+        // of those paths correctly reports "no continuation from here"
+        // instead of whatever an earlier, unrelated sibling happened to leave
+        // in that same shared slot; the move loop further down overwrites it
+        // with the real line if it runs. Without this, a PV node whose first
+        // move leads to (say) a forced mate one ply later can copy up a
+        // completely unrelated earlier sibling's leftover continuation,
+        // reporting an illegal move as part of the principal variation.
+        if is_pv {
+            self.pv[usize::from(ply).min(MAX_PV_PLY - 1)] = [None; MAX_PV_PLY];
         }
 
         if is_draw(board, &self.history, board.hash()) {
@@ -1075,13 +1264,7 @@ impl<'a> Search<'a> {
 
         let original_alpha = alpha;
         self.set_hash_move(ply, tt_move);
-        order_moves(
-            board,
-            &mut moves,
-            self.hash_move(ply),
-            self.killer_slots(ply),
-            self.cutoff_history.as_deref(),
-        );
+        self.order_moves(board, &mut moves, ply);
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -1089,13 +1272,12 @@ impl<'a> Search<'a> {
                 ply,
                 alpha,
                 beta,
-                initial_max: Score::MIN,
-                sink: CutoffSink::Negamax,
+                is_pv,
             },
-            |s, m, a, b| {
+            |s, m, a, b, is_pv| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let score = s.negamax(&child, depth - 1, ply + 1, a, b);
+                let score = s.negamax(&child, depth - 1, ply + 1, a, b, is_pv);
                 s.history.pop();
                 score
             },
@@ -1188,28 +1370,13 @@ impl<'a> Search<'a> {
                 return Some(Score::from(ply) - MATE);
             }
 
-            order_moves(
-                board,
-                &mut evasions,
-                self.hash_move(ply),
-                self.killer_slots(ply),
-                self.cutoff_history.as_deref(),
-            );
+            self.order_moves(board, &mut evasions, ply);
 
-            let outcome = self.alpha_beta_loop(
-                &evasions,
-                LoopCtx {
-                    ply,
-                    alpha,
-                    beta,
-                    initial_max: Score::MIN,
-                    sink: CutoffSink::Quiescence,
-                },
-                |s, m, a, b| {
+            let outcome =
+                self.quiescence_loop(&evasions, ply, alpha, beta, Score::MIN, |s, m, a, b| {
                     let child = board.make_move(m);
                     s.quiescence(&child, a, b, ply + 1, qdepth, None)
-                },
-            );
+                });
 
             if outcome.aborted {
                 return None;
@@ -1238,28 +1405,12 @@ impl<'a> Search<'a> {
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
         qmoves.retain(|m| m.flags().is_capture());
 
-        order_moves(
-            board,
-            &mut qmoves,
-            self.hash_move(ply),
-            self.killer_slots(ply),
-            self.cutoff_history.as_deref(),
-        );
+        self.order_moves(board, &mut qmoves, ply);
 
-        let outcome = self.alpha_beta_loop(
-            &qmoves,
-            LoopCtx {
-                ply,
-                alpha,
-                beta,
-                initial_max: stand_pat,
-                sink: CutoffSink::Quiescence,
-            },
-            |s, m, a, b| {
-                let child = board.make_move(m);
-                s.quiescence(&child, a, b, ply + 1, qdepth - 1, None)
-            },
-        );
+        let outcome = self.quiescence_loop(&qmoves, ply, alpha, beta, stand_pat, |s, m, a, b| {
+            let child = board.make_move(m);
+            s.quiescence(&child, a, b, ply + 1, qdepth - 1, None)
+        });
 
         if outcome.aborted {
             return None;
@@ -1288,169 +1439,176 @@ fn record_killer(mut slots: [Option<Move>; KILLER_SLOTS], m: Move) -> [Option<Mo
     slots
 }
 
-/// Orders `moves` in place, most promising first, so alpha-beta prunes more
-/// of the tree: MVV-LVA (most valuable victim, least valuable attacker)
-/// among captures, promotions interleaved onto that same material scale,
-/// ahead of quiet moves, since a capture or promotion that wins the most
-/// material is most likely to hold up and cause a beta cutoff early.
-/// `tt_move`, when `Some`, ranks ahead of all of that; see [`move_priority`].
-/// `killers`, the calling ply's two killer slots, ranks below captures but
-/// above the remaining quiet moves; see [`move_priority`]. `cutoff_history`,
-/// when `Some`, breaks ties among the remaining quiets by their stored score;
-/// `None` orders them exactly as if it didn't exist (every untouched quiet
-/// ties at `0`), the same convention `tt_move: None`/empty `killers` carry.
-///
-/// En passant's victim isn't actually on `m.to()`; scored as `0` (an
-/// equal-value trade) rather than looking up the true victim square, an
-/// accepted ordering approximation since it only affects search order, not
-/// legality or correctness.
-///
-/// Uses [`MoveList::as_mut_slice`] to sort in place without a second
-/// allocation.
-fn order_moves(
-    board: &Board,
-    moves: &mut MoveList,
-    tt_move: Option<Move>,
-    killers: [Option<Move>; KILLER_SLOTS],
-    cutoff_history: Option<&CutoffHistory>,
-) {
-    moves.sort_unstable_by_key(|&m| move_priority(board, m, tt_move, killers, cutoff_history));
+impl Search<'_> {
+    /// Orders `moves` in place, most promising first, so alpha-beta prunes more
+    /// of the tree: MVV-LVA (most valuable victim, least valuable attacker)
+    /// among captures, promotions interleaved onto that same material scale,
+    /// ahead of quiet moves, since a capture or promotion that wins the most
+    /// material is most likely to hold up and cause a beta cutoff early.
+    /// `ply`'s previous-iteration PV move and hash move rank ahead of all of
+    /// that; see [`Self::move_priority`]. `ply`'s two killer slots rank below
+    /// captures but above the remaining quiet moves; see [`Self::move_priority`].
+    /// `self.cutoff_history`, when `Some`, breaks ties among the remaining
+    /// quiets by their stored score; `None` orders them exactly as if it
+    /// didn't exist (every untouched quiet ties at `0`).
+    ///
+    /// En passant's victim isn't actually on `m.to()`; scored as `0` (an
+    /// equal-value trade) rather than looking up the true victim square, an
+    /// accepted ordering approximation since it only affects search order, not
+    /// legality or correctness.
+    ///
+    /// Uses [`MoveList::as_mut_slice`] to sort in place without a second
+    /// allocation.
+    fn order_moves(&self, board: &Board, moves: &mut MoveList, ply: u8) {
+        moves.sort_unstable_by_key(|&m| Reverse(self.move_priority(board, m, ply)));
+    }
+
+    /// Captures and promotions interleave on one material-gain scale rather than
+    /// promotions getting a fixed rank: a capturing promotion (e.g. a pawn
+    /// taking a rook while queening) is worth strictly more than the same
+    /// promotion alone, by the captured piece's value, and only a shared scale
+    /// can express that. `PIECE_VALUES` gives every promotion piece strictly
+    /// more value than a pawn (the smallest gain, to a knight, is still 220), so
+    /// `gain` can never be zero or negative for a promotion: it always resolves
+    /// to `WinningCapture`, never `EqualCapture` or `LosingCapture`, and because
+    /// that check happens before any killer-table lookup, a promotion can never
+    /// fall through to `Quiet`, `Killer`, or `MateKiller` either, with or
+    /// without a capture attached.
+    ///
+    /// Returns `(MovePriority, Score)`, both halves naturally bigger-is-better and
+    /// neither wrapped in `Reverse`: `MovePriority` is declared worst-first so its
+    /// derived `Ord` already agrees with `Score`'s own ordering, and
+    /// [`Self::order_moves`] applies the one flip `sort_unstable_by_key`'s
+    /// ascending sort needs at its own call site, not here. Tiers with no real
+    /// number to break ties by (`PrincipalVariation`, `Hash`, `EqualCapture`,
+    /// `Killer`) carry a placeholder `0` that never actually competes against
+    /// anything: every move landing in one of those tiers already ties on the
+    /// first element of the tuple by definition of "same tier."
+    ///
+    /// `ply` scopes every per-node lookup this makes (`self.previous_pv_move`,
+    /// `self.hash_move`, `self.killer_slots`); `self.cutoff_history` isn't
+    /// ply-scoped, the same way it isn't ply-scoped on `self` itself.
+    #[expect(
+        clippy::expect_used,
+        reason = "the flags decide which arm runs, so a promotion arm always has a promotion piece and a capture arm always has a victim; the from-square always holds the moving piece"
+    )]
+    fn move_priority(&self, board: &Board, m: Move, ply: u8) -> (MovePriority, Score) {
+        if Some(m) == self.previous_pv_move(ply) {
+            return (MovePriority::PrincipalVariation, 0);
+        }
+        if Some(m) == self.hash_move(ply) {
+            return (MovePriority::Hash, 0);
+        }
+
+        let flags = m.flags();
+        let promotion_delta = || {
+            PIECE_VALUES[flags
+                .promotion_piece()
+                .expect("move is a promotion")
+                .index()]
+                - PIECE_VALUES[Piece::Pawn.index()]
+        };
+        let capture_delta = || {
+            let attacker = board.piece_at(m.from()).expect("move has a piece").piece();
+            let victim = board
+                .piece_at(m.to())
+                .expect("capture has a victim")
+                .piece();
+            PIECE_VALUES[victim.index()] - PIECE_VALUES[attacker.index()]
+        };
+        let score_delta = match flags {
+            MoveFlags::Quiet
+            | MoveFlags::DoublePawnPush
+            | MoveFlags::KingCastle
+            | MoveFlags::QueenCastle => {
+                if self.killer_slots(ply).contains(&Some(m)) {
+                    return (MovePriority::Killer, 0);
+                }
+                let history_score = self.cutoff_history.as_deref().map_or(0, |history| {
+                    let piece = board.piece_at(m.from()).expect("move has a piece").piece();
+                    history.score(board.side_to_move(), piece, m.to())
+                });
+                return (MovePriority::Quiet, history_score);
+            }
+            MoveFlags::Capture => capture_delta(),
+            MoveFlags::EnPassant => 0,
+            MoveFlags::PromoteKnight
+            | MoveFlags::PromoteBishop
+            | MoveFlags::PromoteRook
+            | MoveFlags::PromoteQueen => promotion_delta(),
+            MoveFlags::PromoteCaptureKnight
+            | MoveFlags::PromoteCaptureBishop
+            | MoveFlags::PromoteCaptureRook
+            | MoveFlags::PromoteCaptureQueen => capture_delta() + promotion_delta(),
+        };
+        match score_delta.cmp(&0) {
+            std::cmp::Ordering::Greater => (MovePriority::WinningCapture, score_delta),
+            std::cmp::Ordering::Equal => (MovePriority::EqualCapture, 0),
+            std::cmp::Ordering::Less => (MovePriority::LosingCapture, score_delta),
+        }
+    }
 }
 
-/// Ranked top to bottom, best move first: `#[derive(PartialOrd, Ord)]` on the enum
-/// compares by declaration order, so this declaration *is* the ranking, not a lookup
-/// table alongside it. Carries no payload of its own: [`move_priority`] returns
-/// `(MovePriority, Reverse<Score>)` instead, so the fine-grained tiebreak *within* a
-/// tier (MVV-LVA's delta among captures, [`CutoffHistory`]'s score among quiets) has one
-/// shared place to live rather than a separate payload per variant that needs it.
+/// Ranked bottom to top, worst move first: `#[derive(PartialOrd, Ord)]` on the
+/// enum compares by declaration order, so this declaration *is* the ranking,
+/// not a lookup table alongside it. Declared worst-first, the reverse of how
+/// it reads in prose, so a move's raw `Ord` already agrees with `Score`'s own
+/// "bigger is better": [`Search::move_priority`] returns `(MovePriority,
+/// Score)` with neither half wrapped in `Reverse`, and the one flip
+/// `sort_unstable_by_key`'s ascending sort needs happens once, in
+/// [`Search::order_moves`], instead of being smuggled into half the tuple.
+/// Carries no payload of its own: `move_priority`'s tuple has a second element
+/// for that, so the fine-grained tiebreak *within* a tier (MVV-LVA's delta
+/// among captures, [`CutoffHistory`]'s score among quiets) has one shared
+/// place to live rather than a separate payload per variant that needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-// `cfg_attr(not(test), ...)` because the ordering test below names both
-// variants, so `dead_code` fires in a normal build and not in a test one, and
+// `cfg_attr(not(test), ...)` because the ordering test below names the
+// variant, so `dead_code` fires in a normal build and not in a test one, and
 // a bare `expect` would then be unfulfilled exactly where the test build runs.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "PrincipalVariation and MateKiller have no producer yet (real PV tracking \
-                  needs PVS's triangular PV table; mate killers are a deliberately separate, \
-                  later change from ordinary killers, split out to keep each one's SPRT \
-                  measuring only one technique) but the ranking scheme is designed to be \
-                  complete for when they land, rather than needing to be reshuffled later"
+        reason = "MateKiller has no producer yet: a deliberately separate, later change from \
+                  ordinary killers, split out to keep each one's SPRT measuring only one \
+                  technique. The ranking scheme is designed to be complete for when it lands, \
+                  rather than needing to be reshuffled later."
     )
 )]
 enum MovePriority {
-    /// The previous iteration's best line. No producer yet; PVS supplies one.
-    PrincipalVariation,
-    /// The transposition table's stored move for this position: already proved
-    /// best by a deeper or equal search, so nothing cheaper predicts better.
-    Hash,
-    /// A capture winning material, ordered by how much; see [`move_priority`]'s own doc
-    /// for why the ordering value lives in the tuple this enum is half of, not a payload
-    /// on the variant.
-    WinningCapture,
-    /// An even trade. Gain is exactly `0` by definition, so unlike the winning and losing
-    /// tiers it needs no tiebreak beyond ordinary declaration order.
-    EqualCapture,
+    /// A capture losing material, ordered by how much. Below `Quiet` because a
+    /// move that hangs a piece is worse than an untried ordinary move.
+    LosingCapture,
+    /// Everything not otherwise classified.
+    Quiet,
+    /// A quiet move that caused a beta cutoff at a sibling of this ply.
+    Killer,
     /// A quiet move that refuted a sibling *with a mate score*. Ranked above
     /// ordinary killers because a forced mate is worth more than material. No
     /// producer yet.
     MateKiller,
-    /// A quiet move that caused a beta cutoff at a sibling of this ply.
-    Killer,
-    /// Everything not otherwise classified.
-    Quiet,
-    /// A capture losing material, ordered by how much. Below `Quiet` because a
-    /// move that hangs a piece is worse than an untried ordinary move.
-    LosingCapture,
-}
-
-/// Captures and promotions interleave on one material-gain scale rather than
-/// promotions getting a fixed rank: a capturing promotion (e.g. a pawn
-/// taking a rook while queening) is worth strictly more than the same
-/// promotion alone, by the captured piece's value, and only a shared scale
-/// can express that. `PIECE_VALUES` gives every promotion piece strictly
-/// more value than a pawn (the smallest gain, to a knight, is still 220), so
-/// `gain` can never be zero or negative for a promotion: it always resolves
-/// to `WinningCapture`, never `EqualCapture` or `LosingCapture`, and because
-/// that check happens before any killer-table lookup, a promotion can never
-/// fall through to `Quiet`, `Killer`, or `MateKiller` either, with or
-/// without a capture attached.
-///
-/// Returns `(MovePriority, Reverse<Score>)`: the coarse tier, then a tiebreak within it,
-/// always wrapped in `Reverse` so "a bigger real number is better" reads the same
-/// direction for every tier (MVV-LVA's delta for captures, `cutoff_history`'s score for
-/// quiets) despite `sort_unstable_by_key`'s ascending sort. Tiers with no real number to
-/// break ties by (`Hash`, `EqualCapture`, `Killer`) carry `Reverse(0)`, a placeholder that
-/// never actually competes against anything: every move landing in one of those tiers
-/// already ties on the first element of the tuple by definition of "same tier."
-#[expect(
-    clippy::expect_used,
-    reason = "the flags decide which arm runs, so a promotion arm always has a promotion piece and a capture arm always has a victim; the from-square always holds the moving piece"
-)]
-fn move_priority(
-    board: &Board,
-    m: Move,
-    tt_move: Option<Move>,
-    killers: [Option<Move>; KILLER_SLOTS],
-    cutoff_history: Option<&CutoffHistory>,
-) -> (MovePriority, Reverse<Score>) {
-    if Some(m) == tt_move {
-        return (MovePriority::Hash, Reverse(0));
-    }
-
-    let flags = m.flags();
-    let promotion_delta = || {
-        PIECE_VALUES[flags
-            .promotion_piece()
-            .expect("move is a promotion")
-            .index()]
-            - PIECE_VALUES[Piece::Pawn.index()]
-    };
-    let capture_delta = || {
-        let attacker = board.piece_at(m.from()).expect("move has a piece").piece();
-        let victim = board
-            .piece_at(m.to())
-            .expect("capture has a victim")
-            .piece();
-        PIECE_VALUES[victim.index()] - PIECE_VALUES[attacker.index()]
-    };
-    let score_delta = match flags {
-        MoveFlags::Quiet
-        | MoveFlags::DoublePawnPush
-        | MoveFlags::KingCastle
-        | MoveFlags::QueenCastle => {
-            if killers.contains(&Some(m)) {
-                return (MovePriority::Killer, Reverse(0));
-            }
-            let history_score = cutoff_history.map_or(0, |history| {
-                let piece = board.piece_at(m.from()).expect("move has a piece").piece();
-                history.score(board.side_to_move(), piece, m.to())
-            });
-            return (MovePriority::Quiet, Reverse(history_score));
-        }
-        MoveFlags::Capture => capture_delta(),
-        MoveFlags::EnPassant => 0,
-        MoveFlags::PromoteKnight
-        | MoveFlags::PromoteBishop
-        | MoveFlags::PromoteRook
-        | MoveFlags::PromoteQueen => promotion_delta(),
-        MoveFlags::PromoteCaptureKnight
-        | MoveFlags::PromoteCaptureBishop
-        | MoveFlags::PromoteCaptureRook
-        | MoveFlags::PromoteCaptureQueen => capture_delta() + promotion_delta(),
-    };
-    match score_delta.cmp(&0) {
-        std::cmp::Ordering::Greater => (MovePriority::WinningCapture, Reverse(score_delta)),
-        std::cmp::Ordering::Equal => (MovePriority::EqualCapture, Reverse(0)),
-        std::cmp::Ordering::Less => (MovePriority::LosingCapture, Reverse(score_delta)),
-    }
+    /// An even trade. Gain is exactly `0` by definition, so unlike the winning and losing
+    /// tiers it needs no tiebreak beyond ordinary declaration order.
+    EqualCapture,
+    /// A capture winning material, ordered by how much; see [`Search::move_priority`]'s
+    /// own doc for why the ordering value lives in the tuple this enum is half of, not a
+    /// payload on the variant.
+    WinningCapture,
+    /// The transposition table's stored move for this position: already proved
+    /// best by a deeper or equal search, so nothing cheaper predicts better.
+    Hash,
+    /// This ply's move in the previous iteration's completed best line (see
+    /// [`Search::previous_pv_line`]). Ranked above `Hash` even though the two
+    /// usually agree: a hash-table entry for this exact position can belong to
+    /// a different, more recently searched line if replacement has since
+    /// overwritten it, where this search's own recorded line cannot.
+    PrincipalVariation,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{Piece, Square};
-    use std::cmp::Reverse;
 
     /// `move_priority` is private to this module, and so is `order_moves`;
     /// both are pure enough (no board mutation, no search recursion) to test
@@ -1490,6 +1648,20 @@ mod tests {
             })
     }
 
+    /// A `Search` seeded with exactly the ply-0 ordering inputs a test wants to
+    /// exercise, so each `move_priority`/`order_moves` test below can stay a
+    /// short, direct call the way it was when these were free functions,
+    /// rather than repeating this setup inline everywhere.
+    fn priority_search(
+        tt_move: Option<Move>,
+        killers: [Option<Move>; KILLER_SLOTS],
+    ) -> Search<'static> {
+        let mut search = Search::new(Vec::new());
+        search.set_hash_move(0, tt_move);
+        search.killers[0] = killers;
+        search
+    }
+
     /// Every variant, in the exact order the intended hierarchy requires:
     /// `#[derive(Ord)]` on the enum compares by declaration order, so this list
     /// *is* the ranking, not a lookup table alongside it. A typo'd or reordered
@@ -1503,20 +1675,20 @@ mod tests {
             EqualCapture, Hash, Killer, LosingCapture, MateKiller, PrincipalVariation, Quiet,
             WinningCapture,
         };
-        let ranked_best_to_worst = [
-            PrincipalVariation,
-            Hash,
-            WinningCapture,
-            EqualCapture,
-            MateKiller,
-            Killer,
-            Quiet,
+        let ranked_worst_to_best = [
             LosingCapture,
+            Quiet,
+            Killer,
+            MateKiller,
+            EqualCapture,
+            WinningCapture,
+            Hash,
+            PrincipalVariation,
         ];
-        for pair in ranked_best_to_worst.windows(2) {
+        for pair in ranked_worst_to_best.windows(2) {
             assert!(
                 pair[0] < pair[1],
-                "{:?} must rank strictly ahead of {:?}",
+                "{:?} must rank strictly behind {:?}",
                 pair[0],
                 pair[1]
             );
@@ -1528,8 +1700,8 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, None, [None, None], None),
-            (MovePriority::Quiet, Reverse(0))
+            priority_search(None, [None, None]).move_priority(&board, quiet, 0),
+            (MovePriority::Quiet, 0)
         );
     }
 
@@ -1540,16 +1712,16 @@ mod tests {
     // land on the *correct side* of that distinction, not just land on two
     // different variants (a naming swap between the two would still produce
     // "two distinct variants" and could still pass a looser test). Pinning
-    // the exact `Reverse` value, not just the variant, also catches the
+    // the exact tiebreak value, not just the variant, also catches the
     // tiebreak's sign getting negated relative to the raw victim-minus-
-    // attacker delta: `Reverse` should carry that delta un-negated.
+    // attacker delta: it should carry that delta un-negated.
     #[test]
     fn move_priority_classifies_a_small_attacker_taking_a_big_victim_as_winning() {
         let board = Board::try_from_fen("4k3/8/8/8/3q4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
         let pawn_takes_queen = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
-            move_priority(&board, pawn_takes_queen, None, [None, None], None),
-            (MovePriority::WinningCapture, Reverse(800)),
+            priority_search(None, [None, None]).move_priority(&board, pawn_takes_queen, 0),
+            (MovePriority::WinningCapture, 800),
             "a pawn capturing a queen is the textbook winning capture, gain = 900 - 100"
         );
     }
@@ -1559,8 +1731,8 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3p4/4Q3/8/4K3 w - - 0 1").expect("valid FEN");
         let queen_takes_pawn = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
-            move_priority(&board, queen_takes_pawn, None, [None, None], None),
-            (MovePriority::LosingCapture, Reverse(-800)),
+            priority_search(None, [None, None]).move_priority(&board, queen_takes_pawn, 0),
+            (MovePriority::LosingCapture, -800),
             "a queen capturing an undefended pawn is comparatively unpromising, \
              the opposite end of the scale from a pawn capturing a queen, gain = 100 - 900"
         );
@@ -1571,8 +1743,8 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3r4/8/8/3RK3 w - - 0 1").expect("valid FEN");
         let rook_takes_rook = find_move(&board, Square::D1, Square::D4);
         assert_eq!(
-            move_priority(&board, rook_takes_rook, None, [None, None], None),
-            (MovePriority::EqualCapture, Reverse(0))
+            priority_search(None, [None, None]).move_priority(&board, rook_takes_rook, 0),
+            (MovePriority::EqualCapture, 0)
         );
     }
 
@@ -1589,20 +1761,22 @@ mod tests {
             Board::try_from_fen("6k1/8/8/8/8/2n5/1P6/4K3 w - - 0 1").expect("valid FEN");
         let pawn_takes_knight = find_move(&pxn_board, Square::B2, Square::C3);
 
-        let rxq_priority = move_priority(&rxq_board, rook_takes_queen, None, [None, None], None);
-        let pxn_priority = move_priority(&pxn_board, pawn_takes_knight, None, [None, None], None);
+        let rxq_priority =
+            priority_search(None, [None, None]).move_priority(&rxq_board, rook_takes_queen, 0);
+        let pxn_priority =
+            priority_search(None, [None, None]).move_priority(&pxn_board, pawn_takes_knight, 0);
 
         assert_ne!(
             rxq_priority, pxn_priority,
             "RxQ (gain 400) and PxN (gain 220) must not compare equal"
         );
         assert!(
-            rxq_priority < pxn_priority,
+            rxq_priority > pxn_priority,
             "RxQ must outrank PxN: rook-for-queen is a bigger material swing \
              than pawn-for-knight, even though both are winning captures"
         );
-        assert_eq!(rxq_priority, (MovePriority::WinningCapture, Reverse(400)));
-        assert_eq!(pxn_priority, (MovePriority::WinningCapture, Reverse(220)));
+        assert_eq!(rxq_priority, (MovePriority::WinningCapture, 400));
+        assert_eq!(pxn_priority, (MovePriority::WinningCapture, 220));
     }
 
     /// A losing capture must sort behind a quiet move, not ahead of it: hanging
@@ -1616,8 +1790,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
 
         assert!(
-            move_priority(&board, quiet, None, [None, None], None)
-                < move_priority(&board, losing_capture, None, [None, None], None),
+            priority_search(None, [None, None]).move_priority(&board, quiet, 0)
+                > priority_search(None, [None, None]).move_priority(&board, losing_capture, 0),
             "a losing capture must sort behind a quiet move, not ahead of it"
         );
     }
@@ -1640,8 +1814,12 @@ mod tests {
         let queen_takes_pawn = find_move(&losing_board, Square::E3, Square::D4);
 
         assert!(
-            move_priority(&winning_board, pawn_takes_queen, None, [None, None], None)
-                < move_priority(&losing_board, queen_takes_pawn, None, [None, None], None),
+            priority_search(None, [None, None]).move_priority(&winning_board, pawn_takes_queen, 0)
+                > priority_search(None, [None, None]).move_priority(
+                    &losing_board,
+                    queen_takes_pawn,
+                    0
+                ),
             "a pawn capturing a queen must be tried before a queen capturing a pawn"
         );
     }
@@ -1653,12 +1831,12 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
 
         assert_eq!(
-            move_priority(&board, capture, Some(capture), [None, None], None),
-            (MovePriority::Hash, Reverse(0))
+            priority_search(Some(capture), [None, None]).move_priority(&board, capture, 0),
+            (MovePriority::Hash, 0)
         );
         assert_eq!(
-            move_priority(&board, quiet, Some(quiet), [None, None], None),
-            (MovePriority::Hash, Reverse(0))
+            priority_search(Some(quiet), [None, None]).move_priority(&board, quiet, 0),
+            (MovePriority::Hash, 0)
         );
     }
 
@@ -1671,8 +1849,8 @@ mod tests {
         // `quiet` is hinted, but `capture` is the move being scored: the
         // hint shouldn't affect a move it doesn't match.
         assert_eq!(
-            move_priority(&board, capture, Some(quiet), [None, None], None),
-            move_priority(&board, capture, None, [None, None], None),
+            priority_search(Some(quiet), [None, None]).move_priority(&board, capture, 0),
+            priority_search(None, [None, None]).move_priority(&board, capture, 0),
             "a tt hint for a different move must not affect this move's own ordering"
         );
     }
@@ -1692,7 +1870,7 @@ mod tests {
         let capture = find_move(&board, Square::E4, Square::D5);
         let quiet_hint = find_move(&board, Square::E1, Square::D1);
 
-        order_moves(&board, &mut moves, Some(quiet_hint), [None, None], None);
+        priority_search(Some(quiet_hint), [None, None]).order_moves(&board, &mut moves, 0);
 
         assert_eq!(
             moves.as_slice()[0],
@@ -1718,7 +1896,7 @@ mod tests {
 
         for &hint in legal.as_slice() {
             let mut moves = legal_moves(&board);
-            order_moves(&board, &mut moves, Some(hint), [None, None], None);
+            priority_search(Some(hint), [None, None]).order_moves(&board, &mut moves, 0);
             assert_eq!(
                 moves.as_slice()[0],
                 hint,
@@ -1746,8 +1924,8 @@ mod tests {
         let board = promotion_no_capture_position();
         let queen_promo = find_promotion_move(&board, Square::E7, Square::E8, Piece::Queen);
         assert_eq!(
-            move_priority(&board, queen_promo, None, [None, None], None),
-            (MovePriority::WinningCapture, Reverse(800)),
+            priority_search(None, [None, None]).move_priority(&board, queen_promo, 0),
+            (MovePriority::WinningCapture, 800),
             "a non-capture queen promotion must outrank quiet moves, not tie with \
              them: gain = 900 - 100, the same tier a good capture lands in"
         );
@@ -1766,18 +1944,19 @@ mod tests {
         let capturing_promo =
             find_promotion_move(&capture_board, Square::E7, Square::F8, Piece::Queen);
 
-        let plain_priority = move_priority(&plain_board, plain_promo, None, [None, None], None);
+        let plain_priority =
+            priority_search(None, [None, None]).move_priority(&plain_board, plain_promo, 0);
         let capturing_priority =
-            move_priority(&capture_board, capturing_promo, None, [None, None], None);
+            priority_search(None, [None, None]).move_priority(&capture_board, capturing_promo, 0);
 
         assert!(
-            capturing_priority < plain_priority,
+            capturing_priority > plain_priority,
             "capturing a rook while promoting must outrank promoting alone"
         );
-        assert_eq!(plain_priority, (MovePriority::WinningCapture, Reverse(800)));
+        assert_eq!(plain_priority, (MovePriority::WinningCapture, 800));
         assert_eq!(
             capturing_priority,
-            (MovePriority::WinningCapture, Reverse(1200)),
+            (MovePriority::WinningCapture, 1200),
             "gain = (900 - 100) promotion + (500 - 100) capture"
         );
     }
@@ -1798,7 +1977,7 @@ mod tests {
             let plain = find_promotion_move(&plain_board, Square::E7, Square::E8, piece);
             assert!(
                 matches!(
-                    move_priority(&plain_board, plain, None, [None, None], None),
+                    priority_search(None, [None, None]).move_priority(&plain_board, plain, 0),
                     (MovePriority::WinningCapture, _)
                 ),
                 "{piece:?} promotion alone must classify as WinningCapture, never Quiet"
@@ -1807,7 +1986,7 @@ mod tests {
             let capturing = find_promotion_move(&capture_board, Square::E7, Square::F8, piece);
             assert!(
                 matches!(
-                    move_priority(&capture_board, capturing, None, [None, None], None),
+                    priority_search(None, [None, None]).move_priority(&capture_board, capturing, 0),
                     (MovePriority::WinningCapture, _)
                 ),
                 "{piece:?} promotion with a capture must classify as WinningCapture, never Quiet"
@@ -1844,7 +2023,7 @@ mod tests {
         let score = {
             let mut search = Search::new(Vec::new()).with_tt(&mut tt);
             search
-                .negamax(&board, 2, 0, -MATE, MATE)
+                .negamax(&board, 2, 0, -MATE, MATE, true)
                 .expect("no abort condition is configured, so this can't return None")
         };
 
@@ -1859,18 +2038,18 @@ mod tests {
 
     // ---- Killer-move classification ----
     //
-    // `move_priority`'s `killers` parameter carries the two slots for the ply the
-    // move is being classified at. A killer only outranks a quiet move, never a
-    // capture, so these check the boundary in both directions rather than only
-    // that a match is recognised.
+    // `Search::move_priority`'s own `killer_slots(ply)` lookup carries the two
+    // slots for the ply the move is being classified at. A killer only outranks
+    // a quiet move, never a capture, so these check the boundary in both
+    // directions rather than only that a match is recognised.
 
     #[test]
     fn move_priority_with_matching_first_killer_slot_classifies_as_killer() {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, None, [Some(quiet), None], None),
-            (MovePriority::Killer, Reverse(0))
+            priority_search(None, [Some(quiet), None]).move_priority(&board, quiet, 0),
+            (MovePriority::Killer, 0)
         );
     }
 
@@ -1880,8 +2059,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
         let other_quiet = find_move(&board, Square::E1, Square::F1);
         assert_eq!(
-            move_priority(&board, quiet, None, [Some(other_quiet), Some(quiet)], None),
-            (MovePriority::Killer, Reverse(0)),
+            priority_search(None, [Some(other_quiet), Some(quiet)]).move_priority(&board, quiet, 0),
+            (MovePriority::Killer, 0),
             "both slots must be checked, not just the first"
         );
     }
@@ -1892,8 +2071,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
         let unrelated = find_move(&board, Square::E1, Square::F1);
         assert_eq!(
-            move_priority(&board, quiet, None, [Some(unrelated), None], None),
-            (MovePriority::Quiet, Reverse(0)),
+            priority_search(None, [Some(unrelated), None]).move_priority(&board, quiet, 0),
+            (MovePriority::Quiet, 0),
             "a killer slot holding a different move must not affect this move's own classification"
         );
     }
@@ -1903,31 +2082,30 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, None, [None, None], None),
-            (MovePriority::Quiet, Reverse(0))
+            priority_search(None, [None, None]).move_priority(&board, quiet, 0),
+            (MovePriority::Quiet, 0)
         );
     }
 
-    /// A killer slot is looked up from whatever the caller passes in, so a
-    /// move recorded as a killer at one ply must not leak into a
-    /// classification call for a different ply's slots. `move_priority`
-    /// itself has no notion of "ply" at all; this pins down that the ply
-    /// scoping is entirely the caller's responsibility to get right, not
-    /// something to test here beyond confirming the function trusts whatever
-    /// slots it's handed.
+    /// A killer slot is looked up at the ply `move_priority` is asked about, so
+    /// a move recorded as a killer at one ply must not leak into a
+    /// classification call for a different ply's slots. This is now a real
+    /// property of `ply` itself, not (as when `killers` was a bare parameter)
+    /// just a labeling convention on whatever array the caller happened to pass.
     #[test]
-    fn move_priority_trusts_whichever_killer_slots_it_is_handed() {
+    fn move_priority_trusts_whichever_ply_it_is_asked_about() {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
-        let ply_5_slots = [Some(quiet), None];
-        let ply_9_slots = [None, None];
+        let mut search = Search::new(Vec::new());
+        search.killers[5] = [Some(quiet), None];
         assert_eq!(
-            move_priority(&board, quiet, None, ply_5_slots, None),
-            (MovePriority::Killer, Reverse(0))
+            search.move_priority(&board, quiet, 5),
+            (MovePriority::Killer, 0)
         );
         assert_eq!(
-            move_priority(&board, quiet, None, ply_9_slots, None),
-            (MovePriority::Quiet, Reverse(0))
+            search.move_priority(&board, quiet, 9),
+            (MovePriority::Quiet, 0),
+            "ply 9's own (empty) killer slots must be consulted, not ply 5's"
         );
     }
 
@@ -1936,9 +2114,61 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            move_priority(&board, quiet, Some(quiet), [Some(quiet), None], None),
-            (MovePriority::Hash, Reverse(0)),
+            priority_search(Some(quiet), [Some(quiet), None]).move_priority(&board, quiet, 0),
+            (MovePriority::Hash, 0),
             "the tt hint must outrank a killer slot for the same move"
+        );
+    }
+
+    // ---- Previous-iteration PV classification ----
+    //
+    // `PrincipalVariation` outranks `Hash` (see `MovePriority`'s own doc for
+    // why): a hash-table entry can belong to a different, more recently
+    // searched line once replacement has overwritten it, where
+    // `Search::previous_pv_line` is this search's own uncorrupted record.
+    // `PVS`'s own recursion is what will ever populate that line for a real
+    // search; these tests poke it directly, the same way the killer tests
+    // above poke `killers` directly rather than running a real search to get
+    // a slot filled.
+
+    #[test]
+    fn move_priority_prefers_previous_pv_move_over_hash_when_a_move_matches_both() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let mut search = priority_search(Some(quiet), [None, None]);
+        search.previous_pv_line[0] = Some(quiet);
+        assert_eq!(
+            search.move_priority(&board, quiet, 0),
+            (MovePriority::PrincipalVariation, 0),
+            "the previous iteration's own pv move must outrank a same-move hash hint"
+        );
+    }
+
+    /// The direction check, same shape as the tt-hint/killer versions above:
+    /// ordering a real capture against a real, unrelated previous-pv hint is
+    /// what would catch a backwards or no-op implementation, not just the
+    /// `move_priority`-level classification test above.
+    #[test]
+    fn order_moves_places_the_previous_pv_move_first() {
+        let board = capture_and_quiet_position();
+        let mut moves = legal_moves(&board);
+
+        let capture = find_move(&board, Square::E4, Square::D5);
+        let pv_hint = find_move(&board, Square::E1, Square::D1);
+
+        let mut search = priority_search(None, [None, None]);
+        search.previous_pv_line[0] = Some(pv_hint);
+        search.order_moves(&board, &mut moves, 0);
+
+        assert_eq!(
+            moves.as_slice()[0],
+            pv_hint,
+            "the previous iteration's pv move must sort first, ahead of the available capture"
+        );
+        assert_ne!(
+            moves.as_slice()[0],
+            capture,
+            "the capture must not outrank an unrelated pv hint"
         );
     }
 
@@ -1963,7 +2193,7 @@ mod tests {
         // boundary.
         let capture = find_move(&board, Square::E4, Square::D5);
         assert!(matches!(
-            move_priority(&board, capture, None, [Some(capture), None], None),
+            priority_search(None, [Some(capture), None]).move_priority(&board, capture, 0),
             (MovePriority::LosingCapture, _)
         ));
     }
@@ -1990,7 +2220,7 @@ mod tests {
         let other_quiet = find_move(&board, Square::E1, Square::F1);
 
         let mut moves = legal_moves(&board);
-        order_moves(&board, &mut moves, None, [Some(killer), None], None);
+        priority_search(None, [Some(killer), None]).order_moves(&board, &mut moves, 0);
 
         let killer_index = moves
             .as_slice()
