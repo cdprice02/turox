@@ -103,8 +103,8 @@ pub const fn is_mate_score(score: Score) -> bool {
 }
 
 /// How many plies past `negamax`'s horizon `quiescence` is allowed to keep resolving
-/// captures before it gives up and falls back to stand pat, same as if no more captures
-/// were available.
+/// captures and promotions before it gives up and falls back to stand pat, same as if
+/// none were available.
 ///
 /// Without a cap, a sufficiently tangled position (many mutually-en-prise pieces) can
 /// make the *breadth* of the capture tree blow up long before it naturally bottoms out on
@@ -1359,23 +1359,27 @@ impl<'a> Search<'a> {
     }
 
     /// Quiescence search: like `negamax`, but only ever considers captures
-    /// while not in check, with "stand pat" (`evaluate(board)`) as the floor
-    /// score, so a position with no good captures isn't forced into playing
-    /// one. While in check, stand pat does not apply at all: every legal
-    /// reply is a forced evasion by definition, and a static score can't
-    /// tell a merely-bad position from a lost one, so this searches all of
-    /// them instead, with no `qdepth` cap (a check has to be resolved
-    /// regardless of how deep quiescence has already gone; see `qdepth`'s
-    /// own doc below), and returns [`MATE`]'s formula outright when none
-    /// exist rather than a misleading material score for what is actually
-    /// checkmate. Same fail-soft alpha-beta and abort propagation as
-    /// `negamax` either way. Deliberately still out of scope: repetition
-    /// detection. Captures can never repeat a position, but evasions (plain
-    /// king or blocking moves) now can; `self.history` isn't threaded into
-    /// this function; a real repetition reachable only through an evasion
-    /// line is a narrower version of the same path-dependence gap the
-    /// transposition table already accepts elsewhere, not a new one this
-    /// change introduces.
+    /// and promotions while not in check, with "stand pat" (`evaluate(board)`)
+    /// as the floor score, so a position with no good captures or promotions
+    /// isn't forced into playing one. Promotions are in scope alongside
+    /// captures because a pawn one push from queening is exactly the kind of
+    /// tactical, still-unsettled position quiescence exists to resolve
+    /// rather than hand to `evaluate` as if the pre-promotion material were
+    /// the real story. While in check, stand pat does not apply at all:
+    /// every legal reply is a forced evasion by definition, and a static
+    /// score can't tell a merely-bad position from a lost one, so this
+    /// searches all of them instead, with no `qdepth` cap (a check has to be
+    /// resolved regardless of how deep quiescence has already gone; see
+    /// `qdepth`'s own doc below), and returns [`MATE`]'s formula outright
+    /// when none exist rather than a misleading material score for what is
+    /// actually checkmate. Same fail-soft alpha-beta and abort propagation
+    /// as `negamax` either way. Deliberately still out of scope: repetition
+    /// detection. Captures and promotions can never repeat a position
+    /// (both are irreversible), but evasions (plain king or blocking moves)
+    /// now can; `self.history` isn't threaded into this function; a real
+    /// repetition reachable only through an evasion line is a narrower
+    /// version of the same path-dependence gap the transposition table
+    /// already accepts elsewhere, not a new one this change introduces.
     ///
     /// `ply` is `negamax`'s own distance-from-root, passed through so an
     /// empty evasion list scores `Score::from(ply) - MATE`, the identical
@@ -1455,7 +1459,7 @@ impl<'a> Search<'a> {
         }
 
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
-        qmoves.retain(|m| m.flags().is_capture());
+        qmoves.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
 
         self.order_moves(board, &mut qmoves, ply);
 
@@ -2086,6 +2090,28 @@ mod tests {
         assert_eq!(
             entry.cutoff_score(2, Score::MIN, Score::MAX, 0),
             Some(score)
+        );
+    }
+
+    /// A lone king and a pawn one push from queening, against a lone king:
+    /// no capture exists anywhere on the board, so quiescence's only real
+    /// qmove here is the pawn's own non-capturing promotion. Searching it
+    /// one ply deeper, where the queen's material swing dwarfs the
+    /// pre-promotion stand-pat score, must beat standing pat outright.
+    #[test]
+    fn quiescence_searches_a_winning_non_capturing_promotion_instead_of_standing_pat() {
+        let board = Board::try_from_fen("8/P7/8/8/8/4k3/8/4K3 w - - 0 1").expect("valid FEN");
+        let mut search = Search::new(Vec::new());
+        let stand_pat = evaluate(&board);
+
+        let score = search
+            .quiescence(&board, -MATE, MATE, 0, MAX_QUIESCENCE_DEPTH, None)
+            .expect("no abort condition is configured, so this can't return None");
+
+        assert!(
+            score > stand_pat,
+            "quiescence must search past a legal non-capturing promotion rather than standing \
+             pat on the pre-promotion material: stand_pat={stand_pat}, score={score}"
         );
     }
 

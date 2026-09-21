@@ -73,13 +73,13 @@ fn naive_negamax(board: &Board, depth: u8, ply: u8, history: &mut Vec<u64>) -> S
     best
 }
 
-/// Unpruned quiescence: stand-pat, then every legal capture, no alpha/beta
-/// window. `qdepth` mirrors the real `quiescence`'s own cap (seeded from the
-/// same [`MAX_QUIESCENCE_DEPTH`] constant, not a hand-copied literal):
-/// without it, this reference has no bound at all on how many captures deep
-/// it'll chase, and a sufficiently tangled `any_board()` position can make
-/// that blow up long before comparing against the real (now-capped)
-/// implementation ever gets a chance to.
+/// Unpruned quiescence: stand-pat, then every legal capture or promotion, no
+/// alpha/beta window. `qdepth` mirrors the real `quiescence`'s own cap
+/// (seeded from the same [`MAX_QUIESCENCE_DEPTH`] constant, not a
+/// hand-copied literal): without it, this reference has no bound at all on
+/// how many captures deep it'll chase, and a sufficiently tangled
+/// `any_board()` position can make that blow up long before comparing
+/// against the real (now-capped) implementation ever gets a chance to.
 ///
 /// In check, this generates evasions instead of captures and does not stand
 /// pat, with no `qdepth` cap on how far that goes: `ply` (distance from the
@@ -103,7 +103,7 @@ fn naive_quiescence(board: &Board, ply: u8, qdepth: u8) -> Score {
     let mut best = evaluate(board);
     if qdepth > 0 {
         let mut captures = legal_moves(board);
-        captures.retain(|m| m.flags().is_capture());
+        captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
         for &m in captures.as_slice() {
             let score = -naive_quiescence(&board.make_move(m), ply + 1, qdepth - 1);
             best = best.max(score);
