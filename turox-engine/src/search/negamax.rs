@@ -324,9 +324,9 @@ struct LoopCtx {
 /// bookkeeping at the calling node: what a tainted score is *not* safe for is
 /// a transposition-table store, since the table is keyed on board state
 /// alone and a repetition's availability depends on the path taken to reach
-/// it (ADR 0002). `negamax` checks this flag itself, immediately before its
-/// own store, and every caller that goes on to store anything of its own
-/// must OR its children's `tainted` into its own before doing the same.
+/// it. `negamax` checks this flag itself, immediately before its own store,
+/// and every caller that goes on to store anything of its own must OR its
+/// children's `tainted` into its own before doing the same.
 #[derive(Debug, Clone, Copy)]
 struct NegamaxResult {
     /// Fail-soft: the real best score found, not a clamped bound.
@@ -1257,9 +1257,9 @@ impl<'a> Search<'a> {
         }
 
         // The fifty-move half of `is_draw` is scored the same way but never
-        // taints: ADR 0002 scopes this suppression to the repetition half
-        // alone, since mixing both would make the node-count/hashfull
-        // measurement it's gated on impossible to attribute to either one.
+        // taints: this suppression is scoped to the repetition half alone,
+        // since mixing both would make the node-count/hashfull measurement
+        // it's gated on impossible to attribute to either one.
         let repetition = is_threefold_repetition(&self.history, board.hash());
         if is_fifty_move_draw(board) || repetition {
             return Some(NegamaxResult {
