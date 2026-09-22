@@ -17,12 +17,14 @@
 use crate::eval::Score;
 use crate::types::{Color, Piece, Square};
 
-/// How far one `[side][piece][to]` cell's score can sit from zero in either direction.
+/// How far one `[side][piece][to]` cell's score can sit from zero in either direction, and
+/// the denominator `update`'s gravity term scales by: the two roles share one constant
+/// deliberately, since gravity's whole point is damping growth as a cell nears this same
+/// ceiling.
 ///
-/// Comfortably below `Score::MAX`/`Score::MIN`, so `update`'s `saturating_add` followed by
-/// this clamp never has to reason about the addition itself overflowing `Score`: the
-/// operand being added in is itself bounded (see [`cutoff_delta`]), and the running total
-/// is always re-clamped into this range immediately after every update.
+/// Comfortably below `Score::MAX`/`Score::MIN`, so `update`'s own final clamp into this
+/// range always fits back into `Score` (`i16`) even though the arithmetic ahead of it runs
+/// in `i32` to hold intermediate products that would overflow `Score` directly.
 const MAX_MAGNITUDE: Score = 16_384;
 
 /// `depth * depth`, so a cutoff found deep in the tree counts for more than one found near
@@ -96,13 +98,30 @@ impl CutoffHistory {
         self.update(side, piece, to, -cutoff_delta(depth));
     }
 
-    /// Shared by [`Self::record_cutoff`] and [`Self::record_no_cutoff`]: same clamp, same
-    /// cell lookup, opposite sign on `delta`.
-    fn update(&mut self, side: Color, piece: Piece, to: Square, delta: Score) {
+    /// Shared by [`Self::record_cutoff`] and [`Self::record_no_cutoff`]: same cell lookup,
+    /// opposite sign on `bonus`, and the same history-gravity formula on both.
+    ///
+    /// The standard gravity update (Stockfish and others use this exact shape): damps a
+    /// same-direction bonus as `current` approaches the ceiling, but a bonus reversing a
+    /// cell from the *opposite* extreme (a deeply malused cell suddenly causing a cutoff)
+    /// moves it *more* than the same bonus would move a fresh cell, not less -- the
+    /// surprising-reversal case this exists for. Computed in `i32`: `current * bonus.abs()`
+    /// can reach `MAX_MAGNITUDE * Score::MAX`, well past what `Score` (`i16`) holds, before
+    /// the division brings it back down.
+    #[expect(
+        clippy::expect_used,
+        reason = "updated is clamped to ±MAX_MAGNITUDE on the line just above, and MAX_MAGNITUDE \
+                  is itself a Score, so the conversion back can never fail"
+    )]
+    fn update(&mut self, side: Color, piece: Piece, to: Square, bonus: Score) {
         let cell = &mut self.scores[side.index()][piece.index()][to.index()];
-        *cell = cell
-            .saturating_add(delta)
-            .clamp(-MAX_MAGNITUDE, MAX_MAGNITUDE);
+        let current = i32::from(*cell);
+        let bonus = i32::from(bonus);
+        let gravity = current * bonus.abs() / i32::from(MAX_MAGNITUDE);
+        let updated =
+            (current + bonus - gravity).clamp(i32::from(-MAX_MAGNITUDE), i32::from(MAX_MAGNITUDE));
+        *cell = Score::try_from(updated)
+            .expect("clamped to ±MAX_MAGNITUDE just above, which always fits Score");
     }
 
     /// Halves every cell toward zero, keeping each one's sign and rough relative standing
@@ -209,6 +228,104 @@ mod tests {
             history.score(Color::White, Piece::Knight, Square::F3)
                 > history.score(Color::White, Piece::Bishop, Square::C4),
             "halving both entries must not change which one ranks higher"
+        );
+    }
+
+    // ---- History gravity ----
+    //
+    // `update`'s gravity term, exercised directly rather than only through
+    // the saturation tests below (which pin the eventual ceiling, not how
+    // a single bonus behaves on the way there).
+
+    #[test]
+    fn a_bonus_moves_a_near_ceiling_cell_less_than_a_near_zero_cell() {
+        let mut near_ceiling = CutoffHistory::new();
+        for _ in 0..50 {
+            near_ceiling.record_cutoff(Color::White, Piece::Knight, Square::F3, 255);
+        }
+        let before = near_ceiling.score(Color::White, Piece::Knight, Square::F3);
+
+        let mut near_zero = CutoffHistory::new();
+
+        near_ceiling.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
+        near_zero.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
+
+        let near_ceiling_delta =
+            near_ceiling.score(Color::White, Piece::Knight, Square::F3) - before;
+        let near_zero_delta = near_zero.score(Color::White, Piece::Knight, Square::F3);
+
+        assert!(
+            near_ceiling_delta < near_zero_delta,
+            "the same bonus (depth 4) must move a cell already near the ceiling ({before}) \
+             less than a fresh cell at zero: near-ceiling moved {near_ceiling_delta}, \
+             near-zero moved {near_zero_delta}"
+        );
+    }
+
+    #[test]
+    fn a_cutoff_bonus_never_decreases_a_cell_even_at_the_ceiling() {
+        let mut history = CutoffHistory::new();
+        for _ in 0..50 {
+            history.record_cutoff(Color::White, Piece::Knight, Square::F3, 255);
+        }
+        let before = history.score(Color::White, Piece::Knight, Square::F3);
+
+        history.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
+
+        assert!(
+            history.score(Color::White, Piece::Knight, Square::F3) >= before,
+            "gravity must only damp a same-direction bonus toward zero movement, never \
+             reverse its direction: before {before}, after {}",
+            history.score(Color::White, Piece::Knight, Square::F3)
+        );
+    }
+
+    #[test]
+    fn a_malus_never_increases_a_cell_even_at_the_floor() {
+        let mut history = CutoffHistory::new();
+        for _ in 0..50 {
+            history.record_no_cutoff(Color::White, Piece::Knight, Square::F3, 255);
+        }
+        let before = history.score(Color::White, Piece::Knight, Square::F3);
+
+        history.record_no_cutoff(Color::White, Piece::Knight, Square::F3, 4);
+
+        assert!(
+            history.score(Color::White, Piece::Knight, Square::F3) <= before,
+            "gravity must never reverse a same-direction malus's own direction: before \
+             {before}, after {}",
+            history.score(Color::White, Piece::Knight, Square::F3)
+        );
+    }
+
+    /// The property that sets this formula apart from a plain
+    /// distance-from-the-ceiling scale (which would damp a recovery from
+    /// the opposite extreme exactly as hard as a same-direction raise):
+    /// a cutoff on a cell deep in malus territory is a surprising
+    /// reversal, and gravity's subtracted term adds to the raw bonus
+    /// rather than damping it in that case, so the cell moves *more* than
+    /// the same bonus would move a cell starting at zero.
+    #[test]
+    fn a_cutoff_moves_a_deeply_malused_cell_more_than_a_fresh_one() {
+        let mut deeply_malused = CutoffHistory::new();
+        for _ in 0..50 {
+            deeply_malused.record_no_cutoff(Color::White, Piece::Knight, Square::F3, 255);
+        }
+        let before = deeply_malused.score(Color::White, Piece::Knight, Square::F3);
+
+        let mut fresh = CutoffHistory::new();
+
+        deeply_malused.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
+        fresh.record_cutoff(Color::White, Piece::Knight, Square::F3, 4);
+
+        let recovery_delta = deeply_malused.score(Color::White, Piece::Knight, Square::F3) - before;
+        let fresh_delta = fresh.score(Color::White, Piece::Knight, Square::F3);
+
+        assert!(
+            recovery_delta > fresh_delta,
+            "a cutoff reversing a deeply malused cell ({before}) must move it more than the \
+             same bonus moves a fresh cell: reversal moved {recovery_delta}, fresh moved \
+             {fresh_delta}"
         );
     }
 
