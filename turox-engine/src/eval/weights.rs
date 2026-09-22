@@ -88,3 +88,13 @@ pub const ROOK_OPEN_FILE_BONUS: (Score, Score) = (15, 15);
 /// The middle of the standard 4-10cp range, since an enemy pawn can still
 /// block or be defended along the file.
 pub const ROOK_SEMI_OPEN_FILE_BONUS: (Score, Score) = (7, 7);
+
+/// `(midgame, endgame)` bonus for the side to move: a small, standard
+/// tempo bonus.
+///
+/// Midgame lane only: CPW notes the tempo advantage largely evaporates in
+/// the endgame, where zugzwang can make having the move a liability
+/// rather than an asset, so this is zero in the endgame lane rather than
+/// shrinking, the same discipline `SHELTER_PENALTY` uses for the same
+/// reason.
+pub const TEMPO_BONUS: (Score, Score) = (10, 0);
