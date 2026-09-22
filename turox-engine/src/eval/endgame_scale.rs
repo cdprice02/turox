@@ -55,6 +55,22 @@ impl ScaleFactor {
         }
     }
 
+    /// `numerator` `UNIT`ths of the score, for rules whose curve isn't a
+    /// clean reciprocal (a pawn-count ramp, say) and so can't be expressed
+    /// through [`Self::from_reciprocal`].
+    ///
+    /// Clamps to [`Self::ONE`] rather than overflowing the fraction past
+    /// unity: a caller's curve running past `UNIT` means "at least
+    /// unscaled", not "scaled up", since nothing here ever amplifies a score.
+    #[must_use]
+    pub const fn from_numerator(numerator: u16) -> Self {
+        if numerator >= Self::UNIT {
+            Self::ONE
+        } else {
+            Self(numerator)
+        }
+    }
+
     /// Whether this factor leaves a score untouched, which is the common case
     /// and worth being able to ask about without comparing to a constant.
     #[must_use]
@@ -80,8 +96,27 @@ impl ScaleFactor {
     }
 }
 
-/// How far down a heuristically unwinnable balance is scaled, as a divisor.
-const SOFT_DRAW_DIVISOR: u16 = 16;
+/// The soft-draw numerator at a pawn-count difference of 0 or 1: the same
+/// 1/16 the flat constant this replaced used unconditionally, kept as the
+/// floor of the ramp so a bare or single-pawn edge scales exactly as before.
+const SOFT_DRAW_BASE: u16 = 16;
+
+/// How much the soft-draw numerator grows per pawn of advantage beyond the
+/// first. Chosen so the ramp reaches [`ScaleFactor::ONE`] (no scaling at
+/// all) at a five-pawn difference: CPW's framing is that a one-pawn edge in
+/// an opposite-bishop ending is close to always a draw and a four-pawn edge
+/// is often winning outright, so the curve should still be pulling the
+/// score down at four and be functionally unscaled by five.
+const SOFT_DRAW_STEP: u16 = 60;
+
+/// The soft-draw numerator for a `pawn_diff`-pawn advantage in an
+/// opposite-coloured-bishops ending, ramping linearly from
+/// [`SOFT_DRAW_BASE`] up to `ScaleFactor::UNIT`.
+#[must_use]
+fn soft_draw_numerator(pawn_diff: u32) -> u16 {
+    let extra = u16::try_from(pawn_diff.saturating_sub(1)).unwrap_or(u16::MAX);
+    SOFT_DRAW_BASE.saturating_add(SOFT_DRAW_STEP.saturating_mul(extra))
+}
 
 /// Scales `score` down when `board`'s material balance is known to be a draw
 /// or heuristically unwinnable, regardless of what the summed evaluation
@@ -91,8 +126,10 @@ const SOFT_DRAW_DIVISOR: u16 = 16;
 ///   bare king): scales to exactly 0, since these are draws under the rules
 ///   regardless of placement.
 /// - Opposite-coloured bishops with no other minor or major pieces: scales
-///   down by a flat constant, since a pawn advantage there is often not
-///   winnable but isn't a guaranteed draw the way insufficient material is.
+///   down by a curve indexed on the pawn-count difference between the two
+///   sides, since a pawn advantage there is often not winnable but isn't a
+///   guaranteed draw the way insufficient material is, and a larger
+///   advantage is more often winnable than a smaller one.
 #[must_use]
 pub fn scale_factor(board: &Board) -> ScaleFactor {
     let piece_count = |piece: Piece| {
@@ -118,7 +155,15 @@ pub fn scale_factor(board: &Board) -> ScaleFactor {
     // of it, unlike every hard-draw signature below, so it has to be
     // checked before the pawn guard rules everything else out.
     if !white_bare && !black_bare {
-        return soft_draw_factor(white_knights, black_knights, white_bishops, black_bishops);
+        let white_pawns = board.pieces(Color::White, Piece::Pawn).count();
+        let black_pawns = board.pieces(Color::Black, Piece::Pawn).count();
+        return soft_draw_factor(
+            white_knights,
+            black_knights,
+            white_bishops,
+            black_bishops,
+            white_pawns.abs_diff(black_pawns),
+        );
     }
 
     // Every hard-draw signature needs zero pawns too: a single pawn
@@ -164,13 +209,16 @@ fn hard_draw_factor(knights: Bitboard, bishops: Bitboard) -> ScaleFactor {
 /// coloured squares: the classic fortress case where a pawn advantage often
 /// isn't enough to win. `score` passes through unscaled for any other
 /// non-bare-vs-non-bare split (a knight facing a bishop, say), since this
-/// issue only covers the opposite-coloured-bishops case.
+/// issue only covers the opposite-coloured-bishops case. `pawn_diff` is the
+/// absolute pawn-count difference between the two sides, feeding
+/// [`soft_draw_numerator`]'s ramp.
 #[must_use]
 fn soft_draw_factor(
     white_knights: Bitboard,
     black_knights: Bitboard,
     white_bishops: Bitboard,
     black_bishops: Bitboard,
+    pawn_diff: u32,
 ) -> ScaleFactor {
     let is_ocb = white_knights.is_empty()
         && black_knights.is_empty()
@@ -178,7 +226,7 @@ fn soft_draw_factor(
         && black_bishops.count() == 1
         && !same_colored_bishops(white_bishops.or(black_bishops));
     if is_ocb {
-        ScaleFactor::from_reciprocal(SOFT_DRAW_DIVISOR)
+        ScaleFactor::from_numerator(soft_draw_numerator(pawn_diff))
     } else {
         ScaleFactor::ONE
     }

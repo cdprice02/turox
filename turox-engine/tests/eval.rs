@@ -10,7 +10,7 @@ mod common;
 
 use common::mirrored;
 use turox_engine::board::Board;
-use turox_engine::eval::endgame_scale::ScaleFactor;
+use turox_engine::eval::endgame_scale::{scale_factor, ScaleFactor};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
 use turox_engine::{Color, Piece, Square};
@@ -784,6 +784,34 @@ fn opposite_colored_bishops_with_an_extra_pawn_score_well_below_a_pawn() {
     );
 }
 
+// The far end of the ramp from the single-pawn case above: under the old
+// flat 1/16 constant this four-pawn material lead would have scored around
+// 25 (`4 * 100 / 16`), same as a one-pawn lead scaled down to about 6. The
+// pawn-count-indexed curve leaves most of a lead this size intact instead,
+// since CPW's framing treats a four-pawn opposite-bishop edge as often
+// winning outright, not still a near-draw.
+#[test]
+fn a_four_pawn_ocb_advantage_scores_far_above_a_one_pawn_advantage() {
+    let board = Board::try_from_fen("1b2k3/8/8/8/3PPPP1/8/8/1B2K3 w - - 0 1").expect("valid FEN");
+    let score = eval_white_pov(&board);
+    assert!(
+        score > 200,
+        "expected the ramp to leave most of a four-pawn lead intact, got {score}"
+    );
+
+    // {Color}x{side}: Black holding the four-pawn edge instead of White,
+    // not just White's own case mirrored via `mirrored()`.
+    let black_board =
+        Board::try_from_fen("1b2k3/3pppp1/8/8/8/8/8/1B2K3 w - - 0 1").expect("valid FEN");
+    let black_score = eval_white_pov(&black_board);
+    assert!(
+        black_score < -200,
+        "expected the ramp to leave most of a four-pawn lead intact for Black too, got {black_score}"
+    );
+
+    assert_eq!(eval_white_pov(&mirrored(&board)), -score);
+}
+
 // The boundary the position above sits next to: same shape, but both
 // bishops on the same square color (b1 and a8 are both light: `1+0=1` and
 // `0+7=7`, both odd), so this isn't the opposite-coloured-bishops fortress
@@ -861,5 +889,77 @@ fn a_larger_divisor_never_scales_less() {
             "divisor {divisor} scaled {score} to {scaled}, above the previous {previous}"
         );
         previous = scaled;
+    }
+}
+
+/// `from_numerator` is the general-curve counterpart to `from_reciprocal`:
+/// below `UNIT` it produces exactly the fraction asked for, matching a
+/// `from_reciprocal` call with the same effective ratio.
+#[test]
+fn from_numerator_below_unit_matches_the_equivalent_reciprocal() {
+    assert_eq!(
+        ScaleFactor::from_numerator(16),
+        ScaleFactor::from_reciprocal(16)
+    );
+    assert_eq!(ScaleFactor::from_numerator(128).apply(256), 128);
+}
+
+/// A numerator at or past `UNIT` clamps to `ScaleFactor::ONE` rather than
+/// amplifying the score: nothing in this module ever scales a score up, so a
+/// curve that overshoots means "unscaled", not "boosted".
+#[test]
+fn from_numerator_at_or_above_unit_clamps_to_one() {
+    assert_eq!(ScaleFactor::from_numerator(256), ScaleFactor::ONE);
+    assert_eq!(ScaleFactor::from_numerator(1000), ScaleFactor::ONE);
+}
+
+/// The pawn-count-indexed opposite-coloured-bishops ramp, checked at the
+/// `scale_factor` level rather than through a private helper: a pawn
+/// difference of 0 or 1 reproduces the original flat 1/16, a difference of
+/// 5 or more reaches fully unscaled, and every step in between is at least
+/// as generous as the last. This is the property every future curve tweak
+/// depends on, since a smaller pawn edge should never end up scaled *up*
+/// relative to a larger one.
+#[test]
+fn a_larger_ocb_pawn_advantage_never_scales_less() {
+    let pawn_ranks = ["8", "3P4", "3PP3", "3PPP2", "3PPPP1", "3PPPPP", "2PPPPPP"];
+    let boards: Vec<Board> = pawn_ranks
+        .iter()
+        .map(|pawns| {
+            let fen = format!("1b2k3/8/8/{pawns}/8/8/8/1B2K3 w - - 0 1");
+            Board::try_from_fen(&fen).expect("valid FEN")
+        })
+        .collect();
+
+    let sixteenth = ScaleFactor::from_reciprocal(16);
+    assert_eq!(
+        scale_factor(&boards[0]),
+        sixteenth,
+        "a 0-pawn edge should match the old flat constant"
+    );
+    assert_eq!(
+        scale_factor(&boards[1]),
+        sixteenth,
+        "a 1-pawn edge should match the old flat constant"
+    );
+    assert_eq!(
+        scale_factor(&boards[5]),
+        ScaleFactor::ONE,
+        "a 5-pawn edge should be fully unscaled"
+    );
+    assert_eq!(
+        scale_factor(&boards[6]),
+        ScaleFactor::ONE,
+        "a 6-pawn edge should stay fully unscaled"
+    );
+
+    let mut previous = ScaleFactor::DRAW;
+    for (pawns, board) in pawn_ranks.iter().zip(&boards) {
+        let factor = scale_factor(board);
+        assert!(
+            factor >= previous,
+            "pawn rank {pawns:?} scaled to {factor:?}, below the previous {previous:?}"
+        );
+        previous = factor;
     }
 }
