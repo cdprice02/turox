@@ -302,12 +302,64 @@ fn naive_bishop_pair_mg_eg(board: &Board, color: Color) -> (i32, i32) {
     }
 }
 
+/// Mailbox-only reference for `color`'s rook-file contribution:
+/// `weights::ROOK_OPEN_FILE_BONUS` for each of `color`'s rooks on a file
+/// with no pawn of either colour, `weights::ROOK_SEMI_OPEN_FILE_BONUS` for
+/// each on a file with no friendly pawn but at least one enemy pawn, zero
+/// for every other rook. Flat across both phases, same reasoning as
+/// `naive_bishop_pair_mg_eg`.
+fn naive_rook_files_mg_eg(board: &Board, color: Color) -> (i32, i32) {
+    let mut own_pawn_files = [false; 8];
+    let mut enemy_pawn_files = [false; 8];
+    for sq in Square::ALL {
+        if let Some(cp) = board.piece_at(sq) {
+            if cp.piece() == Piece::Pawn {
+                if cp.color() == color {
+                    own_pawn_files[sq.file().index()] = true;
+                } else {
+                    enemy_pawn_files[sq.file().index()] = true;
+                }
+            }
+        }
+    }
+
+    let mut total = 0i32;
+    for sq in Square::ALL {
+        let Some(cp) = board.piece_at(sq) else {
+            continue;
+        };
+        if cp.piece() != Piece::Rook || cp.color() != color {
+            continue;
+        }
+        let file = sq.file().index();
+        if !own_pawn_files[file] && !enemy_pawn_files[file] {
+            total += i32::from(weights::ROOK_OPEN_FILE_BONUS.0);
+        } else if !own_pawn_files[file] {
+            total += i32::from(weights::ROOK_SEMI_OPEN_FILE_BONUS.0);
+        }
+    }
+    (total, total)
+}
+
 /// The total number of pawns (both colors) on `board`: the scale the
 /// pawn-structure deviation bound below is measured against.
 fn total_pawn_count(board: &Board) -> i32 {
     let mut count = 0i32;
     for sq in Square::ALL {
         if matches!(board.piece_at(sq), Some(cp) if cp.piece() == Piece::Pawn) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// The total number of rooks (both colors) on `board`: the scale the
+/// rook-file deviation bound below is measured against, the same
+/// discipline `total_pawn_count` uses for pawn structure.
+fn total_rook_count(board: &Board) -> i32 {
+    let mut count = 0i32;
+    for sq in Square::ALL {
+        if matches!(board.piece_at(sq), Some(cp) if cp.piece() == Piece::Rook) {
             count += 1;
         }
     }
@@ -340,6 +392,10 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (black_bp_mg, black_bp_eg) = naive_bishop_pair_mg_eg(board, Color::Black);
     mg += white_bp_mg - black_bp_mg;
     eg += white_bp_eg - black_bp_eg;
+    let (white_rf_mg, white_rf_eg) = naive_rook_files_mg_eg(board, Color::White);
+    let (black_rf_mg, black_rf_eg) = naive_rook_files_mg_eg(board, Color::Black);
+    mg += white_rf_mg - black_rf_mg;
+    eg += white_rf_eg - black_rf_eg;
     real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
 }
 
@@ -369,6 +425,8 @@ enum OmittedTerm {
     KingSafety,
     /// Leaves out the bishop pair, so the deviation isolates that instead.
     BishopPair,
+    /// Leaves out rook files, so the deviation isolates that instead.
+    RookFiles,
 }
 
 /// Material and PST, plus every term except `omit`, White-relative.
@@ -400,6 +458,13 @@ fn naive_white_pov_omitting(board: &Board, omit: OmittedTerm) -> Score {
     if omit != OmittedTerm::BishopPair {
         let (white_mg, white_eg) = naive_bishop_pair_mg_eg(board, Color::White);
         let (black_mg, black_eg) = naive_bishop_pair_mg_eg(board, Color::Black);
+        mg += white_mg - black_mg;
+        eg += white_eg - black_eg;
+    }
+
+    if omit != OmittedTerm::RookFiles {
+        let (white_mg, white_eg) = naive_rook_files_mg_eg(board, Color::White);
+        let (black_mg, black_eg) = naive_rook_files_mg_eg(board, Color::Black);
         mg += white_mg - black_mg;
         eg += white_eg - black_eg;
     }
@@ -445,6 +510,18 @@ fn king_safety_bound() -> i32 {
 /// discipline `king_safety_bound` uses.
 fn bishop_pair_bound() -> i32 {
     2 * max_magnitude(weights::BISHOP_PAIR_BONUS)
+}
+
+/// The most rook-file bonus can be worth per rook: whichever of open or
+/// semi-open is larger, since a rook scores at most one of the two. Scaled
+/// by rook count the same way `pawn_structure_bound_per_pawn` is scaled by
+/// pawn count, not a fixed amount like `bishop_pair_bound`: unlike the
+/// bishop pair, which caps at one bonus per side regardless of how many
+/// bishops beyond two exist, every rook on the board can independently
+/// draw its own bonus.
+fn rook_files_bound_per_rook() -> i32 {
+    max_magnitude(weights::ROOK_OPEN_FILE_BONUS)
+        .max(max_magnitude(weights::ROOK_SEMI_OPEN_FILE_BONUS))
 }
 
 proptest! {
@@ -595,6 +672,23 @@ proptest! {
         prop_assert!(
             deviation.abs() <= bound,
             "bishop-pair deviation {deviation} exceeds the {bound}-centipawn bound"
+        );
+    }
+
+    // Same discipline as `pawn_structure_contribution_is_bounded_by_pawn_count`:
+    // rook-file bonus scales with rook count, not a fixed cap like the
+    // bishop pair, so what catches a per-file-instead-of-per-rook bug (or
+    // one that double-counts open and semi-open on the same rook) is a
+    // bound that scales too.
+    #[test]
+    fn rook_files_contribution_is_bounded_by_rook_count(board in any_board()) {
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::RookFiles));
+        let bound = rook_files_bound_per_rook() * total_rook_count(&board);
+        prop_assert!(
+            deviation.abs() <= bound,
+            "rook-file deviation {deviation} exceeds the {bound}-centipawn bound for {} rooks",
+            total_rook_count(&board)
         );
     }
 }

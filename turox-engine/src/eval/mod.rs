@@ -23,6 +23,7 @@ mod king_safety;
 mod pawn_structure;
 mod phase;
 pub mod pst;
+mod rook_files;
 pub mod weights;
 
 /// A position score in centipawns. Positive favors whoever the score is
@@ -88,6 +89,8 @@ pub fn eval_white_pov(board: &Board) -> Score {
     score -= king_safety::king_safety_score(board, Color::Black);
     score += bishop_pair::bishop_pair_score(board, Color::White);
     score -= bishop_pair::bishop_pair_score(board, Color::Black);
+    score += rook_files::rook_files_score(board, Color::White);
+    score -= rook_files::rook_files_score(board, Color::Black);
     let score = phase::interpolate(score, phase::game_phase(board));
     endgame_scale::scale_factor(board).apply(score)
 }

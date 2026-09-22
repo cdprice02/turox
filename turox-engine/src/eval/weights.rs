@@ -76,3 +76,15 @@ pub const STORM_RANGE: u8 = 3;
 /// opens) is deliberately deferred, so this stays a single number rather
 /// than a phase-skewed pair.
 pub const BISHOP_PAIR_BONUS: (Score, Score) = (50, 50);
+
+/// `(midgame, endgame)` bonus per rook on a file with no pawn of either
+/// colour: the middle of the standard 8-20cp range, flat across both
+/// phases for the same reason `BISHOP_PAIR_BONUS` is.
+pub const ROOK_OPEN_FILE_BONUS: (Score, Score) = (15, 15);
+
+/// `(midgame, endgame)` bonus per rook on a file with no friendly pawn but
+/// at least one enemy pawn: smaller than [`ROOK_OPEN_FILE_BONUS`].
+///
+/// The middle of the standard 4-10cp range, since an enemy pawn can still
+/// block or be defended along the file.
+pub const ROOK_SEMI_OPEN_FILE_BONUS: (Score, Score) = (7, 7);
