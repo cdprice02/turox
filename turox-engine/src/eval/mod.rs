@@ -24,6 +24,7 @@ mod pawn_structure;
 mod phase;
 pub mod pst;
 mod rook_files;
+mod tempo;
 pub mod weights;
 
 /// A position score in centipawns. Positive favors whoever the score is
@@ -51,9 +52,12 @@ pub type Score = i16;
 /// second table that could drift out of sync with this one.
 pub(crate) use weights::PIECE_VALUES;
 
-/// Material, piece-square, and pawn-structure sum from White's
-/// perspective: positive means White is ahead, regardless of who's
-/// actually to move.
+/// Material, piece-square, and every other term's sum from White's
+/// perspective: positive means White is ahead.
+///
+/// Depends on `board.side_to_move()` only through `tempo`, the one term
+/// that isn't a function of piece placement; every other term here is
+/// placement-only.
 ///
 /// Accumulates a midgame and an endgame term together (packed into one
 /// `phase::Tapered` running total) and blends them into a single `Score`
@@ -91,6 +95,9 @@ pub fn eval_white_pov(board: &Board) -> Score {
     score -= bishop_pair::bishop_pair_score(board, Color::Black);
     score += rook_files::rook_files_score(board, Color::White);
     score -= rook_files::rook_files_score(board, Color::Black);
+    // Not a per-colour pair like every term above: tempo depends on
+    // `board.side_to_move()` directly, see `tempo::tempo_score`'s own doc.
+    score += tempo::tempo_score(board);
     let score = phase::interpolate(score, phase::game_phase(board));
     endgame_scale::scale_factor(board).apply(score)
 }

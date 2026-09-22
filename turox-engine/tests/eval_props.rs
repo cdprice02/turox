@@ -366,6 +366,23 @@ fn total_rook_count(board: &Board) -> i32 {
     count
 }
 
+/// `weights::TEMPO_BONUS`'s midgame-only value, signed by `board`'s side to
+/// move: positive if White, negative if Black.
+///
+/// Unlike every other `naive_*_mg_eg` helper here, this doesn't take a
+/// `color` parameter and isn't meant to be summed as White-minus-Black:
+/// tempo isn't a per-colour contribution, it's a single side-to-move-
+/// dependent term, the same structural shape `eval::tempo` itself has. The
+/// return value is already the net signed contribution, so callers just add
+/// it directly rather than subtracting a Black half from a White half.
+fn naive_tempo_mg_eg(board: &Board) -> (i32, i32) {
+    let magnitude = i32::from(weights::TEMPO_BONUS.0);
+    match board.side_to_move() {
+        Color::White => (magnitude, 0),
+        Color::Black => (-magnitude, 0),
+    }
+}
+
 /// Sums a midgame and an endgame total independently (no packed
 /// representation, unlike `eval::phase::Tapered`) and blends them with the
 /// standard tapered-eval formula, `(mg * (256 - phase) + eg * phase) / 256`:
@@ -396,6 +413,9 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (black_rf_mg, black_rf_eg) = naive_rook_files_mg_eg(board, Color::Black);
     mg += white_rf_mg - black_rf_mg;
     eg += white_rf_eg - black_rf_eg;
+    let (tempo_mg, tempo_eg) = naive_tempo_mg_eg(board);
+    mg += tempo_mg;
+    eg += tempo_eg;
     real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
 }
 
@@ -427,6 +447,8 @@ enum OmittedTerm {
     BishopPair,
     /// Leaves out rook files, so the deviation isolates that instead.
     RookFiles,
+    /// Leaves out tempo, so the deviation isolates that instead.
+    Tempo,
 }
 
 /// Material and PST, plus every term except `omit`, White-relative.
@@ -467,6 +489,12 @@ fn naive_white_pov_omitting(board: &Board, omit: OmittedTerm) -> Score {
         let (black_mg, black_eg) = naive_rook_files_mg_eg(board, Color::Black);
         mg += white_mg - black_mg;
         eg += white_eg - black_eg;
+    }
+
+    if omit != OmittedTerm::Tempo {
+        let (tempo_mg, tempo_eg) = naive_tempo_mg_eg(board);
+        mg += tempo_mg;
+        eg += tempo_eg;
     }
 
     real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
@@ -522,6 +550,13 @@ fn bishop_pair_bound() -> i32 {
 fn rook_files_bound_per_rook() -> i32 {
     max_magnitude(weights::ROOK_OPEN_FILE_BONUS)
         .max(max_magnitude(weights::ROOK_SEMI_OPEN_FILE_BONUS))
+}
+
+/// The most tempo can be worth. Unlike `bishop_pair_bound`, not `2 *`
+/// anything: tempo applies to whichever single side is actually to move,
+/// never both at once, so one magnitude is the whole bound.
+fn tempo_bound() -> i32 {
+    max_magnitude(weights::TEMPO_BONUS)
 }
 
 proptest! {
@@ -689,6 +724,21 @@ proptest! {
             deviation.abs() <= bound,
             "rook-file deviation {deviation} exceeds the {bound}-centipawn bound for {} rooks",
             total_rook_count(&board)
+        );
+    }
+
+    // Same discipline as `bishop_pair_contribution_is_bounded_by_a_fixed_amount`:
+    // tempo is either fully on (for whoever's to move) or fully off (for
+    // whoever isn't), never scaling with anything on the board, so a fixed
+    // bound is the right shape, not one scaled by a piece count.
+    #[test]
+    fn tempo_contribution_is_bounded_by_a_fixed_amount(board in any_board()) {
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::Tempo));
+        let bound = tempo_bound();
+        prop_assert!(
+            deviation.abs() <= bound,
+            "tempo deviation {deviation} exceeds the {bound}-centipawn bound"
         );
     }
 }

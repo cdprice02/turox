@@ -17,17 +17,25 @@ use turox_engine::{Color, Piece, Square};
 
 // Not just an empirical check: `eval_white_pov_is_mirror_antisymmetric` (in
 // `tests/eval_props.rs`) guarantees `eval_white_pov(b) == -eval_white_pov(mirrored(b))`
-// for any board, and the start position is its own mirror (White's setup is
-// exactly Black's, rank-flipped and color-swapped). So eval_white_pov(start) ==
-// -eval_white_pov(mirrored(start)) == -eval_white_pov(start), which forces
-// eval_white_pov(start) == 0 regardless of what's in PST: true for any
-// self-mirror-symmetric position, not a coincidence about these particular
-// table values.
+// for any board, and the start position's *placement* is its own mirror
+// (White's setup is exactly Black's, rank-flipped and color-swapped) even
+// though `mirrored()` also flips side to move, so `mirrored(start)` isn't
+// literally `start` itself. Writing `X` for every placement-only term
+// (material, PST, pawn structure, king safety, bishop pair, rook files)
+// and `T` for `weights::TEMPO_BONUS.0`: `mirrored(start)` has the same `X`
+// (identical placement) but the opposite tempo sign (Black to move there),
+// so the antisymmetry equation is `X + T == -(X - T)`, which reduces to
+// `X == 0` regardless of what's in PST, true for any self-mirror-symmetric
+// placement, not a coincidence about these particular table values.
+// `eval_white_pov(start)` itself is `X + T == T`, not `0`: tempo is the
+// one term the mirror argument doesn't cancel, since it's the one term
+// that isn't placement-dependent.
 #[test]
-fn start_position_is_exactly_zero() {
+fn start_position_scores_only_the_tempo_bonus() {
     let board = Board::start_pos();
-    assert_eq!(eval_white_pov(&board), 0);
-    assert_eq!(evaluate(&board), 0);
+    let expected = weights::TEMPO_BONUS.0;
+    assert_eq!(eval_white_pov(&board), expected);
+    assert_eq!(evaluate(&board), expected);
 }
 
 // Stays exact rather than approximate with PST folded in: a1 (rook), e1
@@ -35,11 +43,20 @@ fn start_position_is_exactly_zero() {
 // 0 in the tables above, so this position's PST term is 0 - 0 = 0. Not
 // pure material alone, though: a1 has no pawn of either colour on its own
 // file, so `eval::rook_files`'s open-file bonus applies on top of the
-// rook's raw value.
+// rook's raw value, and White has the move, so does `eval::tempo`'s bonus.
+//
+// Three mirrored queen pairs (b/c/g files, clear of the rook's a-file and
+// the kings' e-file) pin combined non-pawn material at exactly
+// `TOTAL_PHASE`, the same technique the Bishop pair section above uses, so
+// tempo's own contribution is `weights::TEMPO_BONUS.0` exactly rather than
+// some phase-blended fraction of it that happens to floor to the same
+// value this position's un-pinned phase would have given anyway. The
+// queens' own material and PST cancel between the mirrored pairs
+// regardless, the same argument the kings' cancellation already rests on.
 #[test]
-fn white_up_a_rook_scores_its_value_plus_the_open_file_bonus() {
-    let board = Board::try_from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1").expect("valid FEN");
-    let expected = 500 + weights::ROOK_OPEN_FILE_BONUS.0;
+fn white_up_a_rook_scores_its_value_plus_the_open_file_and_tempo_bonuses() {
+    let board = Board::try_from_fen("1qq1k1q1/8/8/8/8/8/8/RQQ1K1Q1 w - - 0 1").expect("valid FEN");
+    let expected = 500 + weights::ROOK_OPEN_FILE_BONUS.0 + weights::TEMPO_BONUS.0;
     assert_eq!(eval_white_pov(&board), expected);
 
     let swapped = mirrored(&board);
@@ -147,10 +164,20 @@ fn centralization_preference_is_smaller_with_full_material_than_with_low_materia
 // sides, split unevenly here to show the split itself doesn't matter),
 // `game_phase` reads 0 and `eval_white_pov` should reduce to a plain
 // midgame-only sum, with no endgame contribution blended in at all.
+//
+// Every term besides material/PST and tempo cancels out here by
+// construction rather than needing to be summed explicitly: no pawns
+// exist anywhere, so pawn structure is zero outright, and king safety's
+// zone-file penalties (which depend only on whether *any* pawn exists on
+// a file, not on which color) land at the same magnitude for both kings
+// regardless of their squares. Both sides also happen to hold exactly two
+// bishops and two rooks each, so bishop pair and rook files' open-file
+// bonus (every file is open with no pawns anywhere) cancel too. Tempo has
+// no opposite side to cancel against, so it's added explicitly.
 #[test]
 fn full_phase_material_total_matches_pure_midgame_sum() {
     let board = Board::try_from_fen("bbrrqk2/8/8/8/8/8/QK6/NNNNBBRR w - - 0 1").expect("valid FEN");
-    let mut expected: Score = 0;
+    let mut expected: Score = weights::TEMPO_BONUS.0;
     for sq in Square::ALL {
         if let Some(cp) = board.piece_at(sq) {
             let value =
@@ -501,49 +528,62 @@ fn storm_direction_mirrors_for_black_kings_not_just_white_ones() {
 //
 // `only_the_king_has_a_distinct_endgame_table` (below) pins that bishop PST
 // has no separate endgame half, and `weights::BISHOP_PAIR_BONUS` is flat
-// across both phases too, so every position here sums to the same value
-// regardless of what `game_phase` reads for it: no filler army or phase
-// pinning needed, unlike the king-safety section above. Kings sit on their
-// own mirrored squares (e1/e8) in every position so their PST and
-// king-safety contributions cancel out of the total exactly, leaving only
-// material, bishop PST, and the pair bonus.
+// across both phases too, so neither depends on what `game_phase` reads.
+// `weights::TEMPO_BONUS` is not flat, though (`(mg, 0)`, midgame lane
+// only, see the Tempo section below), and every position here has White to
+// move with nothing on the Black side to cancel that term against, so
+// unlike the bishop-pair math, tempo's own contribution *does* depend on
+// phase, and needs it pinned to a known value to stay exact.
 //
-// A bare king facing one or two *same-coloured* bishops is insufficient
-// mating material, and `eval::endgame_scale` correctly scales that straight
-// to zero regardless of what material/PST/pair terms summed to underneath,
-// which would swallow the exact delta these tests want to isolate. Every
-// position below adds a rook to each side (on
-// mirrored squares, so it cancels the same way the kings do) purely to
-// clear `scale_factor`'s very first check and keep the rest of the board
-// scoring for real; the two-bishop positions also use c1/f1, the actual
-// starting squares, so the pair is opposite-coloured and would still score
-// unscaled even without the rook.
+// Three queens per side (mirrored, so their own material/PST cancel the
+// same way the kings' do) lands combined non-pawn material at exactly
+// `TOTAL_PHASE`, pinning `game_phase` to 0 and `weights::TEMPO_BONUS.0`
+// (not some phase-blended fraction of it) as the exact tempo contribution
+// in every position below. Queens also clear `scale_factor`'s very first
+// check on their own, standing in for the plain rook earlier drafts of
+// this section used for that alone: a bare king facing one or two
+// *same-coloured* bishops is insufficient mating material, and
+// `eval::endgame_scale` would otherwise scale that straight to zero
+// regardless of what material/PST/pair/tempo terms summed to underneath,
+// swallowing the exact deltas these tests want to isolate. The two-bishop
+// positions use c1/f1, the actual starting squares, so the pair is
+// opposite-coloured and would still score unscaled even without the
+// queens. Kings sit on their own mirrored squares (e1/e8) in every
+// position so their own PST and king-safety contributions cancel out too,
+// leaving only material, bishop PST, the pair bonus, and tempo.
 
 // A concrete anchor for the mirror-cancellation setup itself, before
-// layering any bishops on: if this ever fails, the rook/king placement
+// layering any bishops on: if this ever fails, the queen/king placement
 // below isn't cancelling the way the rest of this section assumes, which
-// is a different problem than anything bishop-pair-specific.
+// is a different problem than anything bishop-pair-specific. Not literally
+// zero: White is to move, and tempo is the one term nothing here cancels
+// it against.
 #[test]
-fn identical_material_besides_bishops_cancels_to_exactly_zero() {
-    let board = Board::try_from_fen("r3k3/8/8/8/8/8/8/R3K3 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&board), 0);
+fn identical_material_besides_bishops_cancels_to_exactly_the_tempo_bonus() {
+    let board = Board::try_from_fen("qq2k1q1/8/8/8/8/8/8/QQ2K1Q1 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), weights::TEMPO_BONUS.0);
 }
 
 #[test]
 fn a_single_bishop_scores_its_own_material_and_pst_with_no_pair_bonus() {
-    let board = Board::try_from_fen("r3k3/8/8/8/8/8/8/R1B1K3 w - - 0 1").expect("valid FEN");
+    let board = Board::try_from_fen("qq2k1q1/8/8/8/8/8/8/QQB1K1Q1 w - - 0 1").expect("valid FEN");
     let expected = weights::PIECE_VALUES[Piece::Bishop.index()]
-        + pst_value(Color::White, Piece::Bishop, Square::C1);
+        + pst_value(Color::White, Piece::Bishop, Square::C1)
+        + weights::TEMPO_BONUS.0;
     assert_eq!(eval_white_pov(&board), expected);
 }
 
 // Crossing from one bishop to two adds the second bishop's own material and
 // PST, plus the whole pair bonus in the same step: the delta isolates
-// exactly what the extra bishop is worth, bonus included.
+// exactly what the extra bishop is worth, bonus included. Tempo cancels
+// out of the delta regardless of pinning phase to zero (both positions
+// have White to move at the *same* phase either way), but pinning it keeps
+// this section's every position on the same footing rather than leaving
+// one delta-based test as the odd one out.
 #[test]
 fn a_second_bishop_adds_its_own_value_plus_the_pair_bonus() {
-    let one = Board::try_from_fen("r3k3/8/8/8/8/8/8/R1B1K3 w - - 0 1").expect("valid FEN");
-    let two = Board::try_from_fen("r3k3/8/8/8/8/8/8/R1B1KB2 w - - 0 1").expect("valid FEN");
+    let one = Board::try_from_fen("qq2k1q1/8/8/8/8/8/8/QQB1K1Q1 w - - 0 1").expect("valid FEN");
+    let two = Board::try_from_fen("qq2k1q1/8/8/8/8/8/8/QQB1KBQ1 w - - 0 1").expect("valid FEN");
 
     let second_bishop = weights::PIECE_VALUES[Piece::Bishop.index()]
         + pst_value(Color::White, Piece::Bishop, Square::F1);
@@ -556,12 +596,14 @@ fn a_second_bishop_adds_its_own_value_plus_the_pair_bonus() {
 // bonuses into the same side: a `+=` on both colors instead of `+=`/`-=`
 // would break `eval_white_pov_is_mirror_antisymmetric`
 // (`tests/eval_props.rs`) for every mirror-symmetric board, and this pins
-// one concrete instance of that, the same way `start_position_is_exactly_zero`
-// pins the general property for the start position.
+// one concrete instance of that, the same way
+// `start_position_scores_only_the_tempo_bonus` pins the general property
+// for the start position. Left with only the tempo bonus rather than zero,
+// for the same reason that test is: White to move, nothing to cancel it.
 #[test]
-fn bishop_pairs_on_both_sides_cancel_to_zero() {
-    let board = Board::try_from_fen("2b1kb2/8/8/8/8/8/8/2B1KB2 w - - 0 1").expect("valid FEN");
-    assert_eq!(eval_white_pov(&board), 0);
+fn bishop_pairs_on_both_sides_cancel_to_exactly_the_tempo_bonus() {
+    let board = Board::try_from_fen("qqb1kbq1/8/8/8/8/8/8/QQB1KBQ1 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), weights::TEMPO_BONUS.0);
 }
 
 // ---- Rook files ----
@@ -632,6 +674,50 @@ fn a_lone_enemy_pawn_makes_the_file_semi_open_not_closed_for_the_other_color() {
     let expected =
         rook_pst_delta + weights::ROOK_OPEN_FILE_BONUS.0 - weights::ROOK_SEMI_OPEN_FILE_BONUS.0;
     assert_eq!(eval_white_pov(&semi_open) - eval_white_pov(&open), expected);
+}
+
+// ---- Tempo ----
+//
+// `TEMPO_BONUS` packs `(mg, 0)`, midgame lane only, so a bare-kings
+// position (`game_phase`'s pure-endgame extreme) is exactly where to check
+// it evaluates to zero rather than shrinking, and the start position
+// (pure midgame, `game_phase` 0) is exactly where to check its full
+// magnitude and sign together.
+
+// The start position's own non-tempo total is independently already known
+// to be exactly zero (`start_position_scores_only_the_tempo_bonus` above,
+// from mirror self-symmetry), so tempo is the only thing either side of
+// this delta can be: `TEMPO_BONUS` for White to move, `-TEMPO_BONUS` for
+// Black. Written as
+// a delta anyway, matching the issue's own framing, so this pins both
+// magnitude and sign in one assertion rather than two separate ones that
+// each depend on the zero-baseline fact holding.
+#[test]
+fn tempo_favors_whoever_is_actually_to_move() {
+    let white_to_move = Board::start_pos();
+    let black_to_move =
+        Board::try_from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1")
+            .expect("valid FEN");
+
+    let expected = 2 * weights::TEMPO_BONUS.0;
+    assert_eq!(
+        eval_white_pov(&white_to_move) - eval_white_pov(&black_to_move),
+        expected
+    );
+}
+
+// Bare kings on mirrored squares (e1/e8) put every other term at exactly
+// zero (material, PST, and king safety all cancel or vanish with no pawns
+// on the board), and `game_phase` reads its pure-endgame extreme (256)
+// with nothing but two kings on the board, so if tempo leaked into the
+// endgame lane this would be the position to catch it on: either side to
+// move would score something other than zero.
+#[test]
+fn tempo_is_zero_in_a_pure_endgame() {
+    let white_to_move = Board::try_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
+    let black_to_move = Board::try_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&white_to_move), 0);
+    assert_eq!(eval_white_pov(&black_to_move), 0);
 }
 
 // ---- Piece-square table structure ----
@@ -832,8 +918,10 @@ fn only_the_king_has_a_distinct_endgame_table() {
 //
 // Every position below keeps the two kings on asymmetric squares (one
 // centralized, one cornered) rather than mirroring each other: a
-// self-mirror-symmetric position already scores 0 on its own (per
-// `start_position_is_exactly_zero`'s reasoning), which would pass even if
+// self-mirror-symmetric *placement* here is also the bare-kings KK draw
+// signature, which `endgame_scale::scale_factor` forces to exactly zero
+// regardless of what the underlying score (including tempo) would have
+// been on its own, so a mirrored pair of bare kings would pass even if
 // `endgame_scale::scale` did nothing at all. Forcing a real, otherwise
 // nonzero, king-PST or material asymmetry down to exactly 0 is what
 // actually exercises the scale factor.
