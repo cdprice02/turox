@@ -383,6 +383,104 @@ fn naive_tempo_mg_eg(board: &Board) -> (i32, i32) {
     }
 }
 
+/// The longest possible `Square::distance` (Chebyshev) between two squares
+/// on an 8x8 board, reproduced here independently of the private
+/// `eval::outposts::MAX_DISTANCE` (unreachable from this integration-test
+/// crate) for the same reason `king_safety_bound` reproduces `ZONE_FILES`
+/// rather than importing it.
+const MAX_DISTANCE: i32 = 7;
+
+/// Whether a pawn of `color` on `pawn_sq` currently attacks `target`: the
+/// two diagonal-forward deltas, reimplemented directly rather than calling
+/// `move_gen::tables::pawn_attacks`, the same independence
+/// `naive_king_safety_mg_eg` already keeps from `eval::king_safety`.
+fn pawn_attacks_square(color: Color, pawn_sq: Square, target: Square) -> bool {
+    let forward = match color {
+        Color::White => 1,
+        Color::Black => -1,
+    };
+    let (file_diff, rank_diff) = square_delta(pawn_sq, target);
+    file_diff.abs() == 1 && rank_diff == forward
+}
+
+/// Whether a pawn of `color` on `pawn_sq` could ever attack `target` as it
+/// advances, however far: `target` on an adjacent-or-same file, strictly
+/// ahead of `pawn_sq` in `color`'s own forward direction. The mailbox
+/// equivalent of `Bitboard::front_attack_span`, reimplemented rather than
+/// called for the same independence `pawn_attacks_square` keeps.
+fn pawn_could_ever_attack(color: Color, pawn_sq: Square, target: Square) -> bool {
+    let forward = match color {
+        Color::White => 1,
+        Color::Black => -1,
+    };
+    let (file_diff, rank_diff) = square_delta(pawn_sq, target);
+    file_diff.abs() <= 1 && rank_diff * forward > 0
+}
+
+/// `(target's file minus from's file, target's rank minus from's rank)`,
+/// widened to `i32` so the subtraction can go negative: `File`/`Rank`'s own
+/// `index()` returns `usize`, which can't.
+fn square_delta(from: Square, target: Square) -> (i32, i32) {
+    let file_diff = i32::try_from(target.file().index()).expect("file index fits i32")
+        - i32::try_from(from.file().index()).expect("file index fits i32");
+    let rank_diff = i32::try_from(target.rank().index()).expect("rank index fits i32")
+        - i32::try_from(from.rank().index()).expect("rank index fits i32");
+    (file_diff, rank_diff)
+}
+
+/// Mailbox-only reference for `color`'s outpost contribution:
+/// `weights::OUTPOST_BONUS` for each knight or bishop `color` has on a
+/// square some friendly pawn currently defends
+/// (`pawn_attacks_square`) and no enemy pawn can ever reach
+/// (`pawn_could_ever_attack`). Flat across both phases, same reasoning as
+/// `naive_bishop_pair_mg_eg`.
+fn naive_outpost_mg_eg(board: &Board, color: Color) -> (i32, i32) {
+    let mut count = 0i32;
+    for sq in Square::ALL {
+        let Some(cp) = board.piece_at(sq) else {
+            continue;
+        };
+        if cp.color() != color || !matches!(cp.piece(), Piece::Knight | Piece::Bishop) {
+            continue;
+        }
+        let defended = Square::ALL.into_iter().any(|pawn_sq| {
+            matches!(board.piece_at(pawn_sq), Some(pc) if pc.color() == color && pc.piece() == Piece::Pawn)
+                && pawn_attacks_square(color, pawn_sq, sq)
+        });
+        let unreachable = !Square::ALL.into_iter().any(|pawn_sq| {
+            matches!(board.piece_at(pawn_sq), Some(pc) if pc.color() != color && pc.piece() == Piece::Pawn)
+                && pawn_could_ever_attack(color.flip(), pawn_sq, sq)
+        });
+        if defended && unreachable {
+            count += 1;
+        }
+    }
+    let (mg, eg) = mg_eg(weights::OUTPOST_BONUS);
+    (mg * count, eg * count)
+}
+
+/// Mailbox-only reference for `color`'s king-pawn tropism contribution:
+/// `weights::TROPISM_BONUS` once per unit `MAX_DISTANCE - king_sq.distance(sq)`
+/// comes to, summed over every pawn on the board, both colours. `(0, 0)`
+/// if `color` has no king, the same guard `naive_king_safety_mg_eg` uses.
+fn naive_tropism_mg_eg(board: &Board, color: Color) -> (i32, i32) {
+    let Some(king_sq) = Square::ALL
+        .into_iter()
+        .find(|&sq| matches!(board.piece_at(sq), Some(cp) if cp.color() == color && cp.piece() == Piece::King))
+    else {
+        return (0, 0);
+    };
+
+    let mut units = 0i32;
+    for sq in Square::ALL {
+        if matches!(board.piece_at(sq), Some(cp) if cp.piece() == Piece::Pawn) {
+            units += MAX_DISTANCE - i32::from(king_sq.distance(sq));
+        }
+    }
+    let (_, eg_per_unit) = mg_eg(weights::TROPISM_BONUS);
+    (0, eg_per_unit * units)
+}
+
 /// Sums a midgame and an endgame total independently (no packed
 /// representation, unlike `eval::phase::Tapered`) and blends them with the
 /// standard tapered-eval formula, `(mg * (256 - phase) + eg * phase) / 256`:
@@ -416,6 +514,14 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (tempo_mg, tempo_eg) = naive_tempo_mg_eg(board);
     mg += tempo_mg;
     eg += tempo_eg;
+    let (white_op_mg, white_op_eg) = naive_outpost_mg_eg(board, Color::White);
+    let (black_op_mg, black_op_eg) = naive_outpost_mg_eg(board, Color::Black);
+    mg += white_op_mg - black_op_mg;
+    eg += white_op_eg - black_op_eg;
+    let (white_tr_mg, white_tr_eg) = naive_tropism_mg_eg(board, Color::White);
+    let (black_tr_mg, black_tr_eg) = naive_tropism_mg_eg(board, Color::Black);
+    mg += white_tr_mg - black_tr_mg;
+    eg += white_tr_eg - black_tr_eg;
     real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
 }
 
@@ -449,6 +555,11 @@ enum OmittedTerm {
     RookFiles,
     /// Leaves out tempo, so the deviation isolates that instead.
     Tempo,
+    /// Leaves out outposts, so the deviation isolates that instead.
+    Outpost,
+    /// Leaves out king-pawn tropism, so the deviation isolates that
+    /// instead.
+    Tropism,
 }
 
 /// Material and PST, plus every term except `omit`, White-relative.
@@ -495,6 +606,20 @@ fn naive_white_pov_omitting(board: &Board, omit: OmittedTerm) -> Score {
         let (tempo_mg, tempo_eg) = naive_tempo_mg_eg(board);
         mg += tempo_mg;
         eg += tempo_eg;
+    }
+
+    if omit != OmittedTerm::Outpost {
+        let (white_mg, white_eg) = naive_outpost_mg_eg(board, Color::White);
+        let (black_mg, black_eg) = naive_outpost_mg_eg(board, Color::Black);
+        mg += white_mg - black_mg;
+        eg += white_eg - black_eg;
+    }
+
+    if omit != OmittedTerm::Tropism {
+        let (white_mg, white_eg) = naive_tropism_mg_eg(board, Color::White);
+        let (black_mg, black_eg) = naive_tropism_mg_eg(board, Color::Black);
+        mg += white_mg - black_mg;
+        eg += white_eg - black_eg;
     }
 
     real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
@@ -557,6 +682,37 @@ fn rook_files_bound_per_rook() -> i32 {
 /// never both at once, so one magnitude is the whole bound.
 fn tempo_bound() -> i32 {
     max_magnitude(weights::TEMPO_BONUS)
+}
+
+/// The total number of knights and bishops (both colors) on `board`: the
+/// scale the outpost deviation bound below is measured against, the same
+/// discipline `total_rook_count` uses for rook files.
+fn total_minor_count(board: &Board) -> i32 {
+    let mut count = 0i32;
+    for sq in Square::ALL {
+        if matches!(board.piece_at(sq), Some(cp) if matches!(cp.piece(), Piece::Knight | Piece::Bishop))
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// The most the outpost bonus can be worth per minor: flat across both
+/// phases, so unlike `rook_files_bound_per_rook` (which takes the larger
+/// of two different bonuses), there's only the one magnitude to bound
+/// against.
+fn outpost_bound_per_minor() -> i32 {
+    max_magnitude(weights::OUTPOST_BONUS)
+}
+
+/// The most tropism can be worth per pawn: `MAX_DISTANCE` units, the
+/// largest a single pawn can ever contribute (a king standing on the
+/// pawn's own square, geometrically impossible on a real board but not
+/// ruled out by this bound, the same conservative-over-tight choice
+/// `pawn_structure_bound_per_pawn` and `king_safety_bound` make).
+fn tropism_bound_per_pawn() -> i32 {
+    MAX_DISTANCE * max_magnitude(weights::TROPISM_BONUS)
 }
 
 proptest! {
@@ -739,6 +895,36 @@ proptest! {
         prop_assert!(
             deviation.abs() <= bound,
             "tempo deviation {deviation} exceeds the {bound}-centipawn bound"
+        );
+    }
+
+    // Same discipline as `rook_files_contribution_is_bounded_by_rook_count`:
+    // outpost bonus scales with how many knights/bishops qualify, not a
+    // fixed cap.
+    #[test]
+    fn outpost_contribution_is_bounded_by_minor_count(board in any_board()) {
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::Outpost));
+        let bound = outpost_bound_per_minor() * total_minor_count(&board);
+        prop_assert!(
+            deviation.abs() <= bound,
+            "outpost deviation {deviation} exceeds the {bound}-centipawn bound for {} minors",
+            total_minor_count(&board)
+        );
+    }
+
+    // Same discipline as `pawn_structure_contribution_is_bounded_by_pawn_count`:
+    // tropism sums a per-pawn contribution, so its bound scales with pawn
+    // count too.
+    #[test]
+    fn tropism_contribution_is_bounded_by_pawn_count(board in any_board()) {
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::Tropism));
+        let bound = tropism_bound_per_pawn() * total_pawn_count(&board);
+        prop_assert!(
+            deviation.abs() <= bound,
+            "tropism deviation {deviation} exceeds the {bound}-centipawn bound for {} pawns",
+            total_pawn_count(&board)
         );
     }
 }

@@ -15,6 +15,30 @@ use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
 use turox_engine::{Color, Piece, Square};
 
+/// The longest possible `Square::distance` (Chebyshev) between two squares
+/// on an 8x8 board, reproduced here independently of the private
+/// `eval::outposts::MAX_DISTANCE` (unreachable from this integration-test
+/// crate), the same reason `tests/eval_props.rs` reproduces its own copy.
+const MAX_DISTANCE: u8 = 7;
+
+/// One pawn's own net tropism contribution to `eval_white_pov` with White's
+/// king fixed at e1 and Black's at e8, the convention most bare-king-plus-
+/// pawns positions in this file use (the Pawn structure and King-pawn
+/// tropism sections below explain why). Unlike PST, which depends only on
+/// the king's own square and so cancels for free whenever a comparison
+/// holds both kings fixed, tropism depends on the king's distance to
+/// *every pawn*, so it changes whenever a pawn is added, removed, or
+/// moved even with both kings pinned. `weights::TROPISM_BONUS` sums
+/// linearly per pawn, though, so one pawn's own net contribution
+/// (White's tropism from it minus Black's) is exactly what a comparison
+/// that adds or removes that one pawn needs, independent of whatever
+/// other pawns are already on the board.
+fn e1_e8_tropism_delta(sq: Square) -> Score {
+    let white = weights::TROPISM_BONUS.1 * Score::from(MAX_DISTANCE - Square::E1.distance(sq));
+    let black = weights::TROPISM_BONUS.1 * Score::from(MAX_DISTANCE - Square::E8.distance(sq));
+    white - black
+}
+
 // Not just an empirical check: `eval_white_pov_is_mirror_antisymmetric` (in
 // `tests/eval_props.rs`) guarantees `eval_white_pov(b) == -eval_white_pov(mirrored(b))`
 // for any board, and the start position's *placement* is its own mirror
@@ -72,7 +96,9 @@ fn white_up_a_rook_scores_its_value_plus_the_open_file_and_tempo_bonuses() {
 // pawn-structure contribution in both positions; with only two kings and
 // one pawn on the board, `game_phase` reads a pure endgame (256), so
 // `eval_white_pov` reduces to the eg total alone: 100 material + PST +
-// 10 net pawn-structure eg.
+// 10 net pawn-structure eg, plus the lone pawn's own net tropism against
+// the fixed e1/e8 kings (`e1_e8_tropism_delta`'s own doc explains why this
+// doesn't cancel just because both kings stay put).
 #[test]
 fn a_central_pawn_push_changes_pst_but_not_material() {
     // Spelled as the sum rather than as its total: a retune then moves the
@@ -85,13 +111,19 @@ fn a_central_pawn_push_changes_pst_but_not_material() {
     let before = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");
     assert_eq!(
         eval_white_pov(&before),
-        material + pst_value_eg(Color::White, Piece::Pawn, Square::D2) + structure_eg
+        material
+            + pst_value_eg(Color::White, Piece::Pawn, Square::D2)
+            + structure_eg
+            + e1_e8_tropism_delta(Square::D2)
     );
 
     let after = Board::try_from_fen("4k3/8/8/8/3P4/8/8/4K3 w - - 0 1").expect("valid FEN");
     assert_eq!(
         eval_white_pov(&after),
-        material + pst_value_eg(Color::White, Piece::Pawn, Square::D4) + structure_eg
+        material
+            + pst_value_eg(Color::White, Piece::Pawn, Square::D4)
+            + structure_eg
+            + e1_e8_tropism_delta(Square::D4)
     );
 }
 
@@ -215,9 +247,22 @@ fn heavily_overloaded_material_does_not_panic_or_invert_the_score() {
 // checked against hand-computed integers, not approximations.
 //
 // Every pair keeps White's and Black's king on the same square in both
-// positions being compared, so the kings' own (nonzero) piece-square
-// contribution cancels out of the difference and doesn't need to be
-// computed by hand at all; only the pawns being added or moved matter.
+// positions being compared (e1/e8 throughout), so the kings' own (nonzero)
+// piece-square contribution cancels out of the difference and doesn't
+// need to be computed by hand at all; only the pawns being added or moved
+// matter for that part.
+//
+// `eval::outposts`'s tropism term doesn't get the same free cancellation,
+// though, even with both kings held fixed: unlike PST, which depends only
+// on the king's own square, tropism depends on the king's distance to
+// *every pawn* on the board, so it changes whenever a pawn is added,
+// removed, or moved, which is exactly what every test below does.
+// `e1_e8_tropism_delta` computes one pawn's own net contribution (White's
+// tropism from it minus Black's) with both kings pinned at e1/e8; because
+// tropism sums linearly per pawn, adding or removing a single pawn moves
+// the total by exactly that pawn's own delta, independent of whatever
+// other pawns are already on the board, so isolating one pawn's tropism
+// contribution doesn't require recomputing the whole position's total.
 //
 // White's pawn PST (endgame == midgame for pawns; only the king has a
 // separate endgame table) by rank on the d-file: d2 -20, d4 +20, d5 +25,
@@ -227,14 +272,16 @@ fn heavily_overloaded_material_does_not_panic_or_invert_the_score() {
 // read the same way, by working through `pst::pst_value`'s doc.
 
 // One doubled pawn (d2, d4) against a d2-only baseline. Adding d4 changes
-// four independent terms, all attributable to the new pawn alone: its own
+// five independent terms, all attributable to the new pawn alone: its own
 // material and PST (100 + 20), its own isolated penalty (-10, since c/e
 // stay empty in both positions), its own passed bonus (+20, since neither
-// position has any Black pawn anywhere), and one doubled penalty newly
+// position has any Black pawn anywhere), one doubled penalty newly
 // appearing on the d-file now that it holds two pawns instead of one
-// (-20). d2's own isolated/passed status is unchanged by d4 arriving,
-// since isolation only looks at adjacent files and passed status only
-// looks at enemy pawns, neither of which d4 is. 100 + 20 - 10 + 20 - 20 = 110.
+// (-20), and its own net tropism contribution against the fixed e1/e8
+// kings (+2). d2's own isolated/passed/tropism status is unchanged by d4
+// arriving, since isolation only looks at adjacent files, passed status
+// only looks at enemy pawns, and tropism sums linearly per pawn, none of
+// which d4 disturbs. 100 + 20 - 10 + 20 - 20 + 2 = 112.
 #[test]
 fn one_doubled_pawn_scores_material_plus_pst_minus_one_doubled_penalty() {
     let one_pawn = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");
@@ -242,8 +289,9 @@ fn one_doubled_pawn_scores_material_plus_pst_minus_one_doubled_penalty() {
 
     // The new d4 pawn's own material and PST, its own isolated penalty (c and
     // e stay empty in both), its own passed bonus (no Black pawn anywhere),
-    // and the one doubled penalty it creates. Endgame throughout, so the eg
-    // half of each tapered weight is the one that lands.
+    // the one doubled penalty it creates, and its own net tropism against the
+    // fixed e1/e8 kings. Endgame throughout, so the eg half of each tapered
+    // weight is the one that lands.
     assert_eq!(
         eval_white_pov(&two_pawns) - eval_white_pov(&one_pawn),
         weights::PIECE_VALUES[Piece::Pawn.index()]
@@ -251,6 +299,7 @@ fn one_doubled_pawn_scores_material_plus_pst_minus_one_doubled_penalty() {
             + weights::ISOLATED_PENALTY.1
             + weights::PASSED_BONUS.1
             + weights::DOUBLED_PENALTY.1
+            + e1_e8_tropism_delta(Square::D4)
     );
 }
 
@@ -259,9 +308,10 @@ fn one_doubled_pawn_scores_material_plus_pst_minus_one_doubled_penalty() {
 // on the same file (d2, d4, d6) must add exactly one more doubled penalty
 // on top of the two-pawn case above, not a second one and not a
 // proportionally larger one. d6's own contribution: material + PST
-// (100 + 30), its own isolated penalty (-10) and passed bonus (+20), plus
-// the file's doubled count moving from one penalty (two pawns) to two
-// (three pawns), i.e. one more -20. 100 + 30 - 10 + 20 - 20 = 120.
+// (100 + 30), its own isolated penalty (-10) and passed bonus (+20), the
+// file's doubled count moving from one penalty (two pawns) to two (three
+// pawns), i.e. one more -20, and its own net tropism against the fixed
+// e1/e8 kings (-6). 100 + 30 - 10 + 20 - 20 - 6 = 114.
 #[test]
 fn a_third_doubled_pawn_adds_exactly_one_more_doubled_penalty() {
     let two_pawns = Board::try_from_fen("4k3/8/8/8/3P4/8/3P4/4K3 w - - 0 1").expect("valid FEN");
@@ -270,15 +320,17 @@ fn a_third_doubled_pawn_adds_exactly_one_more_doubled_penalty() {
 
     assert_eq!(
         eval_white_pov(&three_pawns) - eval_white_pov(&two_pawns),
-        120
+        120 + e1_e8_tropism_delta(Square::D6)
     );
 
     // And the three-pawn position as a whole scores two doubled penalties'
-    // worth below a single-pawn baseline, not one: 110 + 120 = 230.
+    // worth below a single-pawn baseline, not one (230, the pre-tropism
+    // total the two deltas above would sum to), plus both new pawns' own
+    // net tropism (d4's +2 and d6's -6): 230 - 4 = 226.
     let one_pawn = Board::try_from_fen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").expect("valid FEN");
     assert_eq!(
         eval_white_pov(&three_pawns) - eval_white_pov(&one_pawn),
-        230
+        230 + e1_e8_tropism_delta(Square::D4) + e1_e8_tropism_delta(Square::D6)
     );
 }
 
@@ -291,21 +343,23 @@ fn a_third_doubled_pawn_adds_exactly_one_more_doubled_penalty() {
 // positions, so its own contribution (subtracted from White's POV either
 // way) cancels out of the difference too. Adding c4 removes d4's isolated
 // penalty (it now has a same-color neighbor on an adjacent file) and
-// contributes c4's own material and PST (100 + 0, c4's PST entry is 0);
-// c4 isn't isolated either, since d4 is right next to it. 100 + 0 + 10 = 110.
+// contributes c4's own material and PST (100 + 0, c4's PST entry is 0),
+// plus its own net tropism against the fixed e1/e8 kings (+2); c4 isn't
+// isolated either, since d4 is right next to it. 100 + 0 + 10 + 2 = 112.
 #[test]
 fn adding_an_adjacent_pawn_removes_the_isolated_penalty() {
     let isolated = Board::try_from_fen("4k3/8/8/3p4/3P4/8/8/4K3 w - - 0 1").expect("valid FEN");
     let supported = Board::try_from_fen("4k3/8/8/3p4/2PP4/8/8/4K3 w - - 0 1").expect("valid FEN");
 
-    // The new c4 pawn's own material and PST, plus the isolated penalty d4 no
-    // longer pays now that it has a neighbour. Subtracting the penalty is what
-    // removing it means, which is why this term is a minus.
+    // The new c4 pawn's own material, PST, and net tropism, plus the isolated
+    // penalty d4 no longer pays now that it has a neighbour. Subtracting the
+    // penalty is what removing it means, which is why this term is a minus.
     assert_eq!(
         eval_white_pov(&supported) - eval_white_pov(&isolated),
         weights::PIECE_VALUES[Piece::Pawn.index()]
             + pst_value_eg(Color::White, Piece::Pawn, Square::C4)
             - weights::ISOLATED_PENALTY.1
+            + e1_e8_tropism_delta(Square::C4)
     );
 }
 
@@ -321,7 +375,10 @@ fn adding_an_adjacent_pawn_removes_the_isolated_penalty() {
 // pawn-structure penalty anchor used elsewhere in this file), isolated
 // (-10, no Black pawn on c or e), not passed (0, blocked by White's own
 // d5, which sits on d7's `front_attack_span(Black)`): 100 - 20 - 10 = 70.
-// 20 + 70 = 90.
+// Tropism doesn't care which color a pawn belongs to, only which king is
+// measuring distance to it, so d7 also removes its own net tropism
+// against the fixed e1/e8 kings when it disappears (-(-10), a pawn far
+// from White's king and close to Black's): 20 + 70 + 10 = 100.
 #[test]
 fn a_lone_passed_pawn_loses_its_bonus_once_blocked_on_its_own_file() {
     let clear_path = Board::try_from_fen("4k3/8/8/3P4/8/8/8/4K3 w - - 0 1").expect("valid FEN");
@@ -337,7 +394,7 @@ fn a_lone_passed_pawn_loses_its_bonus_once_blocked_on_its_own_file() {
         + weights::ISOLATED_PENALTY.1;
     assert_eq!(
         eval_white_pov(&clear_path) - eval_white_pov(&blocked),
-        weights::PASSED_BONUS.1 + black_d7
+        weights::PASSED_BONUS.1 + black_d7 - e1_e8_tropism_delta(Square::D7)
     );
 }
 
@@ -350,7 +407,9 @@ fn a_lone_passed_pawn_loses_its_bonus_once_blocked_on_its_own_file() {
 // subtracted: material + PST (100 + 0, e6's entry on Black's own table is
 // 0), isolated (-10, nothing on d or f), not passed (0, blocked by White's
 // d5, which sits on e6's `front_attack_span(Black)` too): 100 - 10 = 90.
-// 20 + 90 = 110.
+// e6 also removes its own net tropism against the fixed e1/e8 kings when
+// it disappears, the same as d7 did in the test above (-(-6)):
+// 20 + 90 + 6 = 116.
 #[test]
 fn an_adjacent_file_blocker_also_disqualifies_a_passed_pawn() {
     let clear_path = Board::try_from_fen("4k3/8/8/3P4/8/8/8/4K3 w - - 0 1").expect("valid FEN");
@@ -359,7 +418,7 @@ fn an_adjacent_file_blocker_also_disqualifies_a_passed_pawn() {
 
     assert_eq!(
         eval_white_pov(&clear_path) - eval_white_pov(&blocked_on_adjacent_file),
-        110
+        110 - e1_e8_tropism_delta(Square::E6)
     );
 }
 
@@ -376,19 +435,22 @@ fn an_adjacent_file_blocker_also_disqualifies_a_passed_pawn() {
 // White), not passed (0, blocked by Black's own d4, on e3's
 // `front_attack_span(White)`): 100 - 10 = 90. Black's own passed bonus
 // disappearing (+20 lost from Black's side, which *raises* White's POV by
-// 20 since it's normally subtracted) adds another 20. 90 + 20 = 110.
+// 20 since it's normally subtracted) adds another 20. e3 also brings its
+// own net tropism against the fixed e1/e8 kings (+6, a pawn close to
+// White's king and far from Black's). 90 + 20 + 6 = 116.
 #[test]
 fn black_passed_pawn_direction_mirrors_white_not_the_other_way_around() {
     let clear_path = Board::try_from_fen("4k3/8/8/8/3p4/8/8/4K3 w - - 0 1").expect("valid FEN");
     let blocked = Board::try_from_fen("4k3/8/8/8/3p4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
 
-    // White's new e3 pawn adds its own material, PST and isolated penalty to
-    // White's POV directly, and is not passed itself, blocked by Black's d4.
-    // Black losing its passed bonus raises White's POV by that much again,
-    // since Black's total is subtracted.
+    // White's new e3 pawn adds its own material, PST, isolated penalty, and
+    // net tropism to White's POV directly, and is not passed itself, blocked
+    // by Black's d4. Black losing its passed bonus raises White's POV by that
+    // much again, since Black's total is subtracted.
     let white_e3 = weights::PIECE_VALUES[Piece::Pawn.index()]
         + pst_value_eg(Color::White, Piece::Pawn, Square::E3)
-        + weights::ISOLATED_PENALTY.1;
+        + weights::ISOLATED_PENALTY.1
+        + e1_e8_tropism_delta(Square::E3);
     assert_eq!(
         eval_white_pov(&blocked) - eval_white_pov(&clear_path),
         white_e3 + weights::PASSED_BONUS.1
@@ -718,6 +780,105 @@ fn tempo_is_zero_in_a_pure_endgame() {
     let black_to_move = Board::try_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1").expect("valid FEN");
     assert_eq!(eval_white_pov(&white_to_move), 0);
     assert_eq!(eval_white_pov(&black_to_move), 0);
+}
+
+// ---- Outposts ----
+//
+// `weights::OUTPOST_BONUS` is flat across both phases, so isolating it
+// only needs the background (pawns, kings) held byte-for-byte identical
+// between the "no minor" and "minor added" positions being compared, the
+// same delta discipline the Rook files section uses. `weights::TEMPO_BONUS`
+// is not flat, though, so three mirrored queen pairs pin phase to exactly
+// zero in every position below (the same technique the Bishop pair and
+// Tempo sections use), keeping tempo's own contribution identical on both
+// sides of every delta regardless of the one extra piece of non-pawn
+// material an added knight brings.
+//
+// White's pawn on c4 defends d5 and no enemy pawn exists anywhere, so d5
+// is a real outpost per `eval::outposts::tests::outpost_bonus_applies_when_a_friendly_pawn_defends_and_no_enemy_pawn_exists`'s
+// own geometry.
+#[test]
+fn a_knight_on_a_defended_unreachable_square_scores_the_outpost_bonus() {
+    let no_knight =
+        Board::try_from_fen("qq2k1q1/8/8/8/2P5/8/8/QQ2K1Q1 w - - 0 1").expect("valid FEN");
+    let knight_on_outpost =
+        Board::try_from_fen("qq2k1q1/8/8/3N4/2P5/8/8/QQ2K1Q1 w - - 0 1").expect("valid FEN");
+
+    let knight_material_and_pst = weights::PIECE_VALUES[Piece::Knight.index()]
+        + pst_value(Color::White, Piece::Knight, Square::D5);
+    let expected = knight_material_and_pst + weights::OUTPOST_BONUS.0;
+    assert_eq!(
+        eval_white_pov(&knight_on_outpost) - eval_white_pov(&no_knight),
+        expected
+    );
+}
+
+// The asymmetric case this repo's `{Color}x{direction}` history says to
+// write explicitly: the same outpost shape as the test above, but for
+// Black (whose pawns defend *downward*, not just White's own case
+// mirrored via `mirrored()`), and subtracted rather than added since it's
+// Black's own bonus. Black's pawn on c5 defends d4, matching
+// `eval::outposts::tests::outpost_bonus_applies_for_black_defended_from_the_opposite_direction`'s
+// own geometry.
+#[test]
+fn a_black_knight_on_a_defended_unreachable_square_scores_the_outpost_bonus() {
+    let no_knight =
+        Board::try_from_fen("qq2k1q1/8/2p5/8/8/8/8/QQ2K1Q1 w - - 0 1").expect("valid FEN");
+    let knight_on_outpost =
+        Board::try_from_fen("qq2k1q1/8/2p5/3n4/8/8/8/QQ2K1Q1 w - - 0 1").expect("valid FEN");
+
+    let knight_material_and_pst = weights::PIECE_VALUES[Piece::Knight.index()]
+        + pst_value(Color::Black, Piece::Knight, Square::D4);
+    let expected = -(knight_material_and_pst + weights::OUTPOST_BONUS.0);
+    assert_eq!(
+        eval_white_pov(&knight_on_outpost) - eval_white_pov(&no_knight),
+        expected
+    );
+}
+
+// ---- King-pawn tropism ----
+//
+// `weights::TROPISM_BONUS` packs `(0, eg)`, endgame lane only, the mirror
+// image of tempo's `(mg, 0)`. A single pawn (d5) with only bare kings
+// otherwise gives `game_phase` its pure-endgame extreme (256) with no
+// filler needed: pawns carry zero phase weight, so `game_phase` never sees
+// anything to blend away from 256 regardless of how many exist, unlike the
+// tempo section above, which needed bare kings specifically because *any*
+// other piece would have pulled phase off that extreme. King safety
+// vanishes entirely here too (its own `eg` half is always zero, the same
+// reason `SHELTER_PENALTY` is `(x, 0)`), leaving only king PST and tropism
+// itself to account for.
+
+#[test]
+fn a_closer_king_scores_more_tropism_in_a_pure_endgame() {
+    let near = Board::try_from_fen("7k/8/8/3P4/8/3K4/8/8 w - - 0 1").expect("valid FEN");
+    let far = Board::try_from_fen("7k/8/8/3P4/8/8/8/K7 w - - 0 1").expect("valid FEN");
+
+    let near_distance = Square::D3.distance(Square::D5);
+    let far_distance = Square::A1.distance(Square::D5);
+    let king_pst_delta = pst_value_eg(Color::White, Piece::King, Square::D3)
+        - pst_value_eg(Color::White, Piece::King, Square::A1);
+    let tropism_delta = weights::TROPISM_BONUS.1 * Score::from(far_distance - near_distance);
+    assert_eq!(
+        eval_white_pov(&near) - eval_white_pov(&far),
+        king_pst_delta + tropism_delta
+    );
+}
+
+// Same phase-pinning as the Outposts section above (three mirrored queen
+// pairs, `game_phase` exactly 0): if tropism leaked into the midgame lane,
+// this delta would carry an extra term the expected value below doesn't
+// account for. D2 and H1 are chosen to sit at different distances from d5
+// (3 and 4), so a leaked contribution wouldn't happen to cancel by
+// coincidence the way equal distances could.
+#[test]
+fn tropism_does_not_leak_into_the_midgame_lane() {
+    let near = Board::try_from_fen("1qq1k1q1/8/8/3P4/8/8/3K4/1QQ3Q1 w - - 0 1").expect("valid FEN");
+    let far = Board::try_from_fen("1qq1k1q1/8/8/3P4/8/8/8/1QQ3QK w - - 0 1").expect("valid FEN");
+
+    let expected = pst_value(Color::White, Piece::King, Square::D2)
+        - pst_value(Color::White, Piece::King, Square::H1);
+    assert_eq!(eval_white_pov(&near) - eval_white_pov(&far), expected);
 }
 
 // ---- Piece-square table structure ----

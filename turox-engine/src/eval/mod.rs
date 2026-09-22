@@ -20,6 +20,7 @@ use crate::Piece;
 mod bishop_pair;
 pub mod endgame_scale;
 mod king_safety;
+mod outposts;
 mod pawn_structure;
 mod phase;
 pub mod pst;
@@ -95,6 +96,10 @@ pub fn eval_white_pov(board: &Board) -> Score {
     score -= bishop_pair::bishop_pair_score(board, Color::Black);
     score += rook_files::rook_files_score(board, Color::White);
     score -= rook_files::rook_files_score(board, Color::Black);
+    score += outposts::outpost_score(board, Color::White);
+    score -= outposts::outpost_score(board, Color::Black);
+    score += outposts::king_pawn_tropism_score(board, Color::White);
+    score -= outposts::king_pawn_tropism_score(board, Color::Black);
     // Not a per-colour pair like every term above: tempo depends on
     // `board.side_to_move()` directly, see `tempo::tempo_score`'s own doc.
     score += tempo::tempo_score(board);
