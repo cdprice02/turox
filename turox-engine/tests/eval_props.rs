@@ -283,6 +283,25 @@ fn naive_king_safety_mg_eg(board: &Board, color: Color) -> (i32, i32) {
     (mg, 0)
 }
 
+/// Mailbox-only reference for `color`'s bishop-pair contribution:
+/// `weights::BISHOP_PAIR_BONUS` if `color` has two or more bishops on the
+/// board, zero otherwise. Flat across both phases, so this returns the
+/// same `mg`/`eg` pair whenever it applies, for the same reason
+/// `naive_king_safety_mg_eg` always returns `0` for its own `eg` half.
+fn naive_bishop_pair_mg_eg(board: &Board, color: Color) -> (i32, i32) {
+    let count = Square::ALL
+        .into_iter()
+        .filter(|&sq| {
+            matches!(board.piece_at(sq), Some(cp) if cp.color() == color && cp.piece() == Piece::Bishop)
+        })
+        .count();
+    if count >= 2 {
+        mg_eg(weights::BISHOP_PAIR_BONUS)
+    } else {
+        (0, 0)
+    }
+}
+
 /// The total number of pawns (both colors) on `board`: the scale the
 /// pawn-structure deviation bound below is measured against.
 fn total_pawn_count(board: &Board) -> i32 {
@@ -317,6 +336,10 @@ fn naive_eval_white_pov(board: &Board) -> Score {
     let (black_ks_mg, black_ks_eg) = naive_king_safety_mg_eg(board, Color::Black);
     mg += white_ks_mg - black_ks_mg;
     eg += white_ks_eg - black_ks_eg;
+    let (white_bp_mg, white_bp_eg) = naive_bishop_pair_mg_eg(board, Color::White);
+    let (black_bp_mg, black_bp_eg) = naive_bishop_pair_mg_eg(board, Color::Black);
+    mg += white_bp_mg - black_bp_mg;
+    eg += white_bp_eg - black_bp_eg;
     real_scale_factor(board).apply(blend(mg, eg, naive_game_phase(board)))
 }
 
@@ -344,6 +367,8 @@ enum OmittedTerm {
     PawnStructure,
     /// Leaves out king safety, so the deviation isolates that instead.
     KingSafety,
+    /// Leaves out the bishop pair, so the deviation isolates that instead.
+    BishopPair,
 }
 
 /// Material and PST, plus every term except `omit`, White-relative.
@@ -368,6 +393,13 @@ fn naive_white_pov_omitting(board: &Board, omit: OmittedTerm) -> Score {
     if omit != OmittedTerm::KingSafety {
         let (white_mg, white_eg) = naive_king_safety_mg_eg(board, Color::White);
         let (black_mg, black_eg) = naive_king_safety_mg_eg(board, Color::Black);
+        mg += white_mg - black_mg;
+        eg += white_eg - black_eg;
+    }
+
+    if omit != OmittedTerm::BishopPair {
+        let (white_mg, white_eg) = naive_bishop_pair_mg_eg(board, Color::White);
+        let (black_mg, black_eg) = naive_bishop_pair_mg_eg(board, Color::Black);
         mg += white_mg - black_mg;
         eg += white_eg - black_eg;
     }
@@ -407,6 +439,14 @@ fn king_safety_bound() -> i32 {
         + ZONE_FILES * i32::from(weights::STORM_RANGE) * max_magnitude(weights::STORM_PENALTY);
     2 * per_king
 }
+/// The most the bishop pair can be worth, for both sides together: each
+/// side either has the flat bonus or doesn't, so this is a fixed amount
+/// rather than one that scales with anything on the board, the same
+/// discipline `king_safety_bound` uses.
+fn bishop_pair_bound() -> i32 {
+    2 * max_magnitude(weights::BISHOP_PAIR_BONUS)
+}
+
 proptest! {
     #[test]
     fn eval_white_pov_matches_naive_reference(board in any_board()) {
@@ -539,6 +579,22 @@ proptest! {
         prop_assert!(
             deviation.abs() <= bound,
             "king-safety deviation {deviation} exceeds the {bound}-centipawn bound"
+        );
+    }
+
+    // Same discipline as the two bounds above, but for a term that's either
+    // fully on or fully off per side rather than scaling with a count: this
+    // is what would catch a per-bishop bonus (stacking past `BISHOP_PAIR_BONUS`
+    // for a third or fourth bishop) that the concrete FEN tests in
+    // `tests/eval.rs` might not happen to construct.
+    #[test]
+    fn bishop_pair_contribution_is_bounded_by_a_fixed_amount(board in any_board()) {
+        let deviation = i32::from(eval_white_pov(&board))
+            - i32::from(naive_white_pov_omitting(&board, OmittedTerm::BishopPair));
+        let bound = bishop_pair_bound();
+        prop_assert!(
+            deviation.abs() <= bound,
+            "bishop-pair deviation {deviation} exceeds the {bound}-centipawn bound"
         );
     }
 }

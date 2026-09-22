@@ -68,3 +68,11 @@ pub const STORM_PENALTY: (Score, Score) = (-10, 0);
 /// further back than this has not threatened anything yet, and every game
 /// starts with pawns there.
 pub const STORM_RANGE: u8 = 3;
+
+/// `(midgame, endgame)` bonus for holding both bishops: Kaufman's widely
+/// cited figure of roughly half a pawn, flat across both phases.
+///
+/// The pawn-count-sensitive refinement (bishops gain more as the position
+/// opens) is deliberately deferred, so this stays a single number rather
+/// than a phase-skewed pair.
+pub const BISHOP_PAIR_BONUS: (Score, Score) = (50, 50);

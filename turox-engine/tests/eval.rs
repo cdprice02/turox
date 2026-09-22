@@ -494,6 +494,73 @@ fn storm_direction_mirrors_for_black_kings_not_just_white_ones() {
     assert_eq!(eval_white_pov(&close) - eval_white_pov(&far), expected);
 }
 
+// ---- Bishop pair ----
+//
+// `only_the_king_has_a_distinct_endgame_table` (below) pins that bishop PST
+// has no separate endgame half, and `weights::BISHOP_PAIR_BONUS` is flat
+// across both phases too, so every position here sums to the same value
+// regardless of what `game_phase` reads for it: no filler army or phase
+// pinning needed, unlike the king-safety section above. Kings sit on their
+// own mirrored squares (e1/e8) in every position so their PST and
+// king-safety contributions cancel out of the total exactly, leaving only
+// material, bishop PST, and the pair bonus.
+//
+// A bare king facing one or two *same-coloured* bishops is insufficient
+// mating material, and `eval::endgame_scale` correctly scales that straight
+// to zero regardless of what material/PST/pair terms summed to underneath,
+// which would swallow the exact delta these tests want to isolate. Every
+// position below adds a rook to each side (on
+// mirrored squares, so it cancels the same way the kings do) purely to
+// clear `scale_factor`'s very first check and keep the rest of the board
+// scoring for real; the two-bishop positions also use c1/f1, the actual
+// starting squares, so the pair is opposite-coloured and would still score
+// unscaled even without the rook.
+
+// A concrete anchor for the mirror-cancellation setup itself, before
+// layering any bishops on: if this ever fails, the rook/king placement
+// below isn't cancelling the way the rest of this section assumes, which
+// is a different problem than anything bishop-pair-specific.
+#[test]
+fn identical_material_besides_bishops_cancels_to_exactly_zero() {
+    let board = Board::try_from_fen("r3k3/8/8/8/8/8/8/R3K3 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), 0);
+}
+
+#[test]
+fn a_single_bishop_scores_its_own_material_and_pst_with_no_pair_bonus() {
+    let board = Board::try_from_fen("r3k3/8/8/8/8/8/8/R1B1K3 w - - 0 1").expect("valid FEN");
+    let expected = weights::PIECE_VALUES[Piece::Bishop.index()]
+        + pst_value(Color::White, Piece::Bishop, Square::C1);
+    assert_eq!(eval_white_pov(&board), expected);
+}
+
+// Crossing from one bishop to two adds the second bishop's own material and
+// PST, plus the whole pair bonus in the same step: the delta isolates
+// exactly what the extra bishop is worth, bonus included.
+#[test]
+fn a_second_bishop_adds_its_own_value_plus_the_pair_bonus() {
+    let one = Board::try_from_fen("r3k3/8/8/8/8/8/8/R1B1K3 w - - 0 1").expect("valid FEN");
+    let two = Board::try_from_fen("r3k3/8/8/8/8/8/8/R1B1KB2 w - - 0 1").expect("valid FEN");
+
+    let second_bishop = weights::PIECE_VALUES[Piece::Bishop.index()]
+        + pst_value(Color::White, Piece::Bishop, Square::F1);
+    let expected = second_bishop + weights::BISHOP_PAIR_BONUS.0;
+    assert_eq!(eval_white_pov(&two) - eval_white_pov(&one), expected);
+}
+
+// Both sides having the pair must cancel out of `eval_white_pov`'s
+// White-minus-Black subtraction, not double-count by summing both sides'
+// bonuses into the same side: a `+=` on both colors instead of `+=`/`-=`
+// would break `eval_white_pov_is_mirror_antisymmetric`
+// (`tests/eval_props.rs`) for every mirror-symmetric board, and this pins
+// one concrete instance of that, the same way `start_position_is_exactly_zero`
+// pins the general property for the start position.
+#[test]
+fn bishop_pairs_on_both_sides_cancel_to_zero() {
+    let board = Board::try_from_fen("2b1kb2/8/8/8/8/8/8/2B1KB2 w - - 0 1").expect("valid FEN");
+    assert_eq!(eval_white_pov(&board), 0);
+}
+
 // ---- Piece-square table structure ----
 //
 // These pin the *shape* of the tables rather than any value in them, which is

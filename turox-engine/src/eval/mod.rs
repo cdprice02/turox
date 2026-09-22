@@ -17,6 +17,7 @@ use crate::eval::pst::{pst_value, pst_value_eg};
 use crate::types::Color;
 use crate::Piece;
 
+mod bishop_pair;
 pub mod endgame_scale;
 mod king_safety;
 mod pawn_structure;
@@ -85,6 +86,8 @@ pub fn eval_white_pov(board: &Board) -> Score {
     score -= pawn_structure::pawn_structure_score(board, Color::Black);
     score += king_safety::king_safety_score(board, Color::White);
     score -= king_safety::king_safety_score(board, Color::Black);
+    score += bishop_pair::bishop_pair_score(board, Color::White);
+    score -= bishop_pair::bishop_pair_score(board, Color::Black);
     let score = phase::interpolate(score, phase::game_phase(board));
     endgame_scale::scale_factor(board).apply(score)
 }
