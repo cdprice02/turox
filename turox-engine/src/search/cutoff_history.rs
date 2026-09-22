@@ -101,20 +101,13 @@ impl CutoffHistory {
     /// Shared by [`Self::record_cutoff`] and [`Self::record_no_cutoff`]: same cell lookup,
     /// opposite sign on `bonus`, and the same history-gravity formula on both.
     ///
-    /// `new = current + bonus - current * |bonus| / MAX_MAGNITUDE`, the standard gravity
-    /// update (Stockfish and others use exactly this shape). The subtracted term is
-    /// `current` scaled by how large a signal `bonus` itself is, which has two different
-    /// effects depending on which way `bonus` pushes relative to where `current` already
-    /// sits: applying the *same-sign* bonus repeatedly damps each successive raise, since
-    /// the subtracted term grows right along with `current`, and the two nearly cancel once
-    /// `current` is near `bonus`'s own magnitude (exactly cancelling at `current ==
-    /// MAX_MAGNITUDE` for a `bonus` of the same sign, whatever its size). An *opposite-sign*
-    /// bonus (a cell deep in malus territory suddenly causing a cutoff) instead adds the
-    /// subtracted term on top of `bonus`, correcting harder the more wrong the old value
-    /// already looks: exactly the "a surprising cutoff moves the score a lot" property this
-    /// exists for, not merely "undamped." Computed in `i32`: `current * bonus.abs()` can
-    /// reach `MAX_MAGNITUDE * Score::MAX`, well past what `Score` (`i16`) holds, before the
-    /// division brings it back down.
+    /// The standard gravity update (Stockfish and others use this exact shape): damps a
+    /// same-direction bonus as `current` approaches the ceiling, but a bonus reversing a
+    /// cell from the *opposite* extreme (a deeply malused cell suddenly causing a cutoff)
+    /// moves it *more* than the same bonus would move a fresh cell, not less -- the
+    /// surprising-reversal case this exists for. Computed in `i32`: `current * bonus.abs()`
+    /// can reach `MAX_MAGNITUDE * Score::MAX`, well past what `Score` (`i16`) holds, before
+    /// the division brings it back down.
     #[expect(
         clippy::expect_used,
         reason = "updated is clamped to ±MAX_MAGNITUDE on the line just above, and MAX_MAGNITUDE \
