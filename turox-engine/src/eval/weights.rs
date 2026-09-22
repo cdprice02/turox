@@ -98,3 +98,25 @@ pub const ROOK_SEMI_OPEN_FILE_BONUS: (Score, Score) = (7, 7);
 /// shrinking, the same discipline `SHELTER_PENALTY` uses for the same
 /// reason.
 pub const TEMPO_BONUS: (Score, Score) = (10, 0);
+
+/// `(midgame, endgame)` bonus per knight or bishop standing on an outpost
+/// square: defended by a friendly pawn, never attackable by an enemy one.
+///
+/// Flat across both phases, the same discipline `BISHOP_PAIR_BONUS` and
+/// `ROOK_OPEN_FILE_BONUS` use: a well-anchored minor is valuable
+/// throughout the game, not particularly more so in either lane.
+pub const OUTPOST_BONUS: (Score, Score) = (20, 20);
+
+/// Endgame-lane-only bonus per unit of king-pawn closeness.
+///
+/// One unit per step `Square::distance` (Chebyshev) shrinks below the
+/// board's own maximum (`eval::outposts::MAX_DISTANCE`), summed over every
+/// pawn on the board, both colours.
+///
+/// Midgame lane is zero for the same reason `TEMPO_BONUS`'s endgame lane
+/// is: king safety (a midgame term, about the king being attacked) and
+/// tropism (an endgame term, about the king being useful) pull in
+/// opposite directions on purpose, and mixing tropism into the midgame
+/// lane would fight king safety exactly where a midgame king is supposed
+/// to stay put behind its pawns rather than march toward them.
+pub const TROPISM_BONUS: (Score, Score) = (0, 2);
