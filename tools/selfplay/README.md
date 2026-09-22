@@ -26,8 +26,11 @@ cd fastchess
 make -j
 ```
 
-Regenerating the opening suite additionally needs `python-chess`
-(`pip install chess`). Running a match does not: `openings.epd` is checked in.
+Regenerating the opening suite additionally needs `tools/bookgen`'s own
+`generate-openings` binary, run from `tools/bookgen` (it isn't a workspace
+member, so `cargo` there needs no `-p` flag):
+`cargo run --release --bin generate-openings`. Running a match does not:
+`openings.epd` is checked in.
 
 ## Running a match
 
@@ -120,12 +123,18 @@ is written against.
 `openings.epd` holds 2494 distinct start positions. Every round of a match
 plays one of them twice, once with each engine as White.
 
-This is not a nicety. turox has no opening book and its search is
-deterministic given a fixed budget: from the same position with the same node
-budget it plays the same game every time, move for move. A match seeded from
-`startpos` would replay one game for as long as it was left running and report
-a confident-looking verdict resting on a single sample. Under a wall-clock
-time control the games are not bit-identical, since the deadline lands at
+This is not a nicety. `sprt.sh` runs with `--book false` by default
+specifically so a match measures the search under test, not the book's own
+move choices, so turox having an opening book doesn't make this suite any
+less necessary. Root-move-order tie-breaking (the `Randomize` UCI option,
+seeded) means two runs from the same position aren't always bit-identical
+either, but it only breaks ties among equally-scored candidates, not the
+search itself: from the same position with the same node budget and seed,
+turox still plays close to the same game every time. A match seeded from
+`startpos` alone would still replay one game, or a small cluster of
+near-identical ones, for as long as it ran, and report a confident-looking
+verdict resting on essentially a single sample. Under a wall-clock time
+control the games are not bit-identical either, since the deadline lands at
 different points, but they are still heavily correlated for the same reason.
 
 fastchess wraps around the book (`index % book_size`) once the openings run
@@ -135,7 +144,7 @@ That ceiling is 2494 rounds, or 4988 games.
 The positions come from
 [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings),
 released under CC0 1.0 (public domain dedication), pinned to a single upstream
-commit in `generate-openings.py`. That data set is a list of named opening
+commit in `tools/bookgen/src/bin/generate-openings.rs`. That data set is a list of named opening
 lines as move text; the generator replays each one, keeps the lines that are 4
 to 12 plies long, drops transposed duplicates and anything that starts one
 side more than a pawn down, and writes the resulting positions as EPD.
@@ -152,8 +161,8 @@ approximately.
 To regenerate:
 
 ```sh
-pip install chess
-python3 tools/selfplay/generate-openings.py
+cd tools/bookgen
+cargo run --release --bin generate-openings
 ```
 
 ### 10+0.1 by default

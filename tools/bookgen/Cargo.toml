@@ -17,3 +17,8 @@ rust-version = "1.87"
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
 turox-engine = { path = "../../turox-engine" }
+# Only `src/bin/generate-openings.rs` fetches over HTTP; the default
+# rustls/webpki-roots features avoid a system OpenSSL dependency, which
+# matters more here than usual since this tool runs across the several
+# machines noted in the top-level CLAUDE.md.
+ureq = "3"

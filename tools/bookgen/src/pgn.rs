@@ -228,6 +228,17 @@ fn strip_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+/// [`parse_movetext`], taking a plain `&str` instead of the `VecDeque<char>`
+/// the header parser already has on hand: the public entry point for a
+/// caller with a bare movetext string and no surrounding header block to
+/// parse first (`tools/bookgen/src/bin/generate-openings.rs`'s per-line
+/// opening text, notably, which never has PGN headers of its own).
+#[must_use]
+pub fn tokenize_movetext(text: &str) -> Vec<String> {
+    let mut rest: VecDeque<char> = text.chars().collect();
+    parse_movetext(&mut rest)
+}
+
 /// Tokenizes one game's movetext (everything after its header block, up to
 /// its own result token, the next game's `[`, or the end of the text),
 /// discarding everything that isn't a SAN move token: move numbers,
