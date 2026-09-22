@@ -93,12 +93,12 @@ jobs:
       # `tools/bookgen` opts itself out of the workspace the same way
       # `turox-fuzz` does, for the same reason it needs its own check here:
       # every `--workspace` command above skips it, so nothing else would
-      # notice a signature change in turox-engine breaking it. `check`, not
-      # `test`: its own tests are written ahead of its implementation
-      # (opening-book generation) and are expected to fail until that
-      # lands, so gating merges on them passing would block on the wrong
-      # thing; compiling is what this step exists to catch.
-      - name: Check that the opening-book generator still compiles
+      # notice a signature change in turox-engine breaking it. `check`,
+      # not `test`: compiling is what this step exists to catch; whether
+      # to also run its (now-passing) test suite here is a separate CI
+      # scope decision this step has never made, not something either
+      # binary under `tools/bookgen` requires.
+      - name: Check that tools/bookgen still compiles
         run: cargo check --locked --manifest-path tools/bookgen/Cargo.toml
 
   lint-and-format:
