@@ -61,7 +61,7 @@ fn naive_negamax(board: &Board, depth: u8, ply: u8, history: &mut Vec<u64>) -> S
         };
     }
     if depth == 0 {
-        return naive_quiescence(board, ply, MAX_QUIESCENCE_DEPTH);
+        return naive_quiescence(board, ply, MAX_QUIESCENCE_DEPTH, history);
     }
     history.push(board.hash());
     let mut best = Score::MIN;
@@ -85,9 +85,15 @@ fn naive_negamax(board: &Board, depth: u8, ply: u8, history: &mut Vec<u64>) -> S
 /// pat, with no `qdepth` cap on how far that goes: `ply` (distance from the
 /// true search root, not from this function's own entry) is what an empty
 /// evasion list scores against, the same formula `naive_negamax` uses for
-/// its own terminal case.
-fn naive_quiescence(board: &Board, ply: u8, qdepth: u8) -> Score {
+/// its own terminal case. Checks `history` for a draw on the evasion path
+/// only, the same scope the real `quiescence` checks it in: captures and
+/// promotions can never repeat a position (both are irreversible), so
+/// there's nothing for the capture path to ever find.
+fn naive_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64>) -> Score {
     if in_check(board, board.side_to_move()) {
+        if draw::is_draw(board, history, board.hash()) {
+            return 0;
+        }
         let evasions = legal_moves(board);
         if evasions.is_empty() {
             return Score::from(ply) - MATE;
@@ -95,7 +101,12 @@ fn naive_quiescence(board: &Board, ply: u8, qdepth: u8) -> Score {
         return evasions
             .as_slice()
             .iter()
-            .map(|&m| -naive_quiescence(&board.make_move(m), ply + 1, qdepth))
+            .map(|&m| {
+                history.push(board.hash());
+                let score = -naive_quiescence(&board.make_move(m), ply + 1, qdepth, history);
+                history.pop();
+                score
+            })
             .max()
             .expect("evasions is non-empty");
     }
@@ -105,7 +116,9 @@ fn naive_quiescence(board: &Board, ply: u8, qdepth: u8) -> Score {
         let mut captures = legal_moves(board);
         captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
         for &m in captures.as_slice() {
-            let score = -naive_quiescence(&board.make_move(m), ply + 1, qdepth - 1);
+            history.push(board.hash());
+            let score = -naive_quiescence(&board.make_move(m), ply + 1, qdepth - 1, history);
+            history.pop();
             best = best.max(score);
         }
     }
