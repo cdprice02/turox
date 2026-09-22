@@ -90,3 +90,15 @@ position, which falls through to `Search` exactly as it does today.
 _Avoid_: In book/in-book (adjective form reads ambiguously next to
 "in-book position"; "book hit" is the noun this codebase uses for the
 event).
+
+**Move-identical**:
+The property a refactor claims: two builds report the same node count *and*
+the same principal variation at every depth of the fixed position set
+`tools/treeshape/measure.py` searches. Node counts alone are not the property,
+because an inverted or reordered comparison walks the same tree, counts the
+same nodes, and returns a different move; the principal variation is what
+makes a changed conclusion visible. Says nothing about speed, which is
+measured separately and is allowed to differ: "move-identical but slower" is a
+real and useful verdict.
+_Avoid_: Behavior-preserving (reads as covering timing too, which this
+deliberately excludes), equivalent, no-op.

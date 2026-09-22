@@ -19,6 +19,9 @@ why each of these exists; this file is the lookup.
 | bench             | `cargo bench -p turox-engine`                                         |
 | bench vs baseline | `cargo bench -p turox-engine -- --save-baseline before`, then `-- --baseline before` |
 | self-play A/B     | `tools/selfplay/sprt.sh --base main --test my-branch`                 |
+| refactor gate     | `tools/refactor-gate.sh --base main`                                  |
+| tree shape, EBF   | `tools/treeshape/measure.py --ref main --ref HEAD --depth 7`          |
+| profile           | `cargo build --profile samply -p turox-cli`, then `samply record target/samply/turox-cli` |
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
 | mutants, scoped   | `cargo mutants -p turox-engine --file '**/NAME.rs'`                    |
 | coverage          | `cargo llvm-cov --workspace`                                          |
@@ -36,6 +39,26 @@ why each of these exists; this file is the lookup.
 - **Benchmarks say nothing about playing strength.** A search or eval
   change needs `tools/selfplay/sprt.sh` for a pass/fail verdict from
   actual games; `cargo bench` only answers whether it got faster.
+
+  **A refactor is the exception**, and `tools/refactor-gate.sh` is what
+  decides whether it qualifies. A change that is move-identical (same node
+  counts and same principal variation, see `CONTEXT.md`) at unchanged
+  throughput cannot have changed playing strength, because same moves at the
+  same speed is the same engine, so a match would be measuring nothing. Run
+  the gate; it names the outcome and tells you when a match is still owed.
+  Reach for the SPRT directly whenever what the engine *plays* is meant to
+  change.
+
+- **Neither instrument sees a small speed regression, so do not claim one
+  did.** The throughput comparison's confidence interval spans roughly ten to
+  fifteen percent on this hardware, measured by comparing a tree against
+  itself; criterion's own defaults are worse still and will report a
+  significant "improvement" between identical builds. An SPRT at the usual
+  bounds is no better placed: it is built to detect about ten Elo, and a few
+  percent of speed is worth a few Elo. Both catch a gross regression, which is
+  the kind a refactor actually causes; a subtle one is out of reach either
+  way. Run the gate on an otherwise idle machine, and re-run any reported
+  regression before believing it.
 - **CI never runs benchmarks on a PR**, only `cargo bench --no-run` to
   keep them compiling, because shared runners aren't consistent enough
   run to run for the numbers to mean anything. A weekly scheduled job
