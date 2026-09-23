@@ -298,6 +298,11 @@ struct LoopCtx {
     alpha: Score,
     /// Upper bound. Never modified: a cutoff is `alpha >= beta`.
     beta: Score,
+    /// This node's remaining depth. The loop searches children at `depth - 1`
+    /// normally, and shallower when a [`Verdict::Reduce`] asks it to, which is
+    /// why the loop needs the number rather than leaving it captured by the
+    /// caller's closure.
+    depth: u8,
     /// Whether this node was reached via a genuinely wide window from its
     /// parent (the root always is; a child is only if its parent was *and*
     /// it's either the parent's first move or the target of a re-search).
@@ -308,6 +313,59 @@ struct LoopCtx {
     /// all -- a cut node's local best move is bookkeeping for alpha-beta, not
     /// part of the real principal variation.
     is_pv: bool,
+}
+
+/// What the caller decides about one move, asked as the loop reaches it.
+///
+/// The loop owns the mechanism (windowing, the re-searches, the bookkeeping)
+/// and this is the policy: which moves are worth what. Every pruning and
+/// reduction technique in the backlog is expressible as one of these four,
+/// which is the reason the seam has this shape rather than a wider closure
+/// signature that grows a parameter per technique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Only outside `cfg(test)`: the tests below construct every variant to prove
+// the loop handles it, which is the point of writing them before any policy
+// exists. In a normal build nothing returns these yet, and this expectation
+// fails the build as soon as something does, so it removes itself.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the policy returning these arrives with the first pruning technique; the loop's handling of them is already tested"
+    )
+)]
+enum Verdict {
+    /// Search it normally, at full depth.
+    Search,
+    /// Search it `n` plies shallower, and re-search at full depth if the
+    /// shallow result beats alpha. Late move reductions.
+    Reduce(u8),
+    /// Skip it entirely. Futility pruning.
+    Skip,
+    /// Stop the loop here, searching nothing further. Late move pruning.
+    Stop,
+}
+
+/// What [`Verdict`] is decided against.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by the policy that arrives with the first pruning technique; this expectation fails the build once one does"
+    )
+)]
+struct MoveCtx {
+    /// This move's index in the list, which is what a reduction table and a
+    /// late-move-pruning threshold are both indexed by.
+    index: usize,
+    /// Alpha *as the loop currently holds it*, raised by every move already
+    /// searched. Futility's condition reads this, which is why the decision
+    /// cannot be hoisted above the loop: the entry alpha would prune too
+    /// little, and a stale one too much.
+    alpha: Score,
+    /// How many moves have actually been searched, as opposed to reached.
+    /// Differs from `index` as soon as anything is skipped.
+    searched: usize,
 }
 
 /// What [`Search::negamax`] and [`Search::quiescence`] both return: the
@@ -958,34 +1016,81 @@ impl<'a> Search<'a> {
     /// Generic over `F` rather than taking `&mut dyn FnMut`: this is the
     /// innermost loop of the entire engine, so it monomorphizes per call
     /// site and inlines exactly as hand-written copies would.
-    fn alpha_beta_loop<F>(
+    fn alpha_beta_loop<D, F>(
         &mut self,
         moves: &MoveList,
         ctx: LoopCtx,
+        mut decide: D,
         mut search_child: F,
     ) -> LoopOutcome
     where
-        F: FnMut(&mut Self, Move, Score, Score, bool) -> Option<Score>,
+        D: FnMut(&mut Self, Move, &MoveCtx) -> Verdict,
+        F: FnMut(&mut Self, Move, Score, Score, bool, u8) -> Option<Score>,
     {
         let LoopCtx {
             ply,
             mut alpha,
             beta,
+            depth,
             is_pv: node_is_pv,
         } = ctx;
 
         let mut max = Score::MIN;
         let mut best_move = None;
         let mut cutoff_index = None;
+        let mut searched = 0usize;
+        let full = depth.saturating_sub(1);
 
         for (i, &m) in moves.iter().enumerate() {
+            // The first move is never put to `decide`. A node that pruned
+            // every move is indistinguishable from one with no legal moves,
+            // which scores a live position as mate or stalemate; that is a
+            // property of the loop rather than of any one technique, so it
+            // lives here instead of in every policy that could violate it.
+            let verdict = if searched == 0 {
+                Verdict::Search
+            } else {
+                decide(
+                    self,
+                    m,
+                    &MoveCtx {
+                        index: i,
+                        alpha,
+                        searched,
+                    },
+                )
+            };
+            let reduction = match verdict {
+                Verdict::Skip => continue,
+                Verdict::Stop => break,
+                Verdict::Search => 0,
+                // Never reduce into quiescence: a child at depth 0 is a
+                // different kind of search, not a shallower one.
+                Verdict::Reduce(r) => r.min(full.saturating_sub(1)),
+            };
+
             let mut is_pv = node_is_pv;
-            let child_result = if i == 0 {
-                search_child(self, m, -beta, -alpha, is_pv)
+            let child_result = if searched == 0 {
+                search_child(self, m, -beta, -alpha, is_pv, full)
             } else {
                 is_pv = false;
-                match search_child(self, m, -alpha - 1, -alpha, is_pv) {
+                let probe = search_child(self, m, -alpha - 1, -alpha, is_pv, full - reduction);
+                match probe {
                     None => None,
+                    // A reduced search that beats alpha has not earned the
+                    // score it reported: re-run it at full depth *before* the
+                    // widening below, or a shallow number gets widened rather
+                    // than re-deepened and the reduction silently becomes a
+                    // change in what the engine plays.
+                    Some(p) if reduction > 0 && -p > alpha => {
+                        match search_child(self, m, -alpha - 1, -alpha, false, full) {
+                            Some(deep) if -deep > alpha && (-deep < beta || node_is_pv) => {
+                                is_pv = true;
+                                search_child(self, m, -beta, -alpha, is_pv, full)
+                            }
+                            deep => deep,
+                        }
+                    }
                     // Re-search whenever the probe beats alpha and either the
                     // score is still ambiguous (could be anywhere above alpha,
                     // needs the real window to pin down) or this is a PV node,
@@ -1001,11 +1106,11 @@ impl<'a> Search<'a> {
                     // after (`alpha` rises to at least `beta`), so there is no
                     // later sibling left in this loop that a stale re-search
                     // could ever get overwritten by.
-                    Some(probe) if -probe > alpha && (-probe < beta || node_is_pv) => {
+                    Some(p) if -p > alpha && (-p < beta || node_is_pv) => {
                         is_pv = true;
-                        search_child(self, m, -beta, -alpha, is_pv)
+                        search_child(self, m, -beta, -alpha, is_pv, full)
                     }
-                    probe => probe,
+                    p => p,
                 }
             };
             let Some(score) = child_result else {
@@ -1016,6 +1121,7 @@ impl<'a> Search<'a> {
                     cutoff_index,
                 };
             };
+            searched += 1;
 
             let score = -score;
             if score > max {
@@ -1195,12 +1301,17 @@ impl<'a> Search<'a> {
                 ply: 0,
                 alpha,
                 beta,
+                depth,
                 is_pv: true,
             },
-            |s, m, a, b, is_pv| {
+            // The root searches every legal move, always. A move pruned here
+            // is one the engine can never play, however good it was, so this
+            // is permanent rather than a policy waiting to be filled in.
+            |_, _, _| Verdict::Search,
+            |s, m, a, b, is_pv, d| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, depth - 1, 1, a, b, is_pv);
+                let result = s.negamax(&child, d, 1, a, b, is_pv);
                 s.history.pop();
                 result.map(|r| r.score)
             },
@@ -1343,12 +1454,17 @@ impl<'a> Search<'a> {
                 ply,
                 alpha,
                 beta,
+                depth,
                 is_pv,
             },
-            |s, m, a, b, is_pv| {
+            // Every move searched at full depth, for now: this is where late
+            // move reductions, futility pruning and late move pruning each
+            // land, one at a time and each behind its own match.
+            |_, _, _| Verdict::Search,
+            |s, m, a, b, is_pv, d| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, depth - 1, ply + 1, a, b, is_pv);
+                let result = s.negamax(&child, d, ply + 1, a, b, is_pv);
                 s.history.pop();
                 result.map(|r| {
                     any_child_tainted |= r.tainted;
@@ -1733,6 +1849,259 @@ mod tests {
     use super::*;
     use crate::search::cutoff_history::CutoffHistory;
     use turox_chess::types::{Color, Piece, Square};
+
+    /// A move list of `n` distinct legal moves, for driving `alpha_beta_loop`
+    /// directly. Which moves they are does not matter: every test below stubs
+    /// the child search, so the loop never looks at a position.
+    fn some_moves(n: usize) -> MoveList {
+        let mut list = MoveList::new();
+        for m in legal_moves(&Board::start_pos()).iter().take(n) {
+            list.push(*m);
+        }
+        assert_eq!(list.len(), n, "start position has at least {n} legal moves");
+        list
+    }
+
+    /// Drives `alpha_beta_loop` with stubbed policy and child search, and
+    /// reports every `(move index, depth)` the loop actually searched.
+    ///
+    /// The child score is a fixed function of depth, so a reduced search and a
+    /// full-depth one return different numbers and the re-search paths become
+    /// observable rather than inferred.
+    fn drive(
+        moves: &MoveList,
+        ctx: LoopCtx,
+        mut decide: impl FnMut(&MoveCtx) -> Verdict,
+        mut child: impl FnMut(usize, u8) -> Option<Score>,
+    ) -> (LoopOutcome, Vec<(usize, u8)>) {
+        let mut search = Search::new(Vec::new());
+        let calls = std::cell::RefCell::new(Vec::new());
+        let index_of = |m: Move| {
+            moves
+                .iter()
+                .position(|&x| x == m)
+                .expect("move is in the list")
+        };
+        let outcome = search.alpha_beta_loop(
+            moves,
+            ctx,
+            |_, m, mctx| {
+                let _ = m;
+                decide(mctx)
+            },
+            |_, m, _, _, _, d| {
+                let i = index_of(m);
+                calls.borrow_mut().push((i, d));
+                child(i, d)
+            },
+        );
+        (outcome, calls.into_inner())
+    }
+
+    fn ctx_at(depth: u8) -> LoopCtx {
+        LoopCtx {
+            ply: 1,
+            alpha: -100,
+            beta: 100,
+            depth,
+            is_pv: false,
+        }
+    }
+
+    #[test]
+    fn the_first_move_is_never_put_to_the_policy() {
+        let moves = some_moves(4);
+        let mut asked = Vec::new();
+        let (_, searched) = drive(
+            &moves,
+            ctx_at(4),
+            |mctx| {
+                asked.push(mctx.index);
+                Verdict::Stop
+            },
+            |_, _| Some(0),
+        );
+        assert_eq!(
+            asked,
+            vec![1],
+            "policy should first be consulted on move 1, never move 0"
+        );
+        assert_eq!(
+            searched.len(),
+            1,
+            "a policy that stops immediately still leaves one move searched"
+        );
+    }
+
+    #[test]
+    fn the_policy_sees_alpha_rise_and_the_searched_count_lag_the_index() {
+        let moves = some_moves(4);
+        let mut seen: Vec<(usize, Score, usize)> = Vec::new();
+        let _ = drive(
+            &moves,
+            ctx_at(4),
+            |mctx| {
+                seen.push((mctx.index, mctx.alpha, mctx.searched));
+                if mctx.index == 2 {
+                    Verdict::Skip
+                } else {
+                    Verdict::Search
+                }
+            },
+            // Negated by the loop, so later moves look strictly better and
+            // alpha climbs as they are searched.
+            |i, _| Some(-(Score::try_from(i).unwrap_or(0) * 10)),
+        );
+
+        let alphas: Vec<Score> = seen.iter().map(|&(_, a, _)| a).collect();
+        assert!(
+            alphas.windows(2).all(|w| w[1] >= w[0]),
+            "alpha is the live value and only ever rises: {seen:?}"
+        );
+        assert!(
+            alphas.first() < alphas.last(),
+            "alpha actually moved during the loop: {seen:?}"
+        );
+
+        let after_skip = seen
+            .iter()
+            .find(|&&(i, _, _)| i == 3)
+            .expect("move 3 was reached");
+        assert_eq!(
+            after_skip.2, 2,
+            "move 2 was skipped, so only two moves had been searched by move 3: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn skip_passes_over_a_move_without_searching_it() {
+        let moves = some_moves(4);
+        let (_, searched) = drive(
+            &moves,
+            ctx_at(4),
+            |mctx| {
+                if mctx.index == 1 {
+                    Verdict::Skip
+                } else {
+                    Verdict::Search
+                }
+            },
+            |_, _| Some(0),
+        );
+        let indices: Vec<usize> = searched.iter().map(|&(i, _)| i).collect();
+        assert!(!indices.contains(&1), "move 1 was skipped: {indices:?}");
+        assert!(indices.contains(&2), "later moves still run: {indices:?}");
+    }
+
+    #[test]
+    fn stop_ends_the_loop_rather_than_skipping_one_move() {
+        let moves = some_moves(5);
+        let (_, searched) = drive(
+            &moves,
+            ctx_at(4),
+            |mctx| {
+                if mctx.index == 2 {
+                    Verdict::Stop
+                } else {
+                    Verdict::Search
+                }
+            },
+            |_, _| Some(0),
+        );
+        let max_index = searched
+            .iter()
+            .map(|&(i, _)| i)
+            .max()
+            .expect("searched something");
+        assert!(
+            max_index < 2,
+            "nothing at or past the stop ran: {searched:?}"
+        );
+    }
+
+    #[test]
+    fn reduce_searches_shallower_first() {
+        let moves = some_moves(3);
+        let (_, searched) = drive(
+            &moves,
+            ctx_at(6),
+            |_| Verdict::Reduce(2),
+            // Fails low, so nothing is re-searched and the reduced depth stands.
+            |_, _| Some(1000),
+        );
+        let depths: Vec<u8> = searched
+            .iter()
+            .filter(|&&(i, _)| i == 1)
+            .map(|&(_, d)| d)
+            .collect();
+        assert_eq!(
+            depths,
+            vec![3],
+            "move 1 should be searched once, at depth - 1 - 2"
+        );
+    }
+
+    #[test]
+    fn a_reduced_search_that_beats_alpha_is_re_run_at_full_depth() {
+        let moves = some_moves(3);
+        let (_, searched) = drive(
+            &moves,
+            ctx_at(6),
+            |_| Verdict::Reduce(2),
+            // Move 0 settles alpha at 0; move 1 then comes back better than
+            // that once negated, which is what a reduced search beating alpha
+            // looks like and what must not be trusted at the reduced depth.
+            |i, _| Some(if i == 0 { 0 } else { -80 }),
+        );
+        let depths: Vec<u8> = searched
+            .iter()
+            .filter(|&&(i, _)| i == 1)
+            .map(|&(_, d)| d)
+            .collect();
+        assert_eq!(
+            depths.first(),
+            Some(&3),
+            "the first search of a reduced move is the shallow probe: {depths:?}"
+        );
+        // The *second* search specifically. A later widening also runs at full
+        // depth, so asserting the list merely contains it would pass even with
+        // the re-deepen left shallow, which is the bug this test exists for.
+        assert_eq!(
+            depths.get(1),
+            Some(&5),
+            "a reduced probe beating alpha is re-deepened before anything else: {depths:?}"
+        );
+    }
+
+    #[test]
+    fn a_reduction_never_reaches_into_quiescence() {
+        let moves = some_moves(3);
+        let (_, searched) = drive(
+            &moves,
+            ctx_at(2),
+            |_| Verdict::Reduce(10),
+            |_, _| Some(1000),
+        );
+        let min_depth = searched
+            .iter()
+            .map(|&(_, d)| d)
+            .min()
+            .expect("searched something");
+        assert!(
+            min_depth >= 1,
+            "depth 0 is quiescence, not a shallower search: {searched:?}"
+        );
+    }
+
+    #[test]
+    fn a_policy_that_always_searches_uses_full_depth_throughout() {
+        let moves = some_moves(4);
+        let (_, searched) = drive(&moves, ctx_at(5), |_| Verdict::Search, |_, _| Some(1000));
+        assert!(
+            searched.iter().all(|&(_, d)| d == 4),
+            "every child at depth - 1: {searched:?}"
+        );
+    }
 
     /// `move_priority` is private to this module, and so is `order_moves`;
     /// both are pure enough (no board mutation, no search recursion) to test
