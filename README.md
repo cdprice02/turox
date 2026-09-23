@@ -43,9 +43,9 @@ turox-macros┘   types, board,  │    pgn, san         ├─→  tools/bookge
                                     search, eval, uci ──→  turox-cli
 ```
 
-The split is the point: the dependency runs one way and the compiler keeps it
-that way, so a tool that parses notation or builds an opening book never
-compiles a search.
+The dependency runs one way and the compiler keeps it that way. `docs/adr/0008`
+records why the split exists and what was rejected along the way, including why
+FEN stays with the positions it encodes rather than moving to `turox-notation`.
 
 - **`turox-chess`**: the rules of chess, with no opinion about how to play
   well.
@@ -56,16 +56,14 @@ compiles a search.
     the crate root too, so callers write `turox_chess::Bitboard` rather than
     reaching into the module.
   - **`board`**: `Board` (piece placement plus game state) and FEN
-    parsing/formatting, built on `types`. FEN lives here rather than in
-    `turox-notation` because it encodes a *position*, which is what this crate
-    is, and because UCI's `position fen` command needs it: moving it out would
-    make the engine depend on the notation crate.
+    parsing/formatting, built on `types`. FEN encodes a *position*, which is
+    what this crate is; PGN and SAN encode a *game*, which is why they don't
+    live here.
   - **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
     generation, and `perft`.
   - **`book`**: the opening book's file format and lookup. Here rather than in
-    `turox-engine` because it has two callers that must agree on the format,
-    the engine reading it and the generator writing it, and only one of those
-    is the engine.
+    `turox-engine` because the generator writing it has to agree with the
+    engine reading it.
 - **`turox-notation`**: how a *game* is written down. `pgn` parsing, and `san`
   resolution against a real position. Nothing here needs to know how to choose
   a move.
@@ -77,8 +75,7 @@ compiles a search.
     table and move ordering.
   - **`uci`**: the UCI protocol: parsing commands, emitting responses, and the
     stateful session loop that drives the engine from `turox-cli`.
-- **`turox-rng`**: one deterministic PRNG function. Its own crate because both
-  halves need it and neither owns it.
+- **`turox-rng`**: one deterministic PRNG function, needed by both halves.
 - **`turox-macros`**: `#[derive(Ordinal)]`, hand-rolled and dependency-free.
 
 `turox-chess` and `turox-engine` both take zero runtime dependencies,

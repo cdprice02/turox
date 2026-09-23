@@ -9,9 +9,8 @@
 //! - [`board`]: `Board` (piece placement plus game state) and FEN parsing/
 //!   formatting, built on `types`.
 //! - [`book`]: the opening book's file format and lookup, keyed on
-//!   `board::zobrist`'s hash. Here rather than in `turox-engine` because it has
-//!   two callers that must agree on the format, the engine reading it and the
-//!   generator writing it, and only one of those is the engine.
+//!   `board::zobrist`'s hash. Here rather than in `turox-engine` because the
+//!   generator writing it has to agree with the engine reading it.
 //! - [`move_gen`]: attack tables, magic bitboards, pseudolegal and legal move
 //!   generation, and `perft`.
 //!
@@ -19,9 +18,8 @@
 //! generation, search, and evaluation all need `Bitboard`/`Square`/`Move` without
 //! depending on `Board` itself.
 //!
-//! Nothing here knows how to choose a move. That is `turox-engine`'s job, and
-//! the split is a one-way dependency the compiler enforces: a tool that parses
-//! notation or generates a book takes this crate and never compiles a search.
+//! Nothing here knows how to choose a move; that is `turox-engine`'s job. See
+//! `docs/adr/0008` for why the two are separate crates.
 
 // `missing_docs` covers public items; this covers the rest. It sits here rather
 // than in the workspace `[lints]` table because that table reaches every
@@ -31,10 +29,7 @@
 pub mod board;
 pub mod book;
 pub mod move_gen;
-// Test support, not part of what this crate is for, which is why it is behind a
-// feature rather than always compiled: `turox-engine`'s property tests need the
-// same `Board` strategies these define, and two copies of 200 lines of
-// generator is exactly the duplication this repo keeps getting bitten by.
+// Test support, behind a feature so a normal build never compiles it.
 #[cfg(feature = "strategies")]
 pub mod strategies;
 pub mod types;

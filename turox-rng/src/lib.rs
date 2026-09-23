@@ -1,11 +1,9 @@
 //! A deterministic, fixed-seed PRNG.
 //!
-//! Its own crate, and a very small one, because both halves of the workspace
-//! need it and neither owns it: `turox-chess` walks it to build Zobrist keys
-//! and search for magic numbers, and `turox-engine` uses it to shuffle equal
-//! root moves. It is `publish = false` and exists to make those results
-//! reproducible across runs and platforms, not as a general-purpose RNG for
-//! anyone to reach for.
+//! Its own crate because both `turox-chess` (Zobrist keys, magic-number search)
+//! and `turox-engine` (shuffling equal root moves) need it. It exists to make
+//! those results reproducible across runs and platforms, not as a
+//! general-purpose RNG.
 //!
 //! `xorshift64star` is the algorithm, not an implementation choice up for grabs:
 //! Sebastiano Vigna's xorshift64* (2014), the same generator Stockfish uses for

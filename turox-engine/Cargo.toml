@@ -18,13 +18,10 @@ workspace = true
 # one in isn't worth it. Keeps compile times down and the engine core close to
 # no_std, which matters if a WASM build happens later.
 #
-# turox-chess and turox-rng are first-party and carry the same policy, so
-# depending on them does not weaken it. turox-macros is no longer a direct
-# dependency: the ordinal enums it derives live in turox-chess now.
+# The three below are first-party and carry the same policy, so depending on
+# them does not weaken it.
 [dependencies]
 turox-chess = { path = "../turox-chess" }
-# `#[derive(Ordinal)]` on `CutoffCause`: the same first-party, dependency-free
-# proc macro turox-chess uses for its own ordinal enums.
 turox-macros = { path = "../turox-macros" }
 turox-rng = { path = "../turox-rng" }
 

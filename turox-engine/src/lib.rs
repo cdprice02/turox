@@ -9,9 +9,8 @@
 //! - [`uci`]: the UCI protocol, driving the engine from `turox-cli`.
 //!
 //! What a position *is* lives in `turox-chess` (`types`, `board`, `move_gen`,
-//! `book`); this crate is the part that decides which move to play. The
-//! dependency runs one way and the compiler keeps it that way, so a tool that
-//! parses notation or builds an opening book never compiles a search.
+//! `book`); this crate is the part that decides which move to play. See
+//! `docs/adr/0008` for why the two are separate crates.
 
 // `missing_docs` covers public items; this covers the rest. It sits here rather
 // than in the workspace `[lints]` table because that table reaches every
