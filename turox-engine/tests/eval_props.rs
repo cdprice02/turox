@@ -32,15 +32,13 @@
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
-mod common;
-
-use common::{any_board, mirrored};
 use proptest::prelude::*;
-use turox_engine::board::Board;
+use turox_chess::board::Board;
+use turox_chess::strategies::{any_board, mirrored};
+use turox_chess::{Color, Piece, Square};
 use turox_engine::eval::endgame_scale::{self, ScaleFactor};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
-use turox_engine::{Color, Piece, Square};
 
 // ---- Independent reference ----
 //

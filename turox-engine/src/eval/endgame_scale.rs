@@ -6,8 +6,8 @@
 //! `docs/adr/0004-endgame-scale-factors-multiply-the-interpolated-score.md`
 //! for why.
 
-use crate::board::Board;
-use crate::{Bitboard, Color, Piece};
+use turox_chess::board::Board;
+use turox_chess::{Bitboard, Color, Piece};
 
 use super::Score;
 

@@ -12,10 +12,10 @@
 //! is only cleanly expressible against the absolute version, and a printed
 //! eval breakdown is readable in White-POV and confusing in side-relative.
 
-use crate::board::Board;
 use crate::eval::pst::{pst_value, pst_value_eg};
-use crate::types::Color;
-use crate::Piece;
+use turox_chess::board::Board;
+use turox_chess::types::Color;
+use turox_chess::Piece;
 
 mod bishop_pair;
 pub mod endgame_scale;

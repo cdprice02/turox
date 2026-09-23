@@ -4,7 +4,7 @@
 //! draw stops there instead of searching arbitrarily deep into an already-decided
 //! position.
 
-use crate::board::Board;
+use turox_chess::board::Board;
 
 /// Whether the fifty-move rule already applies to `board`: fifty full moves (100
 /// half-moves) since the last pawn move or capture, per FIDE Article 9.3, without either

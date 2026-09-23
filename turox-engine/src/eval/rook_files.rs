@@ -6,9 +6,9 @@
 //! modules, so SPRT can attribute each term's own result.
 
 use super::weights;
-use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
-use crate::types::{Bitboard, Color, Piece};
+use turox_chess::board::Board;
+use turox_chess::types::{Bitboard, Color, Piece};
 
 /// Bonus per rook on a file with no pawn of either colour.
 const OPEN_FILE_BONUS: Tapered = pack(
@@ -50,7 +50,7 @@ const fn rook_files_bonus(rooks: Bitboard, pawns: Bitboard, enemy_pawns: Bitboar
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Square;
+    use turox_chess::types::Square;
 
     #[test]
     fn no_bonus_with_no_rooks() {

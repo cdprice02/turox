@@ -6,24 +6,24 @@
 //! independent, unpruned negamax reference rather than trusting a
 //! read-through.
 
-use crate::board::Board;
 use crate::eval::{evaluate, Score, PIECE_VALUES};
-use crate::move_gen::attacks::in_check;
-use crate::move_gen::legal::legal_moves;
-use crate::move_gen::move_list::MoveList;
-use crate::rng::xorshift64star;
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
 use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
-use crate::types::Move;
-use crate::MoveFlags;
-use crate::Piece;
 use std::cmp::Reverse;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use turox_chess::board::Board;
+use turox_chess::move_gen::attacks::in_check;
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::move_gen::move_list::MoveList;
+use turox_chess::types::Move;
+use turox_chess::MoveFlags;
+use turox_chess::Piece;
 use turox_macros::Ordinal;
+use turox_rng::xorshift64star;
 
 /// The score magnitude of a certain checkmate.
 ///
@@ -1330,7 +1330,7 @@ impl<'a> Search<'a> {
             return self.quiescence(board, alpha, beta, ply, MAX_QUIESCENCE_DEPTH, Some(moves));
         }
 
-        let tt_move = tt_entry.map(|entry| Move::from_bits(entry.mv));
+        let tt_move = tt_entry.map(|entry| entry.mv);
 
         let original_alpha = alpha;
         self.set_hash_move(ply, tt_move);
@@ -1732,7 +1732,7 @@ enum MovePriority {
 mod tests {
     use super::*;
     use crate::search::cutoff_history::CutoffHistory;
-    use crate::types::{Color, Piece, Square};
+    use turox_chess::types::{Color, Piece, Square};
 
     /// `move_priority` is private to this module, and so is `order_moves`;
     /// both are pure enough (no board mutation, no search recursion) to test

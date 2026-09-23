@@ -6,14 +6,12 @@
 //! table could still pass every property in that file while producing an
 //! engine that develops backwards.
 
-mod common;
-
-use common::mirrored;
-use turox_engine::board::Board;
+use turox_chess::board::Board;
+use turox_chess::strategies::mirrored;
+use turox_chess::{Color, Piece, Square};
 use turox_engine::eval::endgame_scale::{scale_factor, ScaleFactor};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
-use turox_engine::{Color, Piece, Square};
 
 /// The longest possible `Square::distance` (Chebyshev) between two squares
 /// on an 8x8 board, reproduced here independently of the private

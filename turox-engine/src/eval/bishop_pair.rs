@@ -6,9 +6,9 @@
 //! (and likely noise-diluted) verdict for all of them at once.
 
 use super::weights;
-use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
-use crate::types::{Bitboard, Color, Piece};
+use turox_chess::board::Board;
+use turox_chess::types::{Bitboard, Color, Piece};
 
 /// Bonus for holding two or more bishops, flat across both phases per
 /// `weights::BISHOP_PAIR_BONUS`'s own doc.
@@ -36,7 +36,7 @@ const fn bishop_pair_bonus(bishops: Bitboard) -> Tapered {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Square;
+    use turox_chess::types::Square;
 
     #[test]
     fn bishop_pair_bonus_is_zero_with_no_bishops() {

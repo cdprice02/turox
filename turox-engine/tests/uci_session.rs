@@ -13,10 +13,11 @@ use std::io::{BufReader, Cursor, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use turox_engine::board::Board;
-use turox_engine::book::{Book, BookMove};
-use turox_engine::move_gen::legal::legal_moves;
-use turox_engine::{Engine, Move, MoveFlags, Square};
+use turox_chess::board::Board;
+use turox_chess::book::{Book, BookMove};
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::{Move, MoveFlags, Square};
+use turox_engine::Engine;
 
 /// Feeds `input` to a fresh `Engine` over an in-memory buffer and returns
 /// everything it wrote back, as a `String`.

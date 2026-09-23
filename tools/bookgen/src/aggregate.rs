@@ -13,10 +13,10 @@
 
 use std::collections::HashMap;
 
-use crate::pgn::{GameResult, PgnGame};
-use crate::san::resolve_san;
-use turox_engine::board::Board;
-use turox_engine::{Color, Move};
+use turox_chess::board::Board;
+use turox_chess::{Color, Move};
+use turox_notation::pgn::{GameResult, PgnGame};
+use turox_notation::san::resolve_san;
 
 /// One candidate move's observed statistics at some position, before
 /// weighing turns them into a `book::BookMove`.

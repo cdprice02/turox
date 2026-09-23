@@ -24,9 +24,12 @@ overrides the generic `toolchain` skill.
 
 ## Architecture
 
-See README.md: `types -> board -> move_gen -> search / eval / uci`, plus
-why `types` sits at the crate root and why `turox-engine` takes zero
-runtime dependencies.
+See README.md for the crate graph: `turox-chess` (the rules of chess:
+`types`, `board`, `move_gen`, `book`) is depended on by `turox-notation`
+(`pgn`, `san`) and by `turox-engine` (`search`, `eval`, `uci`), and the
+dependency only ever runs that way. README also covers why `types` sits at
+the crate root, why FEN stays in `turox-chess` while PGN and SAN do not, and
+why both crates take zero runtime dependencies.
 
 ## Status
 

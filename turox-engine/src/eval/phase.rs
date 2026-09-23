@@ -8,8 +8,8 @@
 //! running totals in sync by hand.
 
 use super::weights;
-use crate::board::Board;
-use crate::types::{Color, Piece};
+use turox_chess::board::Board;
+use turox_chess::types::{Color, Piece};
 
 use super::Score;
 

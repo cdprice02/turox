@@ -11,11 +11,11 @@
 //! endgame on `game_phase`'s blend.
 
 use super::weights;
-use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
-use crate::move_gen::attacks::king_square;
-use crate::types::{Bitboard, Color, Piece, Square};
-use crate::Direction;
+use turox_chess::board::Board;
+use turox_chess::move_gen::attacks::king_square;
+use turox_chess::types::{Bitboard, Color, Piece, Square};
+use turox_chess::Direction;
 
 /// Penalty per zone file (`sq`'s own file and each file adjacent to it,
 /// clamped at the board edge) with no friendly pawn anywhere on it: nothing

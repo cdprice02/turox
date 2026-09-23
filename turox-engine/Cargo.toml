@@ -18,39 +18,20 @@ workspace = true
 # one in isn't worth it. Keeps compile times down and the engine core close to
 # no_std, which matters if a WASM build happens later.
 #
-# turox-macros is the one exception, and doesn't violate this: it's a
-# first-party, dependency-free proc macro (`#[derive(Ordinal)]`, hand-rolled
-# token walking, no syn/quote) that expands away at compile time. Nothing it
-# generates depends on turox-macros itself at runtime.
+# The three below are first-party and carry the same policy, so depending on
+# them does not weaken it.
 [dependencies]
+turox-chess = { path = "../turox-chess" }
 turox-macros = { path = "../turox-macros" }
+turox-rng = { path = "../turox-rng" }
 
 [dev-dependencies]
 proptest = { workspace = true }
+turox-chess = { path = "../turox-chess", features = ["strategies"] }
 criterion = { workspace = true }
 
 [[bench]]
-name = "bitboard"
-harness = false
-
-[[bench]]
 name = "eval"
-harness = false
-
-[[bench]]
-name = "fen"
-harness = false
-
-[[bench]]
-name = "magic"
-harness = false
-
-[[bench]]
-name = "move_gen"
-harness = false
-
-[[bench]]
-name = "perft"
 harness = false
 
 [[bench]]

@@ -1,0 +1,52 @@
+[package]
+name = "turox-chess"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# 1.87 for u64::unbounded_shl/unbounded_shr (Bitboard::shl/shr).
+rust-version = "1.87"
+
+[lib]
+name = "turox_chess"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Zero runtime dependencies, as turox-engine's own manifest explains. Both of
+# these are first-party: turox-macros expands away at compile time, turox-rng
+# is a single function.
+[dependencies]
+turox-macros = { path = "../turox-macros" }
+turox-rng = { path = "../turox-rng" }
+proptest = { workspace = true, optional = true }
+
+[features]
+strategies = ["dep:proptest"]
+
+[dev-dependencies]
+proptest = { workspace = true }
+# On itself, so this crate's own integration tests see `strategies` without
+# `--features strategies` on every run.
+turox-chess = { path = ".", features = ["strategies"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "bitboard"
+harness = false
+
+[[bench]]
+name = "fen"
+harness = false
+
+[[bench]]
+name = "magic"
+harness = false
+
+[[bench]]
+name = "move_gen"
+harness = false
+
+[[bench]]
+name = "perft"
+harness = false

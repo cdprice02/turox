@@ -11,7 +11,7 @@
 //! it's worth the added complexity.
 
 use super::Score;
-use crate::types::{Color, Piece, Square};
+use turox_chess::types::{Color, Piece, Square};
 
 /// Raw piece-square values, authored in **visual board order**: flat index
 /// `0` is a8, index `7` is h8, index `56` is a1, index `63` is h1, matching

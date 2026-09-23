@@ -15,7 +15,7 @@
 //! ordered by MVV-LVA/material gain, so recording it here would duplicate that ordering.
 
 use crate::eval::Score;
-use crate::types::{Color, Piece, Square};
+use turox_chess::types::{Color, Piece, Square};
 
 /// How far one `[side][piece][to]` cell's score can sit from zero in either direction, and
 /// the denominator `update`'s gravity term scales by: the two roles share one constant

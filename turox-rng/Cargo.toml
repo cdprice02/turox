@@ -1,0 +1,13 @@
+[package]
+name = "turox-rng"
+version = "0.1.0"
+edition = "2021"
+publish = false
+rust-version = "1.87"
+
+[lib]
+name = "turox_rng"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

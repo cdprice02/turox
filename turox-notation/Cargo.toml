@@ -1,0 +1,18 @@
+[package]
+name = "turox-notation"
+version = "0.1.0"
+edition = "2021"
+publish = false
+rust-version = "1.87"
+
+[lib]
+name = "turox_notation"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Resolving a SAN token needs a real position and its legal moves, which is
+# inherent to what SAN is. It needs nothing else.
+[dependencies]
+turox-chess = { path = "../turox-chess" }

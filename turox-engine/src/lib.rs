@@ -2,50 +2,37 @@
 //!
 //! # Architecture
 //!
-//! - [`types`]: core value types (`Bitboard`, `Square`, `Color`, `Piece`, `Move`,
-//!   ...) with no dependency on `Board`. Re-exported at the crate root, so callers
-//!   write `turox_engine::Bitboard` rather than reaching into the module.
-//! - [`board`]: `Board` (piece placement plus game state) and FEN parsing/
-//!   formatting, built on `types`.
-//! - [`book`]: the opening book's file format and lookup, keyed on
-//!   `board::zobrist`'s hash.
-//! - [`move_gen`]: attack tables, magic bitboards, pseudolegal and legal move
-//!   generation, and `perft`.
 //! - [`search`]: negamax with alpha-beta over iterative deepening, driven by a
 //!   depth, node, or time budget, with a transposition table and move ordering.
 //! - [`eval`]: static position evaluation, tapered between midgame and endgame.
 //!   Its submodule list is the term list; prose here would only go stale.
 //! - [`uci`]: the UCI protocol, driving the engine from `turox-cli`.
 //!
-//! `types` sits at the crate root rather than under `board` because move
-//! generation, search, and evaluation all need `Bitboard`/`Square`/`Move` without
-//! depending on `Board` itself.
+//! What a position *is* lives in `turox-chess` (`types`, `board`, `move_gen`,
+//! `book`); this crate is the part that decides which move to play. See
+//! `docs/adr/0008` for why the two are separate crates.
 
 // `missing_docs` covers public items; this covers the rest. It sits here rather
 // than in the workspace `[lints]` table because that table reaches every
 // target, and a doc per fixture constant in `tests/` and `benches/` is noise.
 #![deny(clippy::missing_docs_in_private_items)]
-pub mod board;
-pub mod book;
+
 pub mod eval;
-pub mod move_gen;
-mod rng;
 pub mod search;
-pub mod types;
 pub mod uci;
 
-pub use types::*;
-
+use turox_chess::board::Board;
+use turox_chess::book::Book;
 /// The engine's top-level handle: the position it's tracking, plus the
 /// loop that drives it from a UCI-speaking GUI.
 #[derive(Debug, Default)]
 pub struct Engine {
     /// The position the session is tracking, rebuilt by each `position`
     /// command rather than mutated move by move.
-    board: board::Board,
+    board: Board,
     /// Consulted before every `go` reaches `Search`; `None` (the default)
     /// means every `go` searches exactly as it always has.
-    book: Option<book::Book>,
+    book: Option<Book>,
 }
 
 impl Engine {
@@ -58,14 +45,14 @@ impl Engine {
     /// Attaches an opening book, consulted before every `go` reaches
     /// `Search` for the rest of this engine's life.
     #[must_use]
-    pub fn with_book(mut self, book: book::Book) -> Self {
+    pub fn with_book(mut self, book: Book) -> Self {
         self.book = Some(book);
         self
     }
 
     /// The position the engine is currently tracking.
     #[must_use]
-    pub const fn board(&self) -> &board::Board {
+    pub const fn board(&self) -> &Board {
         &self.board
     }
 

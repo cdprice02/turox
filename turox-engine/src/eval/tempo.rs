@@ -9,9 +9,9 @@
 //! separate modules, so SPRT can attribute each term's own result.
 
 use super::weights;
-use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
-use crate::Color;
+use turox_chess::board::Board;
+use turox_chess::Color;
 
 /// Bonus for the side to move, midgame lane only.
 const TEMPO_BONUS: Tapered = pack(weights::TEMPO_BONUS.0, weights::TEMPO_BONUS.1);

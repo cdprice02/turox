@@ -16,25 +16,19 @@ workspace = true
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
-turox-engine = { path = "../../turox-engine" }
-# Optional, and gated behind `fetch`, because it is the whole TLS and HTTP
-# stack: rustls, ring and around two dozen crates behind them. Cargo pins an
-# optional dependency in the lock whether or not the feature is on, so this
-# does not keep them out of `Cargo.lock`; what it avoids is *compiling* them.
-# Only `src/bin/generate-openings.rs` needs any of it, and only when
-# regenerating the opening suite, so a default workspace build builds none of
-# it (verified: zero ring/rustls/ureq artifacts after `cargo build
-# --workspace`). The default rustls/webpki-roots features avoid a system OpenSSL
-# dependency, which matters more here than usual since this tool runs across
-# the several machines noted in the top-level CLAUDE.md.
+turox-chess = { path = "../../turox-chess" }
+turox-notation = { path = "../../turox-notation" }
+# Both only `generate-openings` needs, so both sit behind `fetch`: the engine
+# for one constant, and `ureq` for the whole TLS stack behind it. An optional
+# dependency is still pinned in `Cargo.lock`; what the feature avoids is
+# compiling it. The default rustls/webpki-roots features avoid needing a system
+# OpenSSL, which matters since this tool runs across several machines.
+turox-engine = { path = "../../turox-engine", optional = true }
 ureq = { version = "3", optional = true }
 
 [features]
-# Not on by default: see `ureq` above for what enabling it costs.
-fetch = ["dep:ureq"]
+fetch = ["dep:ureq", "dep:turox-engine"]
 
-# Skipped entirely unless `fetch` is on, which is what keeps `cargo build
-# --workspace` from building a TLS stack for a binary nobody is running.
 [[bin]]
 name = "generate-openings"
 path = "src/bin/generate-openings.rs"

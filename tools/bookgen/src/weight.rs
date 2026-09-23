@@ -2,7 +2,7 @@
 //! `book::BookMove` carries.
 
 use crate::aggregate::MoveStats;
-use turox_engine::book::BookMove;
+use turox_chess::book::BookMove;
 
 /// Weighs `stats`, one position's candidate moves, into `BookMove`s.
 ///

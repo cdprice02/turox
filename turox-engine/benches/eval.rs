@@ -13,9 +13,9 @@
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
-use turox_engine::board::Board;
+use turox_chess::board::Board;
+use turox_chess::move_gen::legal::legal_moves;
 use turox_engine::eval::evaluate;
-use turox_engine::move_gen::legal::legal_moves;
 
 // Same six standard perft positions as benches/move_gen.rs and
 // tests/perft.rs; duplicated rather than shared, since a bench compiles as

@@ -5,23 +5,21 @@
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
-mod common;
-
 /// Any legal move, for tests that need a syntactically valid one to store and
 /// do not care which. `Move` has no public constructor by design, so this goes
 /// through move generation rather than fabricating bits.
-fn a_move() -> turox_engine::types::Move {
+fn a_move() -> turox_chess::types::Move {
     *legal_moves(&Board::start_pos())
         .as_slice()
         .first()
         .expect("the start position has legal moves")
 }
 
-use common::any_board_and_legal_move;
 use proptest::prelude::*;
-use turox_engine::board::Board;
+use turox_chess::board::Board;
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_board_and_legal_move;
 use turox_engine::eval::Score;
-use turox_engine::move_gen::legal::legal_moves;
 use turox_engine::search::tt::Tt;
 use turox_engine::search::MATE;
 

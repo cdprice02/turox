@@ -6,8 +6,8 @@
 //! spec string, plus the malformed-input cases.
 
 use std::time::Duration;
-use turox_engine::board::Board;
-use turox_engine::move_gen::legal::legal_moves;
+use turox_chess::board::Board;
+use turox_chess::move_gen::legal::legal_moves;
 use turox_engine::uci::{parse, Command, GoOptions};
 
 // ---- Concrete: one command per type, from its exact spec string ----

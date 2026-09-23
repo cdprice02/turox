@@ -1,9 +1,9 @@
 //! Concrete tests for `aggregate::{aggregate, filter_by_density}`.
 
 use bookgen::aggregate::{aggregate, filter_by_density, BuildOptions, MoveStats};
-use bookgen::pgn::{GameResult, PgnGame};
-use turox_engine::board::Board;
-use turox_engine::{Move, MoveFlags, Square};
+use turox_chess::board::Board;
+use turox_chess::{Move, MoveFlags, Square};
+use turox_notation::pgn::{GameResult, PgnGame};
 
 fn game(white_elo: u32, black_elo: u32, result: GameResult, moves: &[&str]) -> PgnGame {
     PgnGame {
