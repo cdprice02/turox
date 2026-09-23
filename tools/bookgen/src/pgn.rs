@@ -69,15 +69,16 @@ pub fn parse_pgn(text: &str) -> Vec<PgnGame> {
     games
 }
 
-/// Reads PGN games one at a time from `reader`, so a caller processing a
-/// large file never holds more than one game's raw text (read into its
-/// own small buffer, in memory only until it's parsed and yielded) at
-/// once, rather than the whole file plus every game it contains
-/// simultaneously the way [`parse_pgn`] does.
+/// Reads PGN games one at a time from `reader`.
+///
+/// A caller processing a large file never holds more than one game's raw
+/// text (read into its own small buffer, in memory only until it's parsed
+/// and yielded) at once, rather than the whole file plus every game it
+/// contains simultaneously the way [`parse_pgn`] does.
 ///
 /// Splits games apart by PGN's own regular shape (a header block, a blank
 /// line, movetext, a blank line before the next header block) rather than
-/// scanning for `[` the way [`parse_one_game`] does over an
+/// scanning for `[` the way `parse_one_game` does over an
 /// already-in-memory `VecDeque`: at this layer nothing has been read yet,
 /// so there's no lookahead to scan.
 pub struct PgnReader<R> {
@@ -228,10 +229,11 @@ fn strip_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-/// [`parse_movetext`], taking a plain `&str` instead of the `VecDeque<char>`
-/// the header parser already has on hand: the public entry point for a
-/// caller with a bare movetext string and no surrounding header block to
-/// parse first (`tools/bookgen/src/bin/generate-openings.rs`'s per-line
+/// `parse_movetext`, taking a plain `&str` instead of the `VecDeque<char>`
+/// the header parser already has on hand.
+///
+/// The public entry point for a caller with a bare movetext string and no
+/// surrounding header block to parse first (`generate-openings`'s per-line
 /// opening text, notably, which never has PGN headers of its own).
 #[must_use]
 pub fn tokenize_movetext(text: &str) -> Vec<String> {

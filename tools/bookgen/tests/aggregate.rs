@@ -15,31 +15,35 @@ fn game(white_elo: u32, black_elo: u32, result: GameResult, moves: &[&str]) -> P
     }
 }
 
-fn e4() -> Move {
+const fn e4() -> Move {
     Move::new(Square::E2, Square::E4, MoveFlags::DoublePawnPush)
 }
 
-fn d4() -> Move {
+const fn d4() -> Move {
     Move::new(Square::D2, Square::D4, MoveFlags::DoublePawnPush)
 }
 
-fn c4() -> Move {
+const fn c4() -> Move {
     Move::new(Square::C2, Square::C4, MoveFlags::DoublePawnPush)
 }
 
-fn nf3() -> Move {
+const fn nf3() -> Move {
     Move::new(Square::G1, Square::F3, MoveFlags::Quiet)
 }
 
-fn e5() -> Move {
+const fn e5() -> Move {
     Move::new(Square::E7, Square::E5, MoveFlags::DoublePawnPush)
 }
 
-fn nc6() -> Move {
+const fn nc6() -> Move {
     Move::new(Square::B8, Square::C6, MoveFlags::Quiet)
 }
 
-fn bb5() -> Move {
+const fn d5() -> Move {
+    Move::new(Square::D7, Square::D5, MoveFlags::DoublePawnPush)
+}
+
+const fn bb5() -> Move {
     Move::new(Square::F1, Square::B5, MoveFlags::Quiet)
 }
 
@@ -258,7 +262,59 @@ fn wins_draws_and_losses_are_tallied_relative_to_whoever_moved() {
     assert_eq!((c4_stats.wins, c4_stats.draws, c4_stats.losses), (0, 1, 0));
 }
 
-fn dummy_stats(mv: Move, times_played: u32) -> MoveStats {
+/// The side-to-move-crossed-with-result table has four arms, and every game
+/// in the test above tallies at ply 0, so only the two White-to-move arms are
+/// ever reached: swapping the two Black arms leaves that test green. Each
+/// game here runs two plies, so one assertion lands on each of the four.
+#[test]
+fn a_reply_is_tallied_from_the_replying_sides_point_of_view() {
+    // White wins: a win for `e4`, played by White, and a loss for `e5`,
+    // played by Black.
+    let white_wins = game(2400, 2400, GameResult::WhiteWins, &["e4", "e5"]);
+    // Black wins: a loss for `d4` and a win for `d5`, the same way round.
+    let black_wins = game(2400, 2400, GameResult::BlackWins, &["d4", "d5"]);
+
+    let result = aggregate([white_wins, black_wins], &LOOSE_OPTIONS);
+
+    let tally = |hash: u64, mv: Move| {
+        let (_, stats) = result
+            .iter()
+            .find(|(h, _)| *h == hash)
+            .unwrap_or_else(|| panic!("no position recorded for hash {hash:?}"));
+        let s = stats
+            .iter()
+            .find(|s| s.mv == mv)
+            .unwrap_or_else(|| panic!("{mv:?} not recorded in {stats:?}"));
+        (s.wins, s.draws, s.losses)
+    };
+
+    let start = Board::start_pos();
+    let after_kings_pawn = start.make_move(e4()).hash();
+    let after_queens_pawn = start.make_move(d4()).hash();
+
+    assert_eq!(
+        tally(start.hash(), e4()),
+        (1, 0, 0),
+        "White played e4 and White won, so e4 is a win"
+    );
+    assert_eq!(
+        tally(after_kings_pawn, e5()),
+        (0, 0, 1),
+        "Black played e5 and White won, so e5 is a loss"
+    );
+    assert_eq!(
+        tally(start.hash(), d4()),
+        (0, 0, 1),
+        "White played d4 and Black won, so d4 is a loss"
+    );
+    assert_eq!(
+        tally(after_queens_pawn, d5()),
+        (1, 0, 0),
+        "Black played d5 and Black won, so d5 is a win"
+    );
+}
+
+const fn dummy_stats(mv: Move, times_played: u32) -> MoveStats {
     MoveStats {
         mv,
         times_played,

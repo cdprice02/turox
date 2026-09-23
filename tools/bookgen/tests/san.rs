@@ -1,5 +1,10 @@
 //! Concrete tests for `san::resolve_san`.
 
+#![expect(
+    clippy::panic,
+    reason = "`clippy.toml`'s allow-panic-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test, where a failed fixture should abort the run"
+)]
+
 use bookgen::san::resolve_san;
 use turox_engine::board::Board;
 use turox_engine::{Move, MoveFlags, Square};

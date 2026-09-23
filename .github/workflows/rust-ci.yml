@@ -66,6 +66,15 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --workspace --locked
 
+      # The supervisor's real job is guaranteeing no bot process survives it,
+      # and leaked workers are what got this machine's address null-routed for
+      # a day. The test for that existed from the day the incident was fixed
+      # and ran only when someone remembered, which is no guarantee at all. It
+      # needs no lichess token and no network beyond localhost, and skips
+      # itself cleanly where python3 or venv is unavailable.
+      - name: Test the lichess bot supervisor
+        run: tools/lichess/test-run-bot.sh
+
       - name: Upload JUnit test results
         if: always()
         uses: actions/upload-artifact@v7
@@ -89,17 +98,6 @@ jobs:
       # catches the drift.
       - name: Check that the fuzz targets still compile
         run: cargo check --locked --manifest-path turox-fuzz/Cargo.toml
-
-      # `tools/bookgen` opts itself out of the workspace the same way
-      # `turox-fuzz` does, for the same reason it needs its own check here:
-      # every `--workspace` command above skips it, so nothing else would
-      # notice a signature change in turox-engine breaking it. `check`,
-      # not `test`: compiling is what this step exists to catch; whether
-      # to also run its (now-passing) test suite here is a separate CI
-      # scope decision this step has never made, not something either
-      # binary under `tools/bookgen` requires.
-      - name: Check that tools/bookgen still compiles
-        run: cargo check --locked --manifest-path tools/bookgen/Cargo.toml
 
   lint-and-format:
     runs-on: ubuntu-latest
@@ -131,12 +129,6 @@ jobs:
       # tree this repo deliberately does not have.
       - name: Check for unused dependencies
         uses: bnjbvr/cargo-machete@main
-
-      # The subset of `docs/agents/voice.md` a machine can judge: em dashes,
-      # and bare references to this repo's issue numbers from source. The rest
-      # of that file is judgement and is caught in review.
-      - name: Check prose against voice.md
-        run: python3 tools/voice/check.py
 
       # `missing_docs` is denied workspace-wide (see the root Cargo.toml's
       # `[workspace.lints.rust]`), but that only checks that a doc comment

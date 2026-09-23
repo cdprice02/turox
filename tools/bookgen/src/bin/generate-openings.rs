@@ -26,6 +26,7 @@ use bookgen::pgn::tokenize_movetext;
 use bookgen::san::resolve_san;
 use clap::Parser;
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -110,6 +111,13 @@ fn main() -> ExitCode {
 
     let mut rows = Vec::new();
     for volume in ECO_VOLUMES {
+        // `{commit}` and `{volume}` are placeholders in `UPSTREAM_URL`'s own
+        // template, substituted here rather than format arguments; they are
+        // spelled this way because that is what the upstream URL contains.
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "placeholders in a URL template, not a format string"
+        )]
         let url = UPSTREAM_URL
             .replace("{commit}", UPSTREAM_COMMIT)
             .replace("{volume}", &volume.to_string());
@@ -129,10 +137,15 @@ fn main() -> ExitCode {
         // `fastchess -openings format=epd` hands the whole line to its FEN
         // parser, so the comment has to be a legal EPD operation rather
         // than a trailing bare string.
-        out.push_str(&format!(
-            "{} c0 \"{} {}\";\n",
+        //
+        // `write!` into the string rather than pushing a `format!`: the same
+        // result without allocating a throwaway String per opening, and the
+        // suite runs to thousands of them.
+        let _ = writeln!(
+            out,
+            "{} c0 \"{} {}\";",
             opening.fen, opening.eco, opening.name
-        ));
+        );
     }
     if let Err(err) = fs::write(&output, out) {
         eprintln!(

@@ -1,4 +1,3 @@
-target
 
 # Downloaded PGN source data (e.g. Lichess Elite Database snapshots), kept
 # locally for reuse across generator runs. Multi-gigabyte third-party data,

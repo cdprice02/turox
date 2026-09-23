@@ -50,10 +50,10 @@ pub fn weigh(stats: &[MoveStats]) -> Vec<BookMove> {
             let weight = (times_played + 2 * wins + draws).div_ceil(2);
 
             let weight = u32::try_from(weight).unwrap_or(u32::MAX);
-            match &s.opening_name {
-                Some(name) => BookMove::with_name(s.mv, weight, name.clone()),
-                None => BookMove::new(s.mv, weight),
-            }
+            s.opening_name.as_ref().map_or_else(
+                || BookMove::new(s.mv, weight),
+                |name| BookMove::with_name(s.mv, weight, name.clone()),
+            )
         })
         .collect()
 }

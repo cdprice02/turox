@@ -4,7 +4,7 @@ use bookgen::aggregate::MoveStats;
 use bookgen::weight::weigh;
 use turox_engine::{Move, MoveFlags, Square};
 
-fn stats(times_played: u32, wins: u32, draws: u32, losses: u32) -> MoveStats {
+const fn stats(times_played: u32, wins: u32, draws: u32, losses: u32) -> MoveStats {
     MoveStats {
         mv: Move::new(Square::E2, Square::E4, MoveFlags::DoublePawnPush),
         times_played,
