@@ -13,7 +13,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use turox_engine::board::Board;
+use turox_chess::board::Board;
 
 fuzz_target!(|data: &str| {
     let _ = Board::try_from_fen(data);

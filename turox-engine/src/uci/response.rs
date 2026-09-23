@@ -7,9 +7,9 @@
 use crate::eval::Score;
 use crate::search::tt::Tt;
 use crate::search::{is_mate_score, MATE};
-use crate::types::Move;
 use std::fmt;
 use std::time::Duration;
+use turox_chess::types::Move;
 
 /// One line of UCI output.
 ///
@@ -219,7 +219,7 @@ impl fmt::Display for Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{MoveFlags, Square};
+    use turox_chess::types::{MoveFlags, Square};
 
     #[test]
     fn ordinary_evaluations_classify_as_centipawns() {

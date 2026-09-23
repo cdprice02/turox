@@ -1,0 +1,56 @@
+[package]
+name = "turox-chess"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# 1.87 for u64::unbounded_shl/unbounded_shr (Bitboard::shl/shr).
+rust-version = "1.87"
+
+[lib]
+name = "turox_chess"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# The same zero-runtime-dependency policy turox-engine states, for the same
+# reasons, and it applies here first: this is the crate a tool depends on when
+# it wants the rules of chess and nothing else. turox-macros expands away at
+# compile time and turox-rng is a single first-party function.
+[dependencies]
+turox-macros = { path = "../turox-macros" }
+turox-rng = { path = "../turox-rng" }
+# Only ever enabled by the `strategies` feature, which is test support; a normal
+# build of this crate has no dependencies beyond the two first-party ones above.
+proptest = { workspace = true, optional = true }
+
+[features]
+strategies = ["dep:proptest"]
+
+[dev-dependencies]
+proptest = { workspace = true }
+# A dev-dependency on itself, so this crate's own integration tests see the
+# `strategies` module. Integration tests compile as separate crates and would
+# otherwise need `--features strategies` passed by hand on every run.
+turox-chess = { path = ".", features = ["strategies"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "bitboard"
+harness = false
+
+[[bench]]
+name = "fen"
+harness = false
+
+[[bench]]
+name = "magic"
+harness = false
+
+[[bench]]
+name = "move_gen"
+harness = false
+
+[[bench]]
+name = "perft"
+harness = false

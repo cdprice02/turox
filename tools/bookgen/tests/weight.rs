@@ -2,7 +2,7 @@
 
 use bookgen::aggregate::MoveStats;
 use bookgen::weight::weigh;
-use turox_engine::{Move, MoveFlags, Square};
+use turox_chess::{Move, MoveFlags, Square};
 
 const fn stats(times_played: u32, wins: u32, draws: u32, losses: u32) -> MoveStats {
     MoveStats {

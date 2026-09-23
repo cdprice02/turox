@@ -16,7 +16,13 @@ workspace = true
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
-turox-engine = { path = "../../turox-engine" }
+turox-chess = { path = "../../turox-chess" }
+turox-notation = { path = "../../turox-notation" }
+# Optional for the same reason `ureq` is, and gated behind the same feature:
+# only `generate-openings` needs it, for one constant (`eval`'s piece values,
+# reused rather than transcribed). A default build of this crate therefore
+# compiles the rules of chess and the notation parser, and no search at all.
+turox-engine = { path = "../../turox-engine", optional = true }
 # Optional, and gated behind `fetch`, because it is the whole TLS and HTTP
 # stack: rustls, ring and around two dozen crates behind them. Cargo pins an
 # optional dependency in the lock whether or not the feature is on, so this
@@ -31,7 +37,7 @@ ureq = { version = "3", optional = true }
 
 [features]
 # Not on by default: see `ureq` above for what enabling it costs.
-fetch = ["dep:ureq"]
+fetch = ["dep:ureq", "dep:turox-engine"]
 
 # Skipped entirely unless `fetch` is on, which is what keeps `cargo build
 # --workspace` from building a TLS stack for a binary nobody is running.

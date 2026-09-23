@@ -6,8 +6,8 @@
 
 use bookgen::aggregate::BuildOptions;
 use bookgen::build_book;
-use turox_engine::board::Board;
-use turox_engine::{Move, MoveFlags, Square};
+use turox_chess::board::Board;
+use turox_chess::{Move, MoveFlags, Square};
 
 const PGN: &str = r#"[White "a"]
 [Black "b"]

@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["tools/bookgen", "turox-cli", "turox-engine", "turox-macros"]
+members = [
+    "tools/bookgen",
+    "turox-chess",
+    "turox-cli",
+    "turox-engine",
+    "turox-macros",
+    "turox-notation",
+    "turox-rng",
+]
 
 [workspace.dependencies]
 proptest = "1.5"

@@ -1,14 +1,14 @@
 //! The `bookgen` binary: reads one or more PGN files, builds a
-//! `turox_engine::book::Book` from them, and writes the result to a file
+//! `turox_chess::book::Book` from them, and writes the result to a file
 //! in `Book::to_bytes`'s format.
 
 use bookgen::aggregate::BuildOptions;
-use bookgen::pgn::PgnReader;
 use clap::Parser;
 use std::fs;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use turox_notation::pgn::PgnReader;
 
 /// Command-line arguments for a single `bookgen` run.
 #[derive(Parser, Debug)]

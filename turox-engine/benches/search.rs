@@ -28,7 +28,7 @@
 )]
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use turox_engine::board::Board;
+use turox_chess::board::Board;
 use turox_engine::search::tt::Tt;
 use turox_engine::search::Search;
 

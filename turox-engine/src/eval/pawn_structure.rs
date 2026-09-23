@@ -6,10 +6,10 @@
 //! square terms, so no separate blending pass is needed here.
 
 use super::weights;
-use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
-use crate::types::{Bitboard, Color, Piece};
-use crate::Direction;
+use turox_chess::board::Board;
+use turox_chess::types::{Bitboard, Color, Piece};
+use turox_chess::Direction;
 
 /// Penalty for each pawn beyond the first on a file: doubled pawns block
 /// each other's advance and don't add proportional extra defensive value.
@@ -71,7 +71,7 @@ const fn passed_bonus(pawns: Bitboard, enemy_pawns: Bitboard, color: Color) -> T
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Square;
+    use turox_chess::types::Square;
 
     // ---- doubled_penalty ----
 

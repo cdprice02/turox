@@ -4,11 +4,11 @@
 //! strings without a stdin/stdout session harness. `super::session` is what actually
 //! reads lines and owns any state across them.
 
-use crate::board::Board;
-use crate::move_gen::legal::legal_moves;
-use crate::types::Move;
 use std::iter::Peekable;
 use std::time::Duration;
+use turox_chess::board::Board;
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::types::Move;
 
 /// One parsed line of UCI input.
 ///

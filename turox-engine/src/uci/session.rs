@@ -19,20 +19,20 @@
 //! through `Command::Position` itself, which is a deliberately separate,
 //! later change, not something to fold into this loop silently.
 
-use crate::board::Board;
-use crate::book::{Book, BookMove};
-use crate::move_gen::legal::legal_moves;
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
 use crate::search::{CutoffCause, CutoffStats, Search, SearchResult};
-use crate::types::Color;
 use crate::uci::{self, Command, GoOptions, Response};
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use turox_chess::board::Board;
+use turox_chess::book::{Book, BookMove};
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::types::Color;
 
 /// Iterative deepening starts at depth 1 and deepens until some budget
 /// stops it first; this is only a ceiling on that loop; in any position

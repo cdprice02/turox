@@ -120,7 +120,9 @@ name = "bookgen"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "turox-chess",
  "turox-engine",
+ "turox-notation",
  "ureq",
 ]
 
@@ -938,10 +940,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "turox-chess"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "proptest",
+ "turox-chess",
+ "turox-macros",
+ "turox-rng",
+]
+
+[[package]]
 name = "turox-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "turox-chess",
  "turox-engine",
 ]
 
@@ -951,11 +965,24 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "turox-chess",
  "turox-macros",
+ "turox-rng",
 ]
 
 [[package]]
 name = "turox-macros"
+version = "0.1.0"
+
+[[package]]
+name = "turox-notation"
+version = "0.1.0"
+dependencies = [
+ "turox-chess",
+]
+
+[[package]]
+name = "turox-rng"
 version = "0.1.0"
 
 [[package]]

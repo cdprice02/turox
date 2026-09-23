@@ -6,12 +6,12 @@
 //! an endgame. They're otherwise unrelated, and land in opposite phase
 //! lanes on purpose: see each function's own doc.
 
-use crate::board::Board;
 use crate::eval::phase::{pack, Tapered};
 use crate::eval::weights;
-use crate::move_gen::attacks::king_square;
-use crate::move_gen::tables::pawn_attacks;
-use crate::types::{Bitboard, Color, Piece, Square};
+use turox_chess::board::Board;
+use turox_chess::move_gen::attacks::king_square;
+use turox_chess::move_gen::tables::pawn_attacks;
+use turox_chess::types::{Bitboard, Color, Piece, Square};
 
 /// Bonus per knight or bishop standing on an outpost, flat across both
 /// phases per `weights::OUTPOST_BONUS`'s own doc.

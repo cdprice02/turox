@@ -35,29 +35,54 @@ belongs.
 ## Architecture
 
 ```
-types  ->  board  ->  move_gen  ->  search / eval / uci
+turox-rng  ─┐
+            ├─→  turox-chess  ─┬─→  turox-notation  ─┐
+turox-macros┘   types, board,  │    pgn, san         ├─→  tools/bookgen
+                move_gen, book │                     │
+                               └─→  turox-engine  ───┘  (optional)
+                                    search, eval, uci ──→  turox-cli
 ```
 
-- **`types`**: core value types (`Bitboard`, `Square`, `Color`, `Piece`,
-  `Move`, ...) with no dependency on `Board`. Sits at the crate root rather
-  than nested under `board/` because move generation, search, and evaluation
-  all need these types without depending on `Board` itself; re-exported at
-  the crate root too, so callers write `turox_engine::Bitboard` rather than
-  reaching into the module.
-- **`board`**: `Board` (piece placement plus game state) and FEN
-  parsing/formatting, built on `types`.
-- **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
-  generation, and `perft`.
-- **`eval`**: static position evaluation, tapered between midgame and endgame.
-  Each term is a submodule; that list is the term list.
-- **`search`**: negamax with alpha-beta over iterative deepening and
-  quiescence, driven by a depth, node, or time budget, with a transposition
-  table and move ordering.
-- **`uci`**: the UCI protocol: parsing commands, emitting responses, and the
-  stateful session loop that drives the engine from `turox-cli`.
+The split is the point: the dependency runs one way and the compiler keeps it
+that way, so a tool that parses notation or builds an opening book never
+compiles a search.
 
-`turox-engine` takes zero runtime dependencies, deliberately; see the
-"Dependency policy" comment in `turox-engine/Cargo.toml`.
+- **`turox-chess`**: the rules of chess, with no opinion about how to play
+  well.
+  - **`types`**: core value types (`Bitboard`, `Square`, `Color`, `Piece`,
+    `Move`, ...) with no dependency on `Board`. Sits at the crate root rather
+    than nested under `board/` because move generation, search, and evaluation
+    all need these types without depending on `Board` itself; re-exported at
+    the crate root too, so callers write `turox_chess::Bitboard` rather than
+    reaching into the module.
+  - **`board`**: `Board` (piece placement plus game state) and FEN
+    parsing/formatting, built on `types`. FEN lives here rather than in
+    `turox-notation` because it encodes a *position*, which is what this crate
+    is, and because UCI's `position fen` command needs it: moving it out would
+    make the engine depend on the notation crate.
+  - **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
+    generation, and `perft`.
+  - **`book`**: the opening book's file format and lookup. Here rather than in
+    `turox-engine` because it has two callers that must agree on the format,
+    the engine reading it and the generator writing it, and only one of those
+    is the engine.
+- **`turox-notation`**: how a *game* is written down. `pgn` parsing, and `san`
+  resolution against a real position. Nothing here needs to know how to choose
+  a move.
+- **`turox-engine`**: the part that plays.
+  - **`eval`**: static position evaluation, tapered between midgame and
+    endgame. Each term is a submodule; that list is the term list.
+  - **`search`**: negamax with alpha-beta over iterative deepening and
+    quiescence, driven by a depth, node, or time budget, with a transposition
+    table and move ordering.
+  - **`uci`**: the UCI protocol: parsing commands, emitting responses, and the
+    stateful session loop that drives the engine from `turox-cli`.
+- **`turox-rng`**: one deterministic PRNG function. Its own crate because both
+  halves need it and neither owns it.
+- **`turox-macros`**: `#[derive(Ordinal)]`, hand-rolled and dependency-free.
+
+`turox-chess` and `turox-engine` both take zero runtime dependencies,
+deliberately; see the "Dependency policy" comment in `turox-engine/Cargo.toml`.
 
 ## Building and running
 
@@ -158,7 +183,7 @@ cargo nextest run --workspace --release --run-ignored all
 `perft` (performance test) is the project's end-to-end correctness gate: a
 standard recursive node count over a legal-move search tree, checked against
 the published results for six standard test positions
-(`turox-engine/tests/perft.rs`; see "References" below). A wrong count at low
+(`turox-chess/tests/perft.rs`; see "References" below). A wrong count at low
 depth on any of them localizes to a specific rule; matching all six, including
 the deep depths, is the bar for "move generation is actually correct."
 

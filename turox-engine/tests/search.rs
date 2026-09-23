@@ -18,10 +18,10 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use turox_engine::board::Board;
-use turox_engine::move_gen::legal::legal_moves;
+use turox_chess::board::Board;
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::{Move, Square};
 use turox_engine::search::{is_mate_score, CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
-use turox_engine::{Move, Square};
 
 // ---- Concrete mate puzzles ----
 //
@@ -557,8 +557,8 @@ fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() 
 // silently invalidate.
 
 fn expected_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64>) -> i16 {
+    use turox_chess::move_gen::attacks::in_check;
     use turox_engine::eval::evaluate;
-    use turox_engine::move_gen::attacks::in_check;
     use turox_engine::search::draw::is_draw;
 
     if in_check(board, board.side_to_move()) {
@@ -769,8 +769,8 @@ fn mate_killer_table_is_consulted_during_a_real_search() {
 /// there unread and unwritten.
 #[test]
 fn search_with_cutoff_history_actually_updates_it() {
+    use turox_chess::types::{Color, Piece, Square};
     use turox_engine::search::cutoff_history::CutoffHistory;
-    use turox_engine::types::{Color, Piece, Square};
 
     let board =
         Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")

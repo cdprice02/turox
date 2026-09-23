@@ -15,4 +15,5 @@ workspace = true
 # and `--version` alone; the UCI protocol itself arrives on stdin, so there
 # are no flags to parse beyond those two.
 clap = { version = "4.5.37", features = ["derive"] }
+turox-chess = { path = "../turox-chess" }
 turox-engine = { path = "../turox-engine" }

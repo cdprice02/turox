@@ -8,11 +8,9 @@
 //! to wait. Concrete tests (one per command, plus malformed input) live in
 //! `tests/uci_command.rs`, not here: this file is proptest only.
 
-mod common;
-
-use common::any_board_with_legal_move;
 use proptest::prelude::*;
-use turox_engine::move_gen::legal::legal_moves;
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_board_with_legal_move;
 use turox_engine::uci::{parse, Command};
 
 proptest! {

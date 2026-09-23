@@ -10,7 +10,7 @@
 
 use crate::eval::Score;
 use crate::search::is_mate_score;
-use crate::types::Move;
+use turox_chess::types::Move;
 
 /// Rewrites a score from root-relative to node-relative, for storage.
 ///
@@ -67,11 +67,16 @@ pub struct Entry {
     /// The full Zobrist key this entry was stored under, kept alongside the table index
     /// so a hash collision at the same index can't be mistaken for a real hit on `probe`.
     pub key: u64,
-    /// The best move found at this node, packed via `Move::bits`. `negamax` unpacks
-    /// it on a probe and tries it first, which is most of what makes a table hit worth
-    /// more than the score alone: even when the stored bound cannot end the search
-    /// outright, the move it names usually still refutes the position.
-    pub mv: u16,
+    /// The best move found at this node. `negamax` tries it first on a probe, which
+    /// is most of what makes a table hit worth more than the score alone: even when
+    /// the stored bound cannot end the search outright, the move it names usually
+    /// still refutes the position.
+    ///
+    /// A `Move`, not its packed `u16`: `Move` is a `u16` newtype, so storing it
+    /// costs an entry nothing, and storing the raw bits would hand every caller a
+    /// representation it cannot decode, since the bit layout is deliberately
+    /// crate-private to `turox-chess`.
+    pub mv: Move,
     /// Ply-adjusted: not the score as seen from the root, but a form independent of *how*
     /// this node was reached, so a later [`Tt::probe`] at a different ply from a different
     /// path can correctly re-derive its own root-relative value from it.
@@ -279,7 +284,7 @@ impl Tt {
         };
         let entry = Entry {
             key,
-            mv: mv.bits(),
+            mv,
             score: score_to_tt(score, Score::from(ply)),
             depth,
             bound,

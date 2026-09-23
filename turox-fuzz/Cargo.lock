@@ -82,10 +82,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "turox-engine"
+name = "turox-chess"
 version = "0.1.0"
 dependencies = [
  "turox-macros",
+ "turox-rng",
 ]
 
 [[package]]
@@ -93,9 +94,13 @@ name = "turox-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "turox-engine",
+ "turox-chess",
 ]
 
 [[package]]
 name = "turox-macros"
+version = "0.1.0"
+
+[[package]]
+name = "turox-rng"
 version = "0.1.0"

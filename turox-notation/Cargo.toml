@@ -1,0 +1,20 @@
+[package]
+name = "turox-notation"
+version = "0.1.0"
+edition = "2021"
+publish = false
+rust-version = "1.87"
+
+[lib]
+name = "turox_notation"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Depends on the rules of chess and nothing else. Resolving a SAN token needs a
+# real position and its legal moves, which is inherent to what SAN is; it does
+# not need a search, an evaluation, or a UCI loop, and this crate existing is
+# what makes that difference visible rather than incidental.
+[dependencies]
+turox-chess = { path = "../turox-chess" }

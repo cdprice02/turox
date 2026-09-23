@@ -18,7 +18,7 @@ fn main() {
     Args::parse();
 
     let mut engine = Engine::new();
-    match turox_engine::book::default_book() {
+    match turox_chess::book::default_book() {
         Ok(book) => engine = engine.with_book(book),
         // stderr, not stdout: a real UCI GUI only reads stdout as protocol,
         // so a diagnostic line here can't corrupt that stream the way one

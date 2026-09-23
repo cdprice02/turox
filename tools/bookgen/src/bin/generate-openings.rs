@@ -22,8 +22,6 @@
 //! so a regeneration reproduces the checked-in suite rather than drifting
 //! with upstream.
 
-use bookgen::pgn::tokenize_movetext;
-use bookgen::san::resolve_san;
 use clap::Parser;
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -32,10 +30,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
-use turox_engine::board::Board;
+use turox_chess::board::Board;
+use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::{Color, Piece};
 use turox_engine::eval::weights::PIECE_VALUES;
-use turox_engine::move_gen::legal::legal_moves;
-use turox_engine::{Color, Piece};
+use turox_notation::pgn::tokenize_movetext;
+use turox_notation::san::resolve_san;
 
 /// Pinned upstream revision, so regenerating reproduces the checked-in
 /// suite.
