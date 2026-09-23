@@ -315,32 +315,6 @@ struct LoopCtx {
     is_pv: bool,
 }
 
-/// One child search's parameters, as the loop hands them to the caller.
-///
-/// A struct rather than four positional arguments, for the same reason
-/// [`Verdict`] is an enum rather than a wider closure signature: this is the
-/// list that grows every time the search learns a new trick, and a caller
-/// reading `(-beta, -alpha, false, full)` at a call site cannot tell which
-/// bound is which.
-///
-/// Fields are ordered as [`LoopCtx`] orders the node's, so the two read as the
-/// same shape one ply apart. The values are not: the window is negated and
-/// often narrowed, and `depth` is the child's rather than this node's.
-#[derive(Debug, Clone, Copy)]
-struct ChildCtx {
-    /// Lower bound for the child, already negated from this node's.
-    alpha: Score,
-    /// Upper bound for the child, already negated from this node's.
-    beta: Score,
-    /// The depth to search the child at: one less than this node's, and less
-    /// again when a [`Verdict::Reduce`] applies.
-    depth: u8,
-    /// Whether the child is a principal variation node. Not derivable by the
-    /// caller: the loop decides it per move, and a re-search sets it where the
-    /// original probe did not.
-    is_pv: bool,
-}
-
 /// What the caller decides about one move, asked as the loop reaches it.
 ///
 /// The loop owns the mechanism (windowing, the re-searches, the bookkeeping)
@@ -996,94 +970,6 @@ impl<'a> Search<'a> {
         result
     }
 
-    /// Searches one move and returns its score together with whether it ended
-    /// up searched as a principal variation node, which is what decides if it
-    /// is worth recording into [`Search::pv`].
-    ///
-    /// `full` describes the full-window, full-depth search this move would get
-    /// if nothing else applied; every narrower or shallower call is derived
-    /// from it, so there is one place stating what this move's window is.
-    ///
-    /// Extracted from [`Search::alpha_beta_loop`] rather than inlined there
-    /// because the two answer different questions: this one is "what is this
-    /// move worth, and how hard did we have to look", the loop is "which moves
-    /// do we look at, and when do we stop".
-    fn search_one_move<F>(
-        &mut self,
-        m: Move,
-        full: ChildCtx,
-        reduction: u8,
-        first: bool,
-        search_child: &mut F,
-    ) -> (Option<Score>, bool)
-    where
-        F: FnMut(&mut Self, Move, ChildCtx) -> Option<Score>,
-    {
-        // The first move searched gets the real window at full depth: there is
-        // nothing yet to compare it against, so there is nothing to probe for.
-        if first {
-            return (search_child(self, m, full), full.is_pv);
-        }
-
-        let node_is_pv = full.is_pv;
-        // `full.beta` is this node's `-alpha`, so a null window just below it
-        // is the probe principal variation search wants.
-        let probe_window = ChildCtx {
-            alpha: full.beta - 1,
-            beta: full.beta,
-            depth: full.depth - reduction,
-            is_pv: false,
-        };
-        let Some(probe) = search_child(self, m, probe_window) else {
-            return (None, false);
-        };
-
-        // Beating alpha, expressed against the child's negated window.
-        let beats_alpha = |score: Score| -score > -full.beta;
-        let ambiguous = |score: Score| -score < -full.alpha;
-
-        if reduction > 0 && beats_alpha(probe) {
-            // A reduced search that beats alpha has not earned the score it
-            // reported: re-run it at full depth *before* the widening below,
-            // or a shallow number gets widened rather than re-deepened and the
-            // reduction silently becomes a change in what the engine plays
-            // rather than only in how fast it is found.
-            let deepened = search_child(
-                self,
-                m,
-                ChildCtx {
-                    depth: full.depth,
-                    ..probe_window
-                },
-            );
-            let Some(deep) = deepened else {
-                return (None, false);
-            };
-            if beats_alpha(deep) && (ambiguous(deep) || node_is_pv) {
-                return (search_child(self, m, full), true);
-            }
-            return (Some(deep), false);
-        }
-
-        // Re-search whenever the probe beats alpha and either the score is
-        // still ambiguous (could be anywhere above alpha, needs the real
-        // window to pin down) or this is a PV node, where a probe failing high
-        // past beta is *not* ambiguous (fail-soft already returned its real,
-        // trustworthy score, which is why the non-PV case below doesn't
-        // bother) but still isn't PV-worthy without this: a null-window probe
-        // never sets `is_pv: true`, so without a PV-node re-search here, this
-        // move's own line in `self.pv` would never get built, and this exact
-        // move is always the one about to become `max` and get reported. Free
-        // at a PV node: this move already forces an immediate cutoff-and-break
-        // right after (`alpha` rises to at least `beta`), so there is no later
-        // sibling left in this loop that a stale re-search could ever get
-        // overwritten by.
-        if beats_alpha(probe) && (ambiguous(probe) || node_is_pv) {
-            return (search_child(self, m, full), true);
-        }
-        (Some(probe), false)
-    }
-
     /// The alpha-beta move loop shared by `negamax` and `search_root` (see
     /// `search_root`'s own doc for the handful of things it does differently
     /// around this call, not within it). Quiescence's two loops used to share
@@ -1121,7 +1007,7 @@ impl<'a> Search<'a> {
     /// bound) and would have caused the same cutoff on a full-window search
     /// too, so it's trusted outright *unless this is a PV node*, where it's
     /// re-searched anyway purely so `self.pv` gets a real line for this move
-    /// -- see [`Search::search_one_move`] for why that's free here. Losing
+    /// -- see the match arm's own comment for why that's free here. Losing
     /// the exact-vs-ambiguous distinction -- treating "probe didn't need a
     /// re-search" as an abort, or vice versa -- is the easy way to get this
     /// backwards; `None` from `search_child` means only one thing anywhere in
@@ -1130,6 +1016,16 @@ impl<'a> Search<'a> {
     /// Generic over `F` rather than taking `&mut dyn FnMut`: this is the
     /// innermost loop of the entire engine, so it monomorphizes per call
     /// site and inlines exactly as hand-written copies would.
+    // Over the hundred-line limit, deliberately. This is the engine's innermost
+    // loop and the sequence *is* the algorithm: decide, probe, re-deepen,
+    // widen, record, cut. Splitting it makes a reader jump between functions to
+    // follow a single move's fate, and it is where throughput work happens, so
+    // the one place a reader returns to most often is the last place worth
+    // fragmenting for a line count.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the engine's innermost loop; the sequence is the algorithm, and splitting it costs the reader more than the length does"
+    )]
     fn alpha_beta_loop<D, F>(
         &mut self,
         moves: &MoveList,
@@ -1139,7 +1035,7 @@ impl<'a> Search<'a> {
     ) -> LoopOutcome
     where
         D: FnMut(&mut Self, Move, &MoveCtx) -> Verdict,
-        F: FnMut(&mut Self, Move, ChildCtx) -> Option<Score>,
+        F: FnMut(&mut Self, Move, LoopCtx) -> Option<Score>,
     {
         let LoopCtx {
             ply,
@@ -1183,18 +1079,79 @@ impl<'a> Search<'a> {
                 Verdict::Reduce(r) => r.min(full.saturating_sub(1)),
             };
 
-            let (child_result, is_pv) = self.search_one_move(
-                m,
-                ChildCtx {
-                    alpha: -beta,
-                    beta: -alpha,
-                    depth: full,
-                    is_pv: node_is_pv,
-                },
-                reduction,
-                searched == 0,
-                &mut search_child,
-            );
+            let mut is_pv = node_is_pv;
+            // The child is a node too, so it gets the same context this one
+            // was handed, one ply down with the window negated into its own
+            // frame. Every call below is this with one field changed, which is
+            // the whole of what a probe, a re-deepening and a widening differ
+            // by.
+            let child = LoopCtx {
+                ply: ply + 1,
+                alpha: -beta,
+                beta: -alpha,
+                depth: full,
+                is_pv,
+            };
+            let child_result = if searched == 0 {
+                search_child(self, m, child)
+            } else {
+                is_pv = false;
+                let probe = search_child(
+                    self,
+                    m,
+                    LoopCtx {
+                        alpha: child.beta - 1,
+                        depth: full - reduction,
+                        is_pv,
+                        ..child
+                    },
+                );
+                match probe {
+                    None => None,
+                    // A reduced search that beats alpha has not earned the
+                    // score it reported: re-run it at full depth *before* the
+                    // widening below, or a shallow number gets widened rather
+                    // than re-deepened and the reduction silently becomes a
+                    // change in what the engine plays.
+                    Some(p) if reduction > 0 && -p > alpha => {
+                        match search_child(
+                            self,
+                            m,
+                            LoopCtx {
+                                alpha: child.beta - 1,
+                                is_pv: false,
+                                ..child
+                            },
+                        ) {
+                            Some(deep) if -deep > alpha && (-deep < beta || node_is_pv) => {
+                                is_pv = true;
+                                search_child(self, m, LoopCtx { is_pv, ..child })
+                            }
+                            deep => deep,
+                        }
+                    }
+                    // Re-search whenever the probe beats alpha and either the
+                    // score is still ambiguous (could be anywhere above alpha,
+                    // needs the real window to pin down) or this is a PV node,
+                    // where a probe failing high past beta is *not* ambiguous
+                    // (fail-soft already returned its real, trustworthy score,
+                    // which is why the non-PV case below doesn't bother) but
+                    // still isn't PV-worthy without this: a null-window probe
+                    // never sets `is_pv: true`, so without a PV-node re-search
+                    // here, this move's own line in `self.pv` would never get
+                    // built, and this exact move is always the one about to
+                    // become `max` and get reported. Free at a PV node: this
+                    // move already forces an immediate cutoff-and-break right
+                    // after (`alpha` rises to at least `beta`), so there is no
+                    // later sibling left in this loop that a stale re-search
+                    // could ever get overwritten by.
+                    Some(p) if -p > alpha && (-p < beta || node_is_pv) => {
+                        is_pv = true;
+                        search_child(self, m, LoopCtx { is_pv, ..child })
+                    }
+                    p => p,
+                }
+            };
             let Some(score) = child_result else {
                 return LoopOutcome {
                     max,
@@ -1393,7 +1350,7 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, 1, c.alpha, c.beta, c.is_pv);
+                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv);
                 s.history.pop();
                 result.map(|r| r.score)
             },
@@ -1546,7 +1503,7 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, ply + 1, c.alpha, c.beta, c.is_pv);
+                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv);
                 s.history.pop();
                 result.map(|r| {
                     any_child_tainted |= r.tainted;
