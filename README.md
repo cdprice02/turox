@@ -216,6 +216,38 @@ See `tools/selfplay/README.md` for installing fastchess, for how to read an
 SPRT verdict, and for the reasoning behind the time control and the test
 bounds.
 
+## Checking a refactor
+
+```sh
+tools/refactor-gate.sh --base main
+```
+
+A refactor claims the engine still plays the same moves at the same speed. If
+both hold, playing strength is unchanged by construction and a self-play match
+measures nothing, so this checks both instead and says whether a match is
+still owed. The move half compares node counts *and* the principal variation
+across a fixed position set, because an inverted comparison walks the same
+tree and returns a different move; the speed half is a criterion baseline
+comparison.
+
+It catches a gross regression, the kind a refactor causes when a closure stops
+being inlined or an allocation reaches a hot loop. It cannot see a few
+percent, and neither can an SPRT at the usual bounds, which is why the cheap
+check is the one worth running. Use an idle machine: the speed half is a
+timing measurement.
+
+## Profiling
+
+```sh
+cargo build --profile samply -p turox-cli
+samply record target/samply/turox-cli
+```
+
+The `samply` profile is `release` plus debug symbols, so a profile names real
+functions without the optimizer being turned off underneath the thing being
+measured. This answers why something is slow, which is a separate job from
+whether it got slower; the refactor gate above is the latter.
+
 ## Fuzzing
 
 ```sh
