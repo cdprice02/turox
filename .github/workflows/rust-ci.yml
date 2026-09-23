@@ -66,15 +66,6 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --workspace --locked
 
-      # The supervisor's real job is guaranteeing no bot process survives it,
-      # and leaked workers are what got this machine's address null-routed for
-      # a day. The test for that existed from the day the incident was fixed
-      # and ran only when someone remembered, which is no guarantee at all. It
-      # needs no lichess token and no network beyond localhost, and skips
-      # itself cleanly where python3 or venv is unavailable.
-      - name: Test the lichess bot supervisor
-        run: tools/lichess/test-run-bot.sh
-
       - name: Upload JUnit test results
         if: always()
         uses: actions/upload-artifact@v7

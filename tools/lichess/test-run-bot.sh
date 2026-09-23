@@ -17,6 +17,14 @@
 # fixture's unique temporary path or to a pid this script started, so running
 # the test can never disturb a real bot on the same machine.
 #
+# Not runnable on CI as written, and the failure is not subtle: `set -m` below
+# needs a controlling terminal, GitHub's runner does not provide one, and
+# without job control the supervisor under test shares the runner's own process
+# group. The first case then stops that group and takes the runner down with
+# it, which is the same shape as the leak this test exists to catch. Making it
+# CI-safe means creating the process groups explicitly rather than relying on
+# job control, which needs developing against Linux rather than guessed at.
+#
 # Usage: tools/lichess/test-run-bot.sh
 set -eu
 # Each background job needs its own process group, for the same reason the

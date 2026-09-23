@@ -45,8 +45,10 @@ was reachable by anyone who did not already know it existed.
 
 **A tool owes verification in proportion to what breaks when it is wrong, not
 to the language it is written in.** `tools/lichess/test-run-bot.sh` guards the
-leak that got this machine's address null-routed for a day, so it runs in CI
-rather than when someone remembers. `tools/gamelog/summarize.py` and
+leak that got this machine's address null-routed for a day, so it earns a place
+in CI on that measure, and does not yet hold one: it needs job control, which a
+runner has no terminal to provide, and the attempt took a runner down. Run it
+by hand after touching `run-bot.sh`. `tools/gamelog/summarize.py` and
 `tools/treeshape/measure.py` break nothing when wrong, since a bad number is
 visible to whoever asked for it, and they stay unverified on purpose.
 
