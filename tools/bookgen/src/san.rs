@@ -94,7 +94,10 @@ fn parse_san(token: &str) -> Option<SanMove> {
             b'Q' => Piece::Queen,
             _ => return None,
         };
-        (&token[..token.len() - 2], Some(piece))
+        // `split_at_checked` rather than a slice: it returns None instead
+        // of panicking when the index is not a character boundary, so the
+        // parser rejects malformed input rather than aborting on it.
+        (token.split_at_checked(token.len() - 2)?.0, Some(piece))
     } else {
         (token, None)
     };
@@ -105,12 +108,15 @@ fn parse_san(token: &str) -> Option<SanMove> {
     let (front, dest_str) = token.split_at(token.len() - 2);
     let to = Square::try_from_algebraic(dest_str)?;
 
-    let (piece, front) = match front.as_bytes().first() {
-        Some(b'N') => (Piece::Knight, &front[1..]),
-        Some(b'B') => (Piece::Bishop, &front[1..]),
-        Some(b'R') => (Piece::Rook, &front[1..]),
-        Some(b'Q') => (Piece::Queen, &front[1..]),
-        Some(b'K') => (Piece::King, &front[1..]),
+    // Splitting on a character boundary rather than indexing: a SAN token
+    // reaching here is not guaranteed to be ASCII, and a byte index into the
+    // middle of a multi-byte character would panic rather than fail to parse.
+    let (piece, front) = match front.split_at_checked(1) {
+        Some(("N", rest)) => (Piece::Knight, rest),
+        Some(("B", rest)) => (Piece::Bishop, rest),
+        Some(("R", rest)) => (Piece::Rook, rest),
+        Some(("Q", rest)) => (Piece::Queen, rest),
+        Some(("K", rest)) => (Piece::King, rest),
         _ => (Piece::Pawn, front),
     };
 

@@ -25,7 +25,36 @@ why each of these exists; this file is the lookup.
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
 | mutants, scoped   | `cargo mutants -p turox-engine --file '**/NAME.rs'`                    |
 | coverage          | `cargo llvm-cov --workspace`                                          |
-| voice             | `tools/voice/check.py`                                                |
+
+## What lives in `tools/`
+
+Anything not shipped to a chess GUI. `turox-engine`, `turox-cli` and
+`turox-macros` are the engine; everything that measures it, feeds it, or checks
+the repo around it lives here, in whatever language suits the job. `bookgen` is
+a workspace member despite living here, so every `--workspace` command reaches
+it; `turox-fuzz` stays outside because it needs a different toolchain, which is
+a different reason from the one `bookgen` used to have.
+
+Two rules, both learned rather than assumed:
+
+**A tool is not installed until this table names it.**
+`tools/treeshape/measure.py` measured the exact quantity a refactor has to
+prove and was referenced from nowhere in the repo; `[profile.samply]` sat in
+the root manifest with no README section and no row here. Both worked. Neither
+was reachable by anyone who did not already know it existed.
+
+**A tool owes verification in proportion to what breaks when it is wrong, not
+to the language it is written in.** `tools/lichess/test-run-bot.sh` guards the
+leak that got this machine's address null-routed for a day, so it earns a place
+in CI on that measure, and does not yet hold one: it needs job control, which a
+runner has no terminal to provide, and the attempt took a runner down. Run it
+by hand after touching `run-bot.sh`. `tools/gamelog/summarize.py` and
+`tools/treeshape/measure.py` break nothing when wrong, since a bad number is
+visible to whoever asked for it, and they stay unverified on purpose.
+
+The same measure cuts the other way, and did: a prose checker covering two of
+`voice.md`'s nine rules was deleted rather than given tests, because a rule
+that needs judgement is not made safer by mechanising the part that does not.
 
 ## Gotchas
 
@@ -88,11 +117,11 @@ why each of these exists; this file is the lookup.
   round-robin; locally, scope it (`--file '**/phase.rs'`, `--re SomeName`) or
   run a shard. `--shard` is zero-indexed, so eight shards are `0/8` through
   `7/8` and `8/8` silently selects nothing.
-- **`tools/voice/check.py` covers only part of `docs/agents/voice.md`.** Em
-  dashes and bare issue references in `.rs` source are the two rules a machine
-  can judge, and CI runs them. Everything else in that file is judgement and is
-  caught in review or not at all, so a green run is not evidence that the prose
-  is good.
+- **Nothing checks prose.** `docs/agents/voice.md` is enforced by review and
+  by reading it, not by a script. One existed for its two most mechanical
+  rules and was deleted: a green tick on two rules out of nine was not evidence
+  the prose was good, and it drew attention away from the seven that decide
+  whether it is.
 - **Clippy runs `pedantic` and `nursery`, plus a hand-picked set of
   restriction lints** (`unwrap_used`, `unreachable`, `wildcard_enum_match_arm`,
   `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `dbg_macro`,

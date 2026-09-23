@@ -1,6 +1,7 @@
-//! Walking a set of parsed games into per-position move statistics: how
-//! many times each candidate move was played from each position reached,
-//! and with what results, subject to a rating floor and a ply cap.
+//! Walking a set of parsed games into per-position move statistics.
+//!
+//! How many times each candidate move was played from each position
+//! reached, and with what results, subject to a rating floor and a ply cap.
 //!
 //! Two passes, deliberately: [`aggregate`] applies the rating floor and the
 //! ply cap (the "backstop" half of the density-plus-ply-cap depth rule) and
@@ -40,9 +41,10 @@ pub struct MoveStats {
     pub opening_name: Option<String>,
 }
 
-/// Tuning knobs for [`aggregate`] and [`filter_by_density`]. Deliberately
-/// not fixed constants: the right values are found by measuring the
-/// generator's own output (book size, coverage, plausibility of the lines
+/// Tuning knobs for [`aggregate`] and [`filter_by_density`].
+///
+/// Deliberately not fixed constants: the right values are found by measuring
+/// the generator's own output (book size, coverage, plausibility of the lines
 /// it keeps), not decided in the abstract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildOptions {
@@ -60,10 +62,11 @@ pub struct BuildOptions {
     pub max_ply: u32,
 }
 
-/// Walks every qualifying game in `games` (both ratings at least
-/// `options.min_rating`, a known result) from the start position, up to
-/// `options.max_ply` plies, recording which move was played from each
-/// position reached and with what eventual result.
+/// Walks every qualifying game in `games` from the start position.
+///
+/// Qualifying means both ratings at least `options.min_rating` and a known
+/// result; the walk runs up to `options.max_ply` plies, recording which move
+/// was played from each position reached and with what eventual result.
 ///
 /// Takes an owned-item iterator, not a slice: `games` is consumed one game
 /// at a time (each dropped once its moves are walked) rather than held as
@@ -96,14 +99,19 @@ pub fn aggregate(
                 break;
             };
 
-            let (win_delta, draw_delta, loss_delta) = match (board.side_to_move(), game.result) {
-                (Color::White, GameResult::WhiteWins) => (1, 0, 0),
-                (Color::Black, GameResult::WhiteWins) => (0, 0, 1),
-                (Color::White, GameResult::BlackWins) => (0, 0, 1),
-                (Color::Black, GameResult::BlackWins) => (1, 0, 0),
-                (_, GameResult::Draw) => (0, 1, 0),
-                (_, GameResult::Unknown) => (0, 0, 0), // excluded above; never reached
-            };
+            let (win_delta, draw_delta, loss_delta) =
+                match (board.side_to_move(), game.result) {
+                    // Grouped by whether the side to move is the side that won,
+                    // which is the only thing being asked. Spelling the four
+                    // combinations out separately invited reading them as four
+                    // independent facts rather than one.
+                    (Color::White, GameResult::WhiteWins)
+                    | (Color::Black, GameResult::BlackWins) => (1, 0, 0),
+                    (Color::Black, GameResult::WhiteWins)
+                    | (Color::White, GameResult::BlackWins) => (0, 0, 1),
+                    (_, GameResult::Draw) => (0, 1, 0),
+                    (_, GameResult::Unknown) => (0, 0, 0), // excluded above; never reached
+                };
 
             let entry = results.entry(board.hash()).or_default();
             if let Some(existing) = entry.iter_mut().find(|ms| ms.mv == mv) {
@@ -129,10 +137,12 @@ pub fn aggregate(
     results.into_iter().collect()
 }
 
-/// Drops any position whose candidates' combined `times_played` (summed
-/// across every move [`aggregate`] recorded for it, since every qualifying
-/// game reaching a position plays exactly one move from it) falls short of
-/// `min_sample_size`.
+/// Drops any position whose candidates' combined `times_played` falls short
+/// of `min_sample_size`.
+///
+/// Combined means summed across every move [`aggregate`] recorded for it,
+/// since every qualifying game reaching a position plays exactly one move
+/// from it.
 #[must_use]
 pub fn filter_by_density(
     aggregated: Vec<(u64, Vec<MoveStats>)>,

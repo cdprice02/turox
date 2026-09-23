@@ -59,16 +59,16 @@ without access to this repo, and usually the only honest way to say "waiting
 on upstream". And `#N` in backticks is chess notation for mate in N, which an
 engine has every reason to write.
 
-## What is checked, and what isn't
+## Nothing here is checked by a tool
 
-`tools/voice/check.py` enforces the two rules above that a machine can judge:
-em dashes anywhere, and bare issue references in `.rs` source. CI runs it. It
-knows about both exceptions in the previous section.
+Every rule in this file is a matter of judgement and is caught in review, or
+not at all. That is the reason it is worth reading rather than skimming.
 
-Every other rule here is a matter of judgement and is caught in review, or
-not at all. That is the reason this file is worth reading rather than
-skimming: the parts a tool cannot check are the parts that decide whether the
-prose is worth having.
+Two of them (em dashes, and bare issue references in `.rs` source) are narrow
+enough that a script once checked them, and that script was deleted rather
+than maintained. Mechanising two rules out of nine bought a green tick that
+said nothing about whether the prose was any good, and it drew attention to
+the two cheapest rules at the expense of the seven that decide the answer.
 
 ## Module docs stay short
 

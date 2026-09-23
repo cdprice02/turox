@@ -25,6 +25,13 @@
 mutants.out*/
 *.log
 
+# === Python tooling ===
+# `tools/` holds a few Python scripts, and a stray cache at the repo root is
+# how one of them looked linted when no ruff configuration existed anywhere.
+.ruff_cache/
+__pycache__/
+*.pyc
+
 # === Coverage ===
 /coverage/
 /kcov-*

@@ -20,8 +20,9 @@ use aggregate::BuildOptions;
 use pgn::PgnGame;
 use turox_engine::book::Book;
 
-/// Runs the aggregate-then-weigh half of the pipeline against `games`,
-/// already-parsed or streamed in one at a time (see `pgn::PgnReader`):
+/// Runs the aggregate-then-weigh half of the pipeline against `games`.
+///
+/// Already-parsed or streamed in one at a time (see `pgn::PgnReader`):
 /// whichever the caller has, this doesn't care, since it only ever
 /// consumes the iterator it's given.
 #[must_use]
@@ -38,8 +39,9 @@ pub fn build_book_from_games(
     Book::new(entries)
 }
 
-/// [`build_book_from_games`], parsing `pgn_text` first. Holds all of
-/// `pgn_text` and every game it contains in memory at once (see
+/// [`build_book_from_games`], parsing `pgn_text` first.
+///
+/// Holds all of `pgn_text` and every game it contains in memory at once (see
 /// `pgn::parse_pgn`'s own doc), which is fine for a small synthetic
 /// fixture or a test but not a real source file; a real generator run
 /// should build a `pgn::PgnReader` per input and call
