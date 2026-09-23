@@ -278,8 +278,7 @@ fn build_suite(rows: Vec<OpeningRow>) -> Vec<Opening> {
                 return None;
             }
             let board = replay(&moves)?;
-            if legal_moves(&board).as_slice().is_empty()
-                || material_imbalance(&board) > MAX_MATERIAL_IMBALANCE
+            if legal_moves(&board).is_empty() || material_imbalance(&board) > MAX_MATERIAL_IMBALANCE
             {
                 return None;
             }

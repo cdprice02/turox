@@ -152,6 +152,14 @@ impl Tt {
     /// mask`, never a division or modulo.
     #[must_use]
     pub fn new(hash_mb: usize) -> Self {
+        // Zero would leave `count` at 0, and `0.next_power_of_two() >> 1` is
+        // also 0, so the mask below would underflow and the table would be
+        // built empty behind a mask that indexes anywhere. The UCI path
+        // already clamps before calling here; this is for every other caller,
+        // since a public constructor that panics on a plausible integer is a
+        // trap. Only the floor is clamped: a caller asking for more than
+        // `MAX_HASH_MB` gets what it asked for, which is not a defect.
+        let hash_mb = hash_mb.max(Self::MIN_HASH_MB);
         let bytes = hash_mb * 1024 * 1024;
         let entry_size = std::mem::size_of::<Option<Entry>>();
         let count = u64::try_from(bytes / entry_size).unwrap_or(u64::MAX); // saturate to u64::MAX if the caller asked for more than that
