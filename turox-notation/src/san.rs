@@ -168,7 +168,6 @@ fn parse_san(token: &str) -> Option<SanMove> {
 fn resolve(board: &Board, parsed: SanMove) -> Option<Move> {
     let candidates = legal_moves(board);
     let mut matches = candidates
-        .as_slice()
         .iter()
         .copied()
         .filter(|&mv| matches_parsed(board, mv, parsed));

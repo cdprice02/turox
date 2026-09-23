@@ -23,6 +23,24 @@ use turox_engine::eval::Score;
 use turox_engine::search::tt::Tt;
 use turox_engine::search::MATE;
 
+/// `Tt::new` is public, so it answers for every integer a caller can pass, not
+/// only the ones `uci::session` clamps for it. Zero used to underflow the mask
+/// and leave an empty table behind it, which panicked on construction.
+#[test]
+fn a_zero_sized_table_is_usable_rather_than_a_panic() {
+    let mut tt = Tt::new(0);
+    let mv = a_move();
+
+    // Construction alone used to be enough to panic.
+    tt.store(0xdead_beef_cafe_f00d, 0, 1, 42, -100, 100, mv);
+    let hit = tt.probe(0xdead_beef_cafe_f00d);
+
+    assert!(
+        hit.is_some(),
+        "a floor-clamped table should still hold the entry it was just given"
+    );
+}
+
 proptest! {
     /// Storing a result with `score` strictly inside `(alpha, beta)` always yields
     /// `Bound::Exact` (see `Bound`'s own doc), and `Exact` always qualifies for a cutoff

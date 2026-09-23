@@ -760,8 +760,8 @@ impl<'a> Search<'a> {
             return;
         };
         let side = board.side_to_move();
-        let searched_end = cutoff_index.unwrap_or(moves.as_slice().len());
-        for &searched in &moves.as_slice()[..searched_end] {
+        let searched_end = cutoff_index.unwrap_or(moves.len());
+        for &searched in &moves[..searched_end] {
             if searched.flags().is_material_neutral() {
                 let piece = board
                     .piece_at(searched.from())
@@ -771,7 +771,7 @@ impl<'a> Search<'a> {
             }
         }
         if let Some(i) = cutoff_index {
-            let cutoff_move = moves.as_slice()[i];
+            let cutoff_move = moves[i];
             if cutoff_move.flags().is_material_neutral() {
                 let piece = board
                     .piece_at(cutoff_move.from())
@@ -978,7 +978,7 @@ impl<'a> Search<'a> {
         let mut best_move = None;
         let mut cutoff_index = None;
 
-        for (i, &m) in moves.as_slice().iter().enumerate() {
+        for (i, &m) in moves.iter().enumerate() {
             let mut is_pv = node_is_pv;
             let child_result = if i == 0 {
                 search_child(self, m, -beta, -alpha, is_pv)
@@ -1077,7 +1077,7 @@ impl<'a> Search<'a> {
         let mut best_move = None;
         let mut cutoff_index = None;
 
-        for (i, &m) in moves.as_slice().iter().enumerate() {
+        for (i, &m) in moves.iter().enumerate() {
             let Some(score) = search_child(self, m, -beta, -alpha) else {
                 return LoopOutcome {
                     max,
@@ -1154,7 +1154,7 @@ impl<'a> Search<'a> {
                 return RootOutcome::Completed(0, pv);
             }
             self.order_moves(board, &mut drawn_moves, 0);
-            pv[0] = Some(drawn_moves.as_slice()[0]);
+            pv[0] = Some(drawn_moves[0]);
             return RootOutcome::Completed(0, pv);
         }
 

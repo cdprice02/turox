@@ -125,7 +125,7 @@ where
                 if book_enabled {
                     if let Some(book) = book {
                         if let Some(bm) = book.choose_move(board.hash(), root_seed()) {
-                            if legal_moves(board).as_slice().contains(&bm.mv) {
+                            if legal_moves(board).contains(&bm.mv) {
                                 send(&mut writer, &book_hit_info_string(bm));
                                 send(&mut writer, &Response::BestMove(Some(bm.mv)));
                                 continue;

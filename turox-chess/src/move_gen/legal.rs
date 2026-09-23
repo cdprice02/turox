@@ -198,7 +198,6 @@ pub fn perft(board: &Board, depth: u32) -> u64 {
         return u64::try_from(moves.len()).unwrap_or(u64::MAX);
     }
     moves
-        .as_slice()
         .iter()
         .map(|&m| perft(&board.make_move(m), depth - 1))
         .sum()
