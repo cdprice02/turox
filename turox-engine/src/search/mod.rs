@@ -14,6 +14,8 @@ pub mod draw;
 mod killers;
 mod lmr;
 mod negamax;
+mod ordering;
+mod result;
 pub mod time;
 pub mod tt;
 
@@ -28,7 +30,6 @@ pub mod tt;
 /// from an unrelated concept.
 const MAX_TRACKED_PLY: usize = 512;
 
-pub use negamax::{
-    is_mate_score, CutoffCause, CutoffStats, Search, SearchResult, MATE, MAX_MATE_PLY,
-    MAX_QUIESCENCE_DEPTH,
-};
+pub use negamax::{is_mate_score, Search, MATE, MAX_MATE_PLY, MAX_QUIESCENCE_DEPTH};
+pub use ordering::stats::{CutoffCause, CutoffStats};
+pub use result::SearchResult;

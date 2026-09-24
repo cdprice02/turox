@@ -11,6 +11,8 @@ use crate::search::cutoff_history::CutoffHistory;
 use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
 use crate::search::killers::KillerTable;
 use crate::search::lmr;
+use crate::search::ordering::stats::{CutoffCause, CutoffStats};
+use crate::search::result::{SearchResult, MAX_PV_PLY, PV};
 use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
 use crate::search::MAX_TRACKED_PLY;
@@ -49,16 +51,6 @@ pub const MATE: Score = 30_000;
 /// margin only has to separate the two ranges, not be tight.
 pub const MAX_MATE_PLY: Score = 512;
 
-/// Ply bound for [`PV`] and `Search::pv`, deliberately not [`MAX_TRACKED_PLY`]: that
-/// constant's own justification is defensive slack for pathological recursion depth
-/// (quiescence's uncapped in-check evasion chases), which has nothing to do with how
-/// deep a *reported* principal variation can realistically go. A PV line's real ceiling
-/// is `search_with_info`'s own iterative-deepening bound (`uci::session`'s
-/// `DEFAULT_MAX_DEPTH` is `64`), so bounding it there instead saves the same factor of
-/// `MAX_TRACKED_PLY / MAX_PV_PLY` squared on `Search::pv`, since that one is triangular
-/// (`[PV; MAX_PV_PLY]`, one row per ply) rather than flat.
-const MAX_PV_PLY: usize = 64;
-
 /// Whether `score` encodes a forced mate rather than an ordinary evaluation.
 ///
 /// The single definition of that boundary. It used to be answered in two
@@ -90,144 +82,6 @@ pub const fn is_mate_score(score: Score) -> bool {
 /// identical cap, not a hand-copied literal that could drift out of sync and silently
 /// turn the property test into a comparison between two different search depths.
 pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
-
-/// What produced a beta cutoff, for [`CutoffStats::by_cause`].
-///
-/// About *why the move was tried early*, not what kind of move it is: a capture
-/// that cuts off because the transposition table named it is a hash hit, not a
-/// capture hit. The question this answers is which ordering technique is
-/// earning its place.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Ordinal)]
-#[repr(u8)]
-pub enum CutoffCause {
-    /// The transposition table's stored move for this position.
-    HashMove,
-    /// A quiet move already sitting in a killer slot for this ply.
-    Killer,
-    /// A quiet move already sitting in this ply's mate-killer slot: it
-    /// refuted an earlier sibling with a mate-indicating score.
-    MateKiller,
-    /// Anything else: ordinary move ordering got there without a technique
-    /// tracked here claiming credit.
-    Other,
-}
-
-/// Which move index took a beta cutoff, the standard diagnostic for move-ordering quality.
-///
-/// A well-ordered search takes most of its cutoffs on the first move tried (index 0),
-/// since that's what alpha-beta pruning is actually trying to arrange.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CutoffStats {
-    /// Nodes whose move loop hit a beta cutoff (`alpha >= beta`) at all.
-    pub fail_high_nodes: u64,
-    /// Cutoffs per [`CutoffCause`], indexed by [`CutoffCause::index`].
-    ///
-    /// Answers which ordering technique actually paid off, as distinct from
-    /// `fail_high_nodes` and `cutoff_index`, which measure ordering quality
-    /// overall and say nothing about what produced it. Summing this always
-    /// equals `fail_high_nodes`, the same invariant `cutoff_index` has.
-    ///
-    /// An array keyed by an enum rather than a counter field per technique:
-    /// each new ordering technique that wants its own hit rate adds a variant,
-    /// not a field here plus another `bool` parameter on `record`.
-    pub by_cause: [u64; CutoffCause::ALL.len()],
-    /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
-    /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
-    /// make this array itself unbounded; summing the whole array always equals
-    /// `fail_high_nodes`.
-    pub cutoff_index: [u64; 16],
-}
-
-impl CutoffStats {
-    /// Records a cutoff at `index` (0-based position in the already-ordered
-    /// move list), attributed to `cause`.
-    fn record(&mut self, index: usize, cause: CutoffCause) {
-        self.fail_high_nodes += 1;
-        self.cutoff_index[index.min(15)] += 1;
-        self.by_cause[cause.index()] += 1;
-    }
-}
-
-/// A principal variation, one move per ply starting from wherever it was read: `None`
-/// past however deep the line actually runs, the same "untouched slot" convention
-/// `Search`'s other per-ply tables carry. Sized to [`MAX_PV_PLY`], not
-/// [`MAX_TRACKED_PLY`]; see that constant's own doc for why the two bounds differ.
-pub type PV = [Option<Move>; MAX_PV_PLY];
-
-/// One completed call to [`Search::search`]: the best move and score found, and the depth
-/// actually reached.
-///
-/// `depth` can be less than the requested `max_depth` if the search was aborted
-/// (deadline, node budget, or `request_stop`) before a deeper iteration finished; see
-/// `Search::search`'s doc for why a partial iteration's own result is discarded rather
-/// than returned. `depth` is `0` specifically when even the first iteration never
-/// finished: there, `best_move` still carries the best move found among whatever moves
-/// had already fully resolved before the abort, since that's the only case with no
-/// earlier completed iteration to fall back on instead.
-#[derive(Debug, Clone, Copy, Eq)]
-pub struct SearchResult {
-    /// The principal variation searched
-    pub pv: PV,
-    /// Side-to-move-relative, same convention as [`evaluate`].
-    pub score: Score,
-    /// The depth actually completed; see the struct doc for when this is
-    /// less than the requested `max_depth`.
-    pub depth: u8,
-    /// Total nodes visited (negamax and quiescence both count) across every
-    /// completed and aborted iteration of this call.
-    pub nodes: u64,
-    /// Wall-clock time spent since [`Search::search`] was entered, covering
-    /// every iteration so far rather than just the one this result came from.
-    /// Measured even when no deadline is set, since UCI reports it regardless
-    /// of what bounded the search.
-    pub time: Duration,
-    /// Table occupancy in permille, or `None` when this search has no
-    /// transposition table at all. `None` rather than `0` because the two mean
-    /// different things to a GUI: an empty table and no table are not the same
-    /// state, and only the former is worth reporting as `hashfull 0`.
-    pub hashfull: Option<u16>,
-    /// Cutoff-index histogram for `negamax`'s own move loop (`search_root`'s
-    /// counts the same way), across every completed and aborted iteration so
-    /// far, the same accumulation `nodes` uses.
-    pub negamax_cutoffs: CutoffStats,
-    /// Cutoff-index histogram for `quiescence`'s move loop, kept separate from
-    /// `negamax_cutoffs`: quiescence's own list (captures, or evasions while in
-    /// check) is a different, usually much shorter list than a main-search
-    /// node's, and mixing the two would flatter or distort whichever one
-    /// dominates the combined count.
-    pub quiescence_cutoffs: CutoffStats,
-}
-
-impl SearchResult {
-    /// `None` only when the position handed to `search` has no legal moves at all
-    /// (checkmate or stalemate); every other case, including an aborted first
-    /// iteration, still has a real move to report.
-    #[must_use]
-    pub const fn best_move(&self) -> Option<Move> {
-        self.pv[0]
-    }
-}
-
-/// Compares every field except `time`, mirroring how `Board` excludes its
-/// Zobrist hash: elapsed wall-clock is an observation about one particular
-/// run, not part of what a search *found*, so two runs that reached the same
-/// move, score, depth and node count are the same result even though they
-/// took different amounts of time.
-///
-/// Without this, `tests/search_props.rs`'s `search_is_deterministic` would
-/// compare two timings and fail essentially always, and weakening that test
-/// to dodge the problem would give up the check it exists for.
-impl PartialEq for SearchResult {
-    fn eq(&self, other: &Self) -> bool {
-        self.pv == other.pv
-            && self.score == other.score
-            && self.depth == other.depth
-            && self.nodes == other.nodes
-            && self.hashfull == other.hashfull
-            && self.negamax_cutoffs == other.negamax_cutoffs
-            && self.quiescence_cutoffs == other.quiescence_cutoffs
-    }
-}
 
 /// What [`Search::search_root`] found for one depth: either the full move loop finished,
 /// or an abort cut it short partway through.
