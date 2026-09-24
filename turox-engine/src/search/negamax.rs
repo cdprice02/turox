@@ -10,6 +10,7 @@ use crate::eval::{evaluate, Score, PIECE_VALUES};
 use crate::search::cutoff_history::CutoffHistory;
 use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
 use crate::search::killers::KillerTable;
+use crate::search::lmr;
 use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
 use crate::search::MAX_TRACKED_PLY;
@@ -1433,7 +1434,7 @@ impl<'a> Search<'a> {
 
         let original_alpha = alpha;
         self.set_hash_move(ply, tt_move);
-        self.order_moves(board, &mut moves, ply);
+        let runs = self.order_moves(board, &mut moves, ply);
 
         let mut any_child_tainted = false;
         let outcome = self.alpha_beta_loop(
@@ -1444,10 +1445,13 @@ impl<'a> Search<'a> {
                 beta,
                 depth,
             },
-            // Every move searched at full depth, for now: this is where late
-            // move reductions, futility pruning and late move pruning each
-            // land, one at a time and each behind its own match.
-            |_, _, _| Verdict::Search,
+            // Futility pruning and late move pruning join this match, each
+            // behind its own gate. A reduction of zero is the policy declining
+            // rather than a reduction of no plies, so it maps to `Search`.
+            |_, _, ctx| match lmr::reduction(depth, ctx.searched, runs.is_quiet(ctx.index), is_pv) {
+                0 => Verdict::Search,
+                plies => Verdict::Reduce(plies),
+            },
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
@@ -1872,13 +1876,6 @@ struct PriorityRuns {
     bounds: [u16; MovePriority::COUNT + 1],
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "`range` and `is_quiet` are read by the per-move policy that arrives with late move reductions; this expectation fails the build once one does"
-    )
-)]
 impl PriorityRuns {
     /// Builds the bounds from the number of moves in each tier, indexed by
     /// [`MovePriority::rank`]. The counts are the one extra thing an ordering
