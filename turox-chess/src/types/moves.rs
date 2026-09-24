@@ -150,6 +150,15 @@ impl Move {
         Self(bits)
     }
 
+    /// A placeholder no move generator can ever produce, for filling the
+    /// unused tail of a fixed-capacity buffer: a1-a1 is not a legal move in
+    /// any position, so it cannot be mistaken for real content if it leaks
+    /// past a length.
+    ///
+    /// Not the null move of null-move pruning, which is a search concept and
+    /// has nothing to do with this value.
+    pub const SENTINEL: Self = Self::new(Square::A1, Square::A1, MoveFlags::Quiet);
+
     /// Packs a move from `from` to `to` with the given `flags`.
     #[must_use]
     #[expect(

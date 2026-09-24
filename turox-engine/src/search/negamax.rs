@@ -14,6 +14,7 @@ use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
 use crate::search::MAX_TRACKED_PLY;
 use std::cmp::Reverse;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -436,6 +437,15 @@ pub struct Search<'a> {
     /// clone of this same `Arc` before a caller moves `Search` onto its own
     /// search thread, so the main thread can still set it later.
     stop: Arc<AtomicBool>,
+    /// Scratch for one ordering pass: every move paired with the key it sorts
+    /// on, so the key is computed once per move instead of once per comparison.
+    ///
+    /// Lives here rather than in [`Self::order_moves`]'s own frame because one
+    /// buffer is enough, ordering never re-entering itself, and a two-kilobyte
+    /// local inlined into `negamax` would ride on every frame of a deep
+    /// recursion. Only the first `moves.len()` entries are ever live: the tail
+    /// holds whatever a longer list left behind and is never read.
+    prioritized_moves: [(Reverse<(MovePriority, Score)>, Move); MoveList::CAPACITY],
     /// `None` by default (`negamax` searches with no transposition table at all, the same
     /// as before one existed); set via [`Search::with_tt`]. Borrowed, not owned: the table
     /// lives in `uci::session::run` (like `history` conceptually does, though `history` is
@@ -519,6 +529,8 @@ impl<'a> Search<'a> {
             deadline: None,
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
+            prioritized_moves: [(Reverse((MovePriority::Quiet, 0)), Move::SENTINEL);
+                MoveList::CAPACITY],
             tt: None,
             killers: KillerTable::new(),
             hash_moves: [None; MAX_TRACKED_PLY],
@@ -1661,10 +1673,37 @@ impl Search<'_> {
     /// accepted ordering approximation since it only affects search order, not
     /// legality or correctness.
     ///
-    /// Uses [`MoveList::as_mut_slice`] to sort in place without a second
-    /// allocation.
-    fn order_moves(&self, board: &Board, moves: &mut MoveList, ply: u8) {
-        moves.sort_unstable_by_key(|&m| Reverse(self.move_priority(board, m, ply)));
+    /// Decorate, sort, undecorate, by way of [`Self::prioritized_moves`].
+    /// Sorting the move list directly has `sort_unstable_by_key` recompute
+    /// [`Self::move_priority`] on every comparison rather than once per move,
+    /// and that key does a killer lookup, a cutoff-history lookup and
+    /// piece-value arithmetic each time it runs.
+    ///
+    /// The sort keys on the pair's priority alone and never on the pair, since
+    /// the tuple's derived ordering would add the move itself as a final
+    /// tiebreak and so break ties among equal priorities differently from a
+    /// sort over the moves on their own.
+    ///
+    /// Returns where each priority's run falls in the ordered result, which is
+    /// the half of the work a plain sort computes and throws away.
+    fn order_moves(&mut self, board: &Board, moves: &mut MoveList, ply: u8) -> PriorityRuns {
+        // Counted here rather than scanned off the sorted result, because
+        // this loop already visits every move.
+        let mut counts = [0u16; MovePriority::COUNT];
+        for (i, &m) in moves.iter().enumerate() {
+            let priority = self.move_priority(board, m, ply);
+            self.prioritized_moves[i] = (Reverse(priority), m);
+            counts[priority.0.rank()] += 1;
+        }
+
+        // The live prefix only: past it sit the leavings of a longer list.
+        self.prioritized_moves[..moves.len()].sort_unstable_by_key(|entry| entry.0);
+
+        for i in 0..moves.len() {
+            moves[i] = self.prioritized_moves[i].1;
+        }
+
+        PriorityRuns::from_counts(&counts)
     }
 
     /// Captures and promotions interleave on one material-gain scale rather than
@@ -1768,7 +1807,8 @@ impl Search<'_> {
 /// for that, so the fine-grained tiebreak *within* a tier (MVV-LVA's delta
 /// among captures, [`CutoffHistory`]'s score among quiets) has one shared
 /// place to live rather than a separate payload per variant that needs it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Ordinal)]
+#[repr(u8)]
 enum MovePriority {
     /// A capture losing material, ordered by how much. Below `Quiet` because a
     /// move that hangs a piece is worse than an untried ordinary move.
@@ -1797,6 +1837,77 @@ enum MovePriority {
     /// a different, more recently searched line if replacement has since
     /// overwritten it, where this search's own recorded line cannot.
     PrincipalVariation,
+}
+
+impl MovePriority {
+    /// How many tiers there are, which is the width of a per-tier count.
+    const COUNT: usize = Self::ALL.len();
+
+    /// This tier's position in the order [`Search::order_moves`] produces, best
+    /// first. The inverse of `index`, which numbers by declaration and so runs
+    /// worst first.
+    const fn rank(self) -> usize {
+        Self::COUNT - 1 - self.index()
+    }
+}
+
+/// Where each [`MovePriority`] begins and ends in an ordered move list.
+///
+/// Ordering sorts on the tier ahead of any tiebreak, so every tier occupies one
+/// maximal contiguous run. That is what lets a per-move policy ask which class
+/// a move belongs to from its index alone, rather than re-deriving a
+/// classification the sort already made.
+///
+/// Bounds rather than a tier per move: the ranges are the whole of what a
+/// caller reads, and a 256-entry array would ride on every frame of a deep
+/// recursion to answer the same question. A reduction scaled by a move's own
+/// history score would need the per-move form, and wanting that number is the
+/// point at which widening becomes worth paying for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PriorityRuns {
+    /// The tier at rank `r` occupies `bounds[r]..bounds[r + 1]`, making this a
+    /// prefix sum over the per-tier counts whose last element is the list's
+    /// length. An absent tier is an empty range rather than a sentinel, which
+    /// is what keeps every lookup total.
+    bounds: [u16; MovePriority::COUNT + 1],
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "`range` and `is_quiet` are read by the per-move policy that arrives with late move reductions; this expectation fails the build once one does"
+    )
+)]
+impl PriorityRuns {
+    /// Builds the bounds from the number of moves in each tier, indexed by
+    /// [`MovePriority::rank`]. The counts are the one extra thing an ordering
+    /// pass has to collect, since it already visits every move once to compute
+    /// its key.
+    fn from_counts(counts: &[u16; MovePriority::COUNT]) -> Self {
+        let mut bounds = [0u16; MovePriority::COUNT + 1];
+        let mut total = 0u16;
+        for (slot, count) in bounds.iter_mut().skip(1).zip(counts) {
+            total += *count;
+            *slot = total;
+        }
+        Self { bounds }
+    }
+
+    /// The half-open index range `tier` occupies, empty if no move has it.
+    fn range(self, tier: MovePriority) -> Range<usize> {
+        let rank = tier.rank();
+        usize::from(self.bounds[rank])..usize::from(self.bounds[rank + 1])
+    }
+
+    /// Whether the move at `index` is quiet: not a capture, not a promotion,
+    /// and not lifted above `Quiet` by the hash move, the previous principal
+    /// variation or a killer. This is the predicate late move reductions,
+    /// futility pruning and late move pruning all ask, and the reason this type
+    /// exists at all.
+    fn is_quiet(self, index: usize) -> bool {
+        self.range(MovePriority::Quiet).contains(&index)
+    }
 }
 
 #[cfg(test)]
@@ -3115,6 +3226,218 @@ mod tests {
         assert!(
             richest >= 4,
             "no position produced enough tiers for the property to mean anything: {richest}"
+        );
+    }
+
+    // ---- Move ordering's priority runs ----
+
+    /// Positions paired with the exact order `order_moves` puts them in, all
+    /// four seeded identically by [`seeded_search`].
+    ///
+    /// The orders were captured from the implementation rather than derived by
+    /// hand, so on their own they assert only that ordering has not changed.
+    /// That is the point: a rewrite of how the sort carries its keys has to
+    /// come out move-identical, and this catches a difference in the unit test
+    /// suite rather than only in `tools/refactor-gate.sh`.
+    ///
+    /// Every position is legal, checked with `in_check` against the side not to
+    /// move. `capture_and_quiet_position` is deliberately not among them: the
+    /// side not to move is in check there, which makes it an illegal position
+    /// whose move list contains a king capture.
+    const ORDERING_FIXTURES: &[(&str, &str)] = &[
+        (
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "a2a3 g2h3 d5e6 e2a6 b2b3 a2a4 f3f4 c3b1 c3d1 c3a4 c3b5 e5d3 e5c4 \
+             e5g4 e5c6 e1d1 e1f1 d2c1 d2e3 d2f4 d2g5 d2h6 d5d6 g2g4 e2f1 e2d3 \
+             e2c4 e2b5 a1b1 a1c1 a1d1 h1f1 h1g1 f3d3 f3e3 f3g3 g2g3 f3g4 f3f5 \
+             f3h5 e1g1 e1c1 e2d1 e5d7 e5f7 e5g6 f3f6 f3h3",
+        ),
+        (
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "a2a3 b2b3 a2a4 b2b4 c2c3 c2c4 d2d3 d2d4 e2e3 e2e4 f2f3 f2f4 g2g3 \
+             g2g4 h2h3 h2h4 b1a3 b1c3 g1f3 g1h3",
+        ),
+        (
+            "3k4/8/8/3n4/4Q3/8/8/4K3 w - - 0 1",
+            "e1d1 e1d2 e1f1 e1e2 e1f2 e4d3 e4b1 e4h1 e4c2 e4e2 e4g2 e4e3 e4f3 \
+             e4a4 e4b4 e4c4 e4d4 e4f4 e4g4 e4h4 e4e5 e4f5 e4e6 e4g6 e4e7 e4h7 \
+             e4e8 e4d5",
+        ),
+        (
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+            "e2e3 g2g3 e2e4 g2g4 a5a4 a5a6 b4b1 b4b2 b4b3 b4a4 b4c4 b4d4 b4e4 \
+             b4f4",
+        ),
+    ];
+
+    /// A `Search` whose ply-0 hints are seeded from this position's own quiet
+    /// moves, so a fixture's expected order is reproducible from the FEN alone
+    /// rather than from a table of hand-picked hint moves.
+    fn seeded_search(board: &Board) -> Search<'static> {
+        let quiets: Vec<Move> = legal_moves(board)
+            .iter()
+            .filter(|m| !m.flags().is_capture() && !m.flags().is_promotion())
+            .copied()
+            .collect();
+        assert!(
+            quiets.len() >= 3,
+            "a fixture needs three quiet moves to seed a hash hint, a killer and a mate killer"
+        );
+        let mut search = Search::new(Vec::new());
+        search.set_hash_move(0, Some(quiets[0]));
+        search.killers.record(0, quiets[1], false);
+        search.killers.record(0, quiets[2], true);
+        search
+    }
+
+    /// The fixture's position, its ordered moves, the runs over them, and the
+    /// search that produced all three.
+    fn order_fixture(fen: &str) -> (Board, MoveList, PriorityRuns, Search<'static>) {
+        let board = Board::try_from_fen(fen).expect("valid FEN");
+        let mut search = seeded_search(&board);
+        let mut moves = legal_moves(&board);
+        let runs = search.order_moves(&board, &mut moves, 0);
+        (board, moves, runs, search)
+    }
+
+    fn rendered(moves: &MoveList) -> String {
+        moves
+            .iter()
+            .map(|m| format!("{:?}{:?}", m.from(), m.to()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn every_ordering_fixture_is_a_legal_position() {
+        for (fen, _) in ORDERING_FIXTURES {
+            let board = Board::try_from_fen(fen).expect("valid FEN");
+            assert!(
+                !in_check(&board, board.side_to_move().flip()),
+                "{fen}: the side not to move is in check, so this position cannot arise"
+            );
+        }
+    }
+
+    #[test]
+    fn order_moves_produces_the_order_it_always_has() {
+        for (fen, expected) in ORDERING_FIXTURES {
+            let (_, moves, _, _) = order_fixture(fen);
+            let expected: Vec<&str> = expected.split_whitespace().collect();
+            assert_eq!(
+                rendered(&moves),
+                expected.join(" "),
+                "{fen}: the ordering changed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_runs_place_every_move_in_its_own_tier() {
+        for (fen, _) in ORDERING_FIXTURES {
+            let (board, moves, runs, search) = order_fixture(fen);
+            for (i, &m) in moves.iter().enumerate() {
+                let tier = search.move_priority(&board, m, 0).0;
+                assert!(
+                    runs.range(tier).contains(&i),
+                    "{fen}: move {i} is {tier:?}, but the runs put that tier at {:?}",
+                    runs.range(tier)
+                );
+            }
+            let covered: usize = MovePriority::ALL
+                .into_iter()
+                .map(|t| runs.range(t).len())
+                .sum();
+            assert_eq!(
+                covered,
+                moves.len(),
+                "{fen}: the runs must cover every move exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn is_quiet_agrees_with_the_tier_move_priority_assigns() {
+        for (fen, _) in ORDERING_FIXTURES {
+            let (board, moves, runs, search) = order_fixture(fen);
+            for (i, &m) in moves.iter().enumerate() {
+                let tier = search.move_priority(&board, m, 0).0;
+                assert_eq!(
+                    runs.is_quiet(i),
+                    tier == MovePriority::Quiet,
+                    "{fen}: move {i} is {tier:?}"
+                );
+            }
+        }
+    }
+
+    /// An absent tier has to answer as an empty range rather than as a missing
+    /// one, because a caller indexes it unconditionally. The start position has
+    /// no captures at all, so three tiers are absent at once.
+    #[test]
+    fn a_tier_no_move_belongs_to_is_an_empty_range() {
+        let (_, _, runs, _) = order_fixture(ORDERING_FIXTURES[1].0);
+        for tier in [
+            MovePriority::WinningCapture,
+            MovePriority::EqualCapture,
+            MovePriority::LosingCapture,
+        ] {
+            assert!(
+                runs.range(tier).is_empty(),
+                "the start position offers no captures, so {tier:?} must be empty, got {:?}",
+                runs.range(tier)
+            );
+        }
+        assert!(
+            !runs.range(MovePriority::Quiet).is_empty(),
+            "the start position is almost all quiet moves"
+        );
+    }
+
+    #[test]
+    fn an_empty_move_list_leaves_every_run_empty() {
+        let board = Board::try_from_fen(ORDERING_FIXTURES[1].0).expect("valid FEN");
+        let mut search = Search::new(Vec::new());
+        let mut moves = MoveList::new();
+        let runs = search.order_moves(&board, &mut moves, 0);
+        for tier in MovePriority::ALL {
+            assert!(
+                runs.range(tier).is_empty(),
+                "no moves, so {tier:?} must be empty"
+            );
+        }
+        assert!(
+            !runs.is_quiet(0),
+            "no move is quiet when there is no move at all"
+        );
+    }
+
+    /// Ordering is about to grow a scratch buffer that outlives a single call.
+    /// Anything left in it by one position must not reach the next, and the
+    /// failure mode is a wrong classification rather than a crash, so it needs
+    /// pinning before the buffer exists rather than after.
+    #[test]
+    fn ordering_one_position_does_not_leak_into_the_next() {
+        let board = Board::try_from_fen(ORDERING_FIXTURES[3].0).expect("valid FEN");
+        let mut alone = seeded_search(&board);
+        let mut expected_moves = legal_moves(&board);
+        let expected_runs = alone.order_moves(&board, &mut expected_moves, 0);
+
+        let other = Board::try_from_fen(ORDERING_FIXTURES[0].0).expect("valid FEN");
+        let mut reused = seeded_search(&board);
+        let mut other_moves = legal_moves(&other);
+        let _ = reused.order_moves(&other, &mut other_moves, 0);
+        let mut moves = legal_moves(&board);
+        let runs = reused.order_moves(&board, &mut moves, 0);
+
+        assert_eq!(
+            rendered(&moves),
+            rendered(&expected_moves),
+            "ordering a larger position first changed the order of this one"
+        );
+        assert_eq!(
+            runs, expected_runs,
+            "ordering a larger position first changed this one's runs"
         );
     }
 }
