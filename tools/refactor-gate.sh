@@ -8,27 +8,29 @@
 # nothing. This script checks both and says which of the three outcomes
 # applies.
 #
-# What this catches, and what it does not. The throughput half is a timing
-# measurement on a machine that has other things to do, and its resolution was
-# measured rather than assumed: comparing a source tree against itself, the
-# confidence interval spans roughly ten to fifteen percent, on the search
-# benchmark and on the micro-benchmarks alike. So this reliably catches a
-# gross regression, which is what a refactor produces when it goes wrong (a
-# closure that stops being inlined, an allocation that creeps into a hot
-# loop), and it cannot see a few percent.
+# The move-identity half is exact and is the reason to run this. The
+# throughput half is weak, and how weak was measured rather than assumed:
+# comparing a source tree *against itself*, so every number reported is noise,
+# criterion's estimate came back between nine and twenty percent "faster"
+# depending on configuration, never near zero.
 #
-# Nothing available here can. An SPRT with the usual bounds is built to detect
-# a gain of about ten Elo, and a few percent of speed is worth a few Elo, so a
-# match would spend hours and report no change. The choice is not between a
-# precise instrument and a cheap one; it is between a cheap instrument that
-# catches gross regressions in minutes and an expensive one that catches the
-# same ones in hours. Anything smaller is invisible either way, which is worth
-# stating rather than papering over.
+# That is a bias rather than scatter, and it runs one way: whichever side is
+# measured second looks faster, because the first process pays for a cold
+# machine. This script measures the baseline first and the candidate second, so
+# the bias favours passing, the worst direction for a check meant to catch
+# regressions. A discarded warm-up pass below roughly halves it, and does not
+# remove it.
 #
-# The sample settings below are deliberately above criterion's defaults. At
-# the default ten samples this comparison reported "Performance has improved",
-# p = 0.00, between two builds of identical source; more samples is what stops
-# the gate firing at random.
+# Raising the sample count makes this worse rather than better, which is why
+# the script no longer tries: more samples narrows the interval around the
+# biased estimate, so criterion grows confident in a change that is not there.
+# At ten samples three null comparisons in eight were called an improvement; at
+# thirty it was seven in eight.
+#
+# So the throughput reading is advisory. A change smaller than the floor is not
+# evidence either way, and this script says so rather than passing criterion's
+# verdict through. Measuring a few percent honestly needs a quiet machine and
+# an alternating base/candidate design, which is a different tool.
 #
 # See README.md and docs/agents/toolchain.md for when each tool applies.
 
@@ -46,8 +48,9 @@ test_ref="worktree"
 depth="7"
 bench_filter=""
 run_bench="true"
-sample_size="20"
-measurement_time="30"
+# Percent. Below this, a reported change is indistinguishable from the bias
+# measured above, so the script refuses to call it either way.
+throughput_floor="20"
 
 usage() {
     cat <<'USAGE'
@@ -69,13 +72,14 @@ Checks:
                   `search` is the one that covers the search hot path
   --no-bench      skip the throughput check and report move-identity only,
                   for iterating on a change before it is ready to measure
-  --sample-size N criterion samples per benchmark        (default: 20)
-  --measurement-time S
-                  criterion seconds per benchmark        (default: 30)
+  --floor PCT     treat a throughput change smaller than this as no evidence
+                                                         (default: 20)
 
-Raising either costs run time and buys resolution. These defaults sit above
-criterion's own, which take too few samples for this comparison and report
-significant-looking differences between identical builds.
+The floor is not caution: comparing a tree against itself on this hardware
+reports differences of nine to twenty percent, so anything under it is
+indistinguishable from measuring nothing. Each benchmark sets its own sample
+count in code, which overrides any command line flag, so this script does not
+pass one.
 
 The machine should be otherwise idle: the throughput half is a timing
 measurement, and anything else competing for CPU invalidates it.
@@ -89,8 +93,7 @@ while [ $# -gt 0 ]; do
         --depth) depth="$2"; shift 2 ;;
         --bench) bench_filter="$2"; shift 2 ;;
         --no-bench) run_bench="false"; shift ;;
-        --sample-size) sample_size="$2"; shift 2 ;;
-        --measurement-time) measurement_time="$2"; shift 2 ;;
+        --floor) throughput_floor="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'refactor-gate.sh: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
@@ -202,22 +205,42 @@ if [ "$run_bench" = "true" ]; then
         set -- bench --package turox-engine
     fi
 
+    # Discarded. The first process of a run pays for a cold machine, and
+    # whichever side is measured after it looks faster for reasons that have
+    # nothing to do with the code. Throwing one pass away roughly halves that.
+    printf '\n=== warm-up (discarded) ===\n'
+    (cd "$base_src" && CRITERION_HOME="$criterion_home" \
+        CARGO_TARGET_DIR="$base_target" \
+        cargo "$@" -- --save-baseline warmup) >&2
+
     printf '\n=== throughput baseline: %s ===\n' "$base_ref"
     (cd "$base_src" && CRITERION_HOME="$criterion_home" \
         CARGO_TARGET_DIR="$base_target" \
-        cargo "$@" -- --sample-size "$sample_size" \
-        --measurement-time "$measurement_time" \
-        --save-baseline refactor-gate) >&2
+        cargo "$@" -- --save-baseline refactor-gate) >&2
 
     printf '\n=== throughput under test: %s ===\n' "$test_ref"
     bench_log="$work_dir/bench-test.log"
     (cd "$test_src" && CRITERION_HOME="$criterion_home" \
         CARGO_TARGET_DIR="$test_target" \
-        cargo "$@" -- --sample-size "$sample_size" \
-        --measurement-time "$measurement_time" \
-        --baseline refactor-gate) 2>&1 | tee "$bench_log"
+        cargo "$@" -- --baseline refactor-gate) 2>&1 | tee "$bench_log"
 
-    if grep -q 'Performance has regressed' "$bench_log"; then
+    # Criterion's own verdict is deliberately ignored. It answers whether a
+    # difference is statistically real, and here it says yes to one that is
+    # not. The question asked instead is whether any reported change clears
+    # the floor, which is the only claim this measurement supports. The minus
+    # sign criterion prints is U+2212 rather than a hyphen.
+    worst=$(tr "\342\210\222" "-" < "$bench_log" | awk '
+        /change:/ { getline
+                    if (match($0, /\[[^]]*\]/)) {
+                        split(substr($0, RSTART + 1, RLENGTH - 2), a, "%")
+                        v = a[2] + 0
+                        if (v < 0) v = -v
+                        if (v > m) m = v
+                    } }
+        END { printf "%.1f", m + 0 }')
+    printf '\nlargest reported change: %s%%, floor %s%%\n' "$worst" "$throughput_floor"
+    over=$(awk -v w="$worst" -v f="$throughput_floor" 'BEGIN { print (w > f) ? "yes" : "no" }')
+    if [ "$over" = "yes" ]; then
         bench_ok="false"
     fi
 fi
@@ -239,17 +262,19 @@ if [ "$bench_ran" = "false" ]; then
 fi
 
 if [ "$bench_ok" = "false" ]; then
-    printf 'Move-identical, but criterion reports a regression.\n\n'
-    printf 'Re-run before believing it. One verdict from this comparison is not\n'
-    printf 'reliable at a few percent, so confirm the regression reproduces and\n'
-    printf 'read its size rather than just its presence.\n\n'
-    printf 'If it holds: the engine plays the same moves more slowly, so the whole\n'
-    printf 'strength effect is that speed delta. A large regression is worth\n'
-    printf 'pricing in Elo; a marginal one is below what a match can resolve:\n\n'
+    printf 'Move-identical, but a throughput change cleared the floor.\n\n'
+    printf 'Large enough to be worth looking at, which is all this says: the\n'
+    printf 'measurement is biased toward reporting the candidate as faster, so a\n'
+    printf 'change big enough to show up anyway deserves attention.\n\n'
+    printf 'Re-run first. If it holds, the engine plays the same moves at a\n'
+    printf 'different speed, so the whole strength effect is that delta, and a\n'
+    printf 'match is the only thing that prices it:\n\n'
     printf '  tools/selfplay/sprt.sh --base %s --test %s\n' "$base_ref" "$test_ref"
     exit 1
 fi
 
-printf 'Move-identical at equal throughput. No SPRT owed.\n\n'
+printf 'Move-identical, no throughput change above the floor. No SPRT owed.\n\n'
 printf 'Same moves at the same speed is the same engine, so a match would be\n'
-printf 'measuring nothing.\n'
+printf 'measuring nothing. Note what this does not say: a regression smaller\n'
+printf 'than the floor would not have been seen, and nothing available here\n'
+printf 'could see it.\n'
