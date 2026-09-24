@@ -12,6 +12,7 @@
 pub mod cutoff_history;
 pub mod draw;
 mod killers;
+mod lmr;
 mod negamax;
 pub mod time;
 pub mod tt;
