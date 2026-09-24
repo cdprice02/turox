@@ -3050,4 +3050,71 @@ mod tests {
             "the killer must outrank an unrelated quiet move"
         );
     }
+
+    /// Classifying a move by its index, which is how the per-move policy seam's
+    /// callers ask whether a move is quiet, is sound only if each
+    /// [`MovePriority`] occupies one unbroken run of the ordered list. That
+    /// holds because [`Search::move_priority`]'s tuple sorts on the tier first,
+    /// so it is a property of the sort rather than of any position.
+    ///
+    /// Worth its own test because every way of breaking it is silent: a
+    /// secondary sort criterion that crossed tiers, a reordered `MovePriority`
+    /// variant, or a new tier whose membership is not a function of the tuple's
+    /// first element would all leave the existing ordering tests green while
+    /// making an index-derived classification lie.
+    #[test]
+    fn ordering_leaves_every_priority_tier_in_one_contiguous_run() {
+        // Kiwipete, which offers captures across the whole value range at once,
+        // alongside the start position and a lone-king endgame where almost
+        // everything is quiet.
+        let fens = [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "4k3/8/8/3n4/4Q3/8/8/4K3 w - - 0 1",
+        ];
+
+        let mut richest = 0;
+        for fen in fens {
+            let board = Board::try_from_fen(fen).expect("valid FEN");
+            let mut moves = legal_moves(&board);
+            let quiets: Vec<Move> = moves
+                .iter()
+                .filter(|m| !m.flags().is_capture() && !m.flags().is_promotion())
+                .copied()
+                .collect();
+            assert!(
+                quiets.len() >= 3,
+                "{fen}: need three quiets to seed a hash hint and two killers"
+            );
+
+            let mut search = Search::new(Vec::new());
+            search.set_hash_move(0, Some(quiets[0]));
+            search.killers.record(0, quiets[1], false);
+            search.killers.record(0, quiets[2], true);
+            search.order_moves(&board, &mut moves, 0);
+
+            let mut runs: Vec<MovePriority> = Vec::new();
+            for &m in &moves {
+                let tier = search.move_priority(&board, m, 0).0;
+                if runs.last() != Some(&tier) {
+                    runs.push(tier);
+                }
+            }
+
+            let mut distinct = runs.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert_eq!(
+                runs.len(),
+                distinct.len(),
+                "{fen}: a tier appears in more than one run: {runs:?}"
+            );
+            richest = richest.max(distinct.len());
+        }
+
+        assert!(
+            richest >= 4,
+            "no position produced enough tiers for the property to mean anything: {richest}"
+        );
+    }
 }
