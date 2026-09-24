@@ -199,10 +199,12 @@ if [ "$run_bench" = "true" ]; then
     rm -rf "$criterion_home"
     mkdir -p "$criterion_home"
 
+    # `--benches` so the intent is stated; the lib targets opt out in their
+    # manifests, which is what actually keeps libtest out of the run.
     if [ -n "$bench_filter" ]; then
         set -- bench --package turox-engine --bench "$bench_filter"
     else
-        set -- bench --package turox-engine
+        set -- bench --package turox-engine --benches
     fi
 
     # Discarded. The first process of a run pays for a cold machine, and
@@ -226,19 +228,24 @@ if [ "$run_bench" = "true" ]; then
 
     # Criterion's own verdict is deliberately ignored. It answers whether a
     # difference is statistically real, and here it says yes to one that is
-    # not. The question asked instead is whether any reported change clears
-    # the floor, which is the only claim this measurement supports. The minus
-    # sign criterion prints is U+2212 rather than a hyphen.
-    worst=$(tr "\342\210\222" "-" < "$bench_log" | awk '
+    # not. The question asked instead is whether a reported *slowdown* clears
+    # the floor, which is the only claim this measurement supports.
+    #
+    # Slowdowns only. The bias runs toward reporting the candidate as faster,
+    # so flagging apparent speedups would fail nearly every run on the very
+    # artefact the floor exists to work around.
+    #
+    # `sed`, not `tr`: criterion prints U+2212, and `tr` substitutes byte by
+    # byte, so a multibyte character comes out as three hyphens.
+    worst=$(sed 's/−/-/g' "$bench_log" | awk '
         /change:/ { getline
                     if (match($0, /\[[^]]*\]/)) {
                         split(substr($0, RSTART + 1, RLENGTH - 2), a, "%")
                         v = a[2] + 0
-                        if (v < 0) v = -v
                         if (v > m) m = v
                     } }
         END { printf "%.1f", m + 0 }')
-    printf '\nlargest reported change: %s%%, floor %s%%\n' "$worst" "$throughput_floor"
+    printf '\nlargest slowdown reported: %s%%, floor %s%%\n' "$worst" "$throughput_floor"
     over=$(awk -v w="$worst" -v f="$throughput_floor" 'BEGIN { print (w > f) ? "yes" : "no" }')
     if [ "$over" = "yes" ]; then
         bench_ok="false"

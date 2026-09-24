@@ -53,6 +53,22 @@ pub type Score = i16;
 /// second table that could drift out of sync with this one.
 pub(crate) use weights::PIECE_VALUES;
 
+/// Every term that is a function of piece placement, in summation order.
+///
+/// A term listed here is summed for both colours or not at all, which a
+/// hand-written pair of lines per term cannot promise.
+///
+/// `tempo` is absent because it is side-to-move-relative rather than
+/// per-colour, so it has no Black half to subtract.
+const TERMS: &[fn(&Board, Color) -> phase::Tapered] = &[
+    pawn_structure::pawn_structure_score,
+    king_safety::king_safety_score,
+    bishop_pair::bishop_pair_score,
+    rook_files::rook_files_score,
+    outposts::outpost_score,
+    outposts::king_pawn_tropism_score,
+];
+
 /// Material, piece-square, and every other term's sum from White's
 /// perspective: positive means White is ahead.
 ///
@@ -88,18 +104,10 @@ pub fn eval_white_pov(board: &Board) -> Score {
             );
         }
     }
-    score += pawn_structure::pawn_structure_score(board, Color::White);
-    score -= pawn_structure::pawn_structure_score(board, Color::Black);
-    score += king_safety::king_safety_score(board, Color::White);
-    score -= king_safety::king_safety_score(board, Color::Black);
-    score += bishop_pair::bishop_pair_score(board, Color::White);
-    score -= bishop_pair::bishop_pair_score(board, Color::Black);
-    score += rook_files::rook_files_score(board, Color::White);
-    score -= rook_files::rook_files_score(board, Color::Black);
-    score += outposts::outpost_score(board, Color::White);
-    score -= outposts::outpost_score(board, Color::Black);
-    score += outposts::king_pawn_tropism_score(board, Color::White);
-    score -= outposts::king_pawn_tropism_score(board, Color::Black);
+    for term in TERMS {
+        score += term(board, Color::White);
+        score -= term(board, Color::Black);
+    }
     // Not a per-colour pair like every term above: tempo depends on
     // `board.side_to_move()` directly, see `tempo::tempo_score`'s own doc.
     score += tempo::tempo_score(board);

@@ -9,6 +9,9 @@ rust-version = "1.87"
 [lib]
 name = "turox_chess"
 path = "src/lib.rs"
+# The lib has no benchmarks of its own, and without this `cargo bench` runs its
+# libtest harness as one, which rejects criterion's flags.
+bench = false
 
 [lints]
 workspace = true
