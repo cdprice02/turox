@@ -78,16 +78,29 @@ that needs judgement is not made safer by mechanising the part that does not.
   Reach for the SPRT directly whenever what the engine *plays* is meant to
   change.
 
-- **Neither instrument sees a small speed regression, so do not claim one
-  did.** The throughput comparison's confidence interval spans roughly ten to
-  fifteen percent on this hardware, measured by comparing a tree against
-  itself; criterion's own defaults are worse still and will report a
-  significant "improvement" between identical builds. An SPRT at the usual
-  bounds is no better placed: it is built to detect about ten Elo, and a few
-  percent of speed is worth a few Elo. Both catch a gross regression, which is
-  the kind a refactor actually causes; a subtle one is out of reach either
-  way. Run the gate on an otherwise idle machine, and re-run any reported
-  regression before believing it.
+- **The refactor gate's two halves are not equally trustworthy.**
+  Move-identity is exact: same node counts and same principal variation, or
+  not. Throughput is close to useless, and the measurement is the reason
+  rather than the hardware being slow.
+
+  Comparing a tree *against itself*, so every number is noise, criterion
+  reports the second side as nine to twenty percent **faster**, never near
+  zero. That is a bias, not scatter, and it runs one way: the first process of
+  a run pays for a cold machine. The gate measures the baseline first, so the
+  bias favours passing.
+
+  **More samples makes it worse.** At ten samples, three null comparisons in
+  eight were called an improvement; at thirty, seven in eight, because a
+  narrower interval around a biased estimate is just more confidence in the
+  wrong answer. A discarded warm-up pass roughly halves the bias and does not
+  remove it; the gate does that and sets a floor of twenty percent, below
+  which it reports nothing either way.
+
+  So a clean gate run means "no regression larger than about twenty percent",
+  which is enough for a pure refactor and is not a throughput measurement.
+  Anything finer needs a quiet machine and an alternating base/candidate
+  design that nothing here does. An SPRT is no substitute: at the usual bounds
+  it detects about ten Elo, and a few percent of speed is worth a few Elo.
 - **CI never runs benchmarks on a PR**, only `cargo bench --no-run` to
   keep them compiling, because shared runners aren't consistent enough
   run to run for the numbers to mean anything. A weekly scheduled job
