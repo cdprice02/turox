@@ -7,6 +7,24 @@
 //! with each move after the first. Keeping the answer a pure function is what
 //! makes it testable without driving a whole search.
 
+/// Shallowest depth worth reducing at.
+///
+/// Three because two cannot: a child of a depth-2 node is searched at depth 1,
+/// and `alpha_beta_loop` clamps any reduction that would take a child below
+/// that, so every request at depth 2 already comes back as nothing. Saying so
+/// here rather than leaning on the clamp keeps the rule stated in one place a
+/// reader can find.
+const MIN_DEPTH: u8 = 3;
+
+/// How many moves are searched at full depth before the rest are treated as
+/// late.
+///
+/// The ordering has to earn the assumption that what it put late is bad, and
+/// three is the conventional price. Too low and the reduction lands on moves
+/// the ordering had no real opinion about; too high and most of the tree is
+/// searched at full depth anyway.
+const MIN_SEARCHED: usize = 3;
+
 /// Width of [`REDUCTIONS`] on both axes. Reductions saturate well below this,
 /// so depths and move counts past it clamp to the last row or column rather
 /// than growing the table to hold values that no longer change.
@@ -74,11 +92,16 @@ fn table(depth: u8, searched: usize) -> u8 {
 /// reduction so the child still has depth to search is the loop's job, not
 /// this function's.
 pub(super) fn reduction(depth: u8, searched: usize, is_quiet: bool, is_pv: bool) -> u8 {
-    // PLACEHOLDER, to be replaced by the policy this module exists for. Always
-    // answering zero leaves the search exactly as it was, so the table and its
-    // tests can land before anything reduces.
-    let _ = (depth, searched, is_quiet, is_pv, table(0, 0));
-    0
+    if depth < MIN_DEPTH || searched < MIN_SEARCHED || !is_quiet {
+        return 0;
+    }
+
+    let plies = table(depth, searched);
+    if is_pv {
+        plies.saturating_sub(1)
+    } else {
+        plies
+    }
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@
 //! exact mate distance, so nothing needs a feature switch to compare against.
 //! Any change that stops the search reaching a mate fails here.
 //!
-//! **Every puzzle is searched past its own mate distance as well as at it.**
+//! **Every puzzle is searched past where it is found as well as at it.**
 //! Searching a mate in three at depth three proves very little about pruning:
 //! the mating line is most of the tree. Searching the same puzzle several
 //! plies deeper puts the mate inside a tree full of ordinary moves, which is
@@ -34,8 +34,19 @@ struct MatePuzzle {
     name: &'static str,
     fen: &'static str,
     /// Plies, not moves: mate in one is 1, mate in two is 3. This is the
-    /// distance `MATE - n` encodes, so it is the number the assertion needs.
+    /// distance `MATE - n` encodes, so it is the score the assertion expects,
+    /// whatever depth the search needed to reach it.
     mate_in_plies: u8,
+    /// The shallowest depth at which the search actually reports the mate.
+    ///
+    /// Equal to `mate_in_plies` for a full-width search, and larger wherever a
+    /// selective technique has given up horizon: a reduced or pruned line needs
+    /// more budget to reach the same mate. Recorded per puzzle rather than
+    /// allowed for globally, so the cost of each technique is a number that
+    /// changes visibly in a diff. A feature that pushes a mate one ply out is
+    /// doing its job; one that pushes it five, or loses it, is not, and only a
+    /// recorded figure tells those apart.
+    found_at: u8,
     /// The second depth to search at, past `mate_in_plies`. Only this one is
     /// free: the other depth a puzzle is worth searching at is its own mate
     /// distance, so naming it separately would only create a way for the two
@@ -55,36 +66,46 @@ const PUZZLES: &[MatePuzzle] = &[
         name: "back-rank mate, White mating",
         fen: "6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1",
         mate_in_plies: 1,
+        found_at: 1,
         deep_depth: 7,
     },
     MatePuzzle {
         name: "back-rank mate, Black mating",
         fen: "r3k3/8/8/8/8/8/5PPP/6K1 b - - 0 1",
         mate_in_plies: 1,
+        found_at: 1,
         deep_depth: 7,
     },
     MatePuzzle {
         name: "Philidor's Legacy, the smothered mate finish",
         fen: "5r1k/6pp/4Q2N/8/8/8/5PPP/6K1 w - - 4 3",
         mate_in_plies: 3,
+        found_at: 3,
         deep_depth: 7,
     },
     MatePuzzle {
         name: "rook ladder, White mating",
         fen: "7k/8/8/8/8/8/R7/1R5K w - - 0 1",
         mate_in_plies: 3,
+        found_at: 3,
         deep_depth: 7,
     },
     MatePuzzle {
         name: "rook ladder, Black mating",
         fen: "1r5k/r7/8/8/8/8/8/7K b - - 0 1",
         mate_in_plies: 3,
+        found_at: 3,
         deep_depth: 7,
     },
     MatePuzzle {
         name: "crowded board, forced mate in five plies",
         fen: "7k/8/8/8/3NN3/1PPPPP2/R5P1/1R4K1 w - - 0 1",
         mate_in_plies: 5,
+        // Late move reductions cost a ply here: the mating line's later moves
+        // are quiet and ordered late among forty, so at a depth-5 budget the
+        // reduced line no longer reaches the mate. Depth 6 finds it, and finds
+        // it at the true distance rather than a wrong one.
+        found_at: 6,
         deep_depth: 7,
     },
 ];
@@ -95,13 +116,20 @@ fn every_forced_mate_is_found_at_and_beyond_its_own_depth() {
         let board = Board::try_from_fen(puzzle.fen).expect("valid FEN");
         let expected = MATE - i16::from(puzzle.mate_in_plies);
         assert!(
-            puzzle.deep_depth > puzzle.mate_in_plies,
-            "{}: a deep depth of {} is not past a mate at ply {}",
+            puzzle.found_at >= puzzle.mate_in_plies,
+            "{}: cannot find a mate at ply {} with only {} plies of budget",
+            puzzle.name,
+            puzzle.mate_in_plies,
+            puzzle.found_at
+        );
+        assert!(
+            puzzle.deep_depth > puzzle.found_at,
+            "{}: a deep depth of {} is not past where the mate is found, {}",
             puzzle.name,
             puzzle.deep_depth,
-            puzzle.mate_in_plies
+            puzzle.found_at
         );
-        for depth in [puzzle.mate_in_plies, puzzle.deep_depth] {
+        for depth in [puzzle.found_at, puzzle.deep_depth] {
             let mut search = Search::new(Vec::new());
             let result = search.search(&board, depth);
             assert_eq!(
