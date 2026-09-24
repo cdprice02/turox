@@ -36,9 +36,15 @@ struct MatePuzzle {
     /// Plies, not moves: mate in one is 1, mate in two is 3. This is the
     /// distance `MATE - n` encodes, so it is the number the assertion needs.
     mate_in_plies: u8,
-    /// Depths to search at. Always includes `mate_in_plies`, and always at
-    /// least one depth well past it.
-    depths: &'static [u8],
+    /// The second depth to search at, past `mate_in_plies`. Only this one is
+    /// free: the other depth a puzzle is worth searching at is its own mate
+    /// distance, so naming it separately would only create a way for the two
+    /// to disagree.
+    ///
+    /// One extra depth rather than every depth in between, because
+    /// `Search::search` iterates from depth 1: a puzzle searched at 5, 6 and 7
+    /// re-searches the shallow plies three times over for the same coverage.
+    deep_depth: u8,
 }
 
 /// Whether the mating side is the one to move is not incidental: a mate
@@ -49,37 +55,37 @@ const PUZZLES: &[MatePuzzle] = &[
         name: "back-rank mate, White mating",
         fen: "6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1",
         mate_in_plies: 1,
-        depths: &[1, 3, 5, 7],
+        deep_depth: 7,
     },
     MatePuzzle {
         name: "back-rank mate, Black mating",
         fen: "r3k3/8/8/8/8/8/5PPP/6K1 b - - 0 1",
         mate_in_plies: 1,
-        depths: &[1, 3, 5, 7],
+        deep_depth: 7,
     },
     MatePuzzle {
         name: "Philidor's Legacy, the smothered mate finish",
         fen: "5r1k/6pp/4Q2N/8/8/8/5PPP/6K1 w - - 4 3",
         mate_in_plies: 3,
-        depths: &[3, 5, 7],
+        deep_depth: 7,
     },
     MatePuzzle {
         name: "rook ladder, White mating",
         fen: "7k/8/8/8/8/8/R7/1R5K w - - 0 1",
         mate_in_plies: 3,
-        depths: &[3, 5, 7],
+        deep_depth: 7,
     },
     MatePuzzle {
         name: "rook ladder, Black mating",
         fen: "1r5k/r7/8/8/8/8/8/7K b - - 0 1",
         mate_in_plies: 3,
-        depths: &[3, 5, 7],
+        deep_depth: 7,
     },
     MatePuzzle {
         name: "crowded board, forced mate in five plies",
         fen: "7k/8/8/8/3NN3/1PPPPP2/R5P1/1R4K1 w - - 0 1",
         mate_in_plies: 5,
-        depths: &[5, 6, 7],
+        deep_depth: 7,
     },
 ];
 
@@ -88,13 +94,14 @@ fn every_forced_mate_is_found_at_and_beyond_its_own_depth() {
     for puzzle in PUZZLES {
         let board = Board::try_from_fen(puzzle.fen).expect("valid FEN");
         let expected = MATE - i16::from(puzzle.mate_in_plies);
-        for &depth in puzzle.depths {
-            assert!(
-                depth >= puzzle.mate_in_plies,
-                "{}: depth {depth} cannot reach a mate at ply {}",
-                puzzle.name,
-                puzzle.mate_in_plies
-            );
+        assert!(
+            puzzle.deep_depth > puzzle.mate_in_plies,
+            "{}: a deep depth of {} is not past a mate at ply {}",
+            puzzle.name,
+            puzzle.deep_depth,
+            puzzle.mate_in_plies
+        );
+        for depth in [puzzle.mate_in_plies, puzzle.deep_depth] {
             let mut search = Search::new(Vec::new());
             let result = search.search(&board, depth);
             assert_eq!(
