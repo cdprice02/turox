@@ -1690,7 +1690,7 @@ impl Search<'_> {
         // Counted here rather than scanned off the sorted result, because
         // this loop already visits every move.
         let mut counts = [0u16; MovePriority::COUNT];
-        for (i, &m) in moves.into_iter().enumerate() {
+        for (i, &m) in moves.iter().enumerate() {
             let priority = self.move_priority(board, m, ply);
             self.prioritized_moves[i] = (Reverse(priority), m);
             counts[priority.0.rank()] += 1;
