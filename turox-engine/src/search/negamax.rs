@@ -306,22 +306,12 @@ struct LoopCtx {
 }
 
 impl LoopCtx {
-    /// Whether this is a principal variation node.
+    /// Whether this is a principal variation node: a null window can only ever
+    /// prove a bound, so a node searched with one is not on the line.
     ///
-    /// Derived rather than stored, because the window already says it: a null
-    /// window can only ever prove a bound, and a node searched with one is by
-    /// definition not on the principal variation. Storing it alongside meant
-    /// two sources of truth for one fact, and nothing kept them in step.
-    ///
-    /// Gates two things: whether a child inherits PV status, and whether an
-    /// improvement is worth recording into `Search::pv` at all, since a cut
-    /// node's local best move is bookkeeping for alpha-beta rather than part
-    /// of the real line.
-    ///
-    /// The identity this rests on is that every wide window in the search
-    /// belongs to a PV node and every null window does not. A technique that
-    /// searched a PV node with a null window, or a non-PV node with a wide
-    /// one, would break it silently; none of the queued ones do.
+    /// Rests on every wide window in the search belonging to a PV node and
+    /// every null window not. A technique that searched a PV node with a null
+    /// window, or a non-PV node with a wide one, would break this silently.
     const fn is_pv(self) -> bool {
         self.beta > self.alpha + 1
     }
