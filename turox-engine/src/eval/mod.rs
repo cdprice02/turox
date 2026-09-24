@@ -55,15 +55,11 @@ pub(crate) use weights::PIECE_VALUES;
 
 /// Every term that is a function of piece placement, in summation order.
 ///
-/// A table rather than a hand-written `+= White` / `-= Black` pair each,
-/// because the pairs are what go stale: this module's own doc already says
-/// the submodule list is the term list, and four of the five most recent
-/// eval merges each added one pair by hand. A term added to this array is
-/// summed for both colours or not at all.
+/// A term listed here is summed for both colours or not at all, which a
+/// hand-written pair of lines per term cannot promise.
 ///
-/// `tempo` is deliberately absent: it is side-to-move-relative rather than
-/// per-colour, so it has no Black half to subtract and cannot be expressed
-/// in this shape. See `tempo::tempo_score`.
+/// `tempo` is absent because it is side-to-move-relative rather than
+/// per-colour, so it has no Black half to subtract.
 const TERMS: &[fn(&Board, Color) -> phase::Tapered] = &[
     pawn_structure::pawn_structure_score,
     king_safety::king_safety_score,
