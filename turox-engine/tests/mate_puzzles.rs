@@ -14,13 +14,13 @@
 //!
 //! **Every puzzle is searched past its own mate distance as well as at it.**
 //! Searching a mate in three at depth three proves very little about pruning:
-//! the mating line is most of the tree. Searching it at depth seven puts the
-//! mate inside a tree full of ordinary moves, which is where a reduction or a
-//! margin actually gets the chance to prune it away.
+//! the mating line is most of the tree. Searching the same puzzle several
+//! plies deeper puts the mate inside a tree full of ordinary moves, which is
+//! where a reduction or a margin actually gets the chance to prune it away.
 //!
 //! `tests/search.rs` keeps its own mate tests, which assert the mating *move*
-//! and carry the provenance of each FEN. These assert the score, over a range
-//! of depths, and exist to be re-run rather than read.
+//! and carry the provenance of each FEN. These assert the score, and exist to
+//! be re-run rather than read.
 //!
 //! The deep searches make this one of the slower tests in the suite, and it
 //! stays out of `#[ignore]` anyway: a guard that only runs in the deep job
