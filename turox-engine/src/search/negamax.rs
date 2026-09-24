@@ -437,6 +437,15 @@ pub struct Search<'a> {
     /// clone of this same `Arc` before a caller moves `Search` onto its own
     /// search thread, so the main thread can still set it later.
     stop: Arc<AtomicBool>,
+    /// Scratch for one ordering pass: every move paired with the key it sorts
+    /// on, so the key is computed once per move instead of once per comparison.
+    ///
+    /// Lives here rather than in [`Self::order_moves`]'s own frame because one
+    /// buffer is enough, ordering never re-entering itself, and a two-kilobyte
+    /// local inlined into `negamax` would ride on every frame of a deep
+    /// recursion. Only the first `moves.len()` entries are ever live: the tail
+    /// holds whatever a longer list left behind and is never read.
+    prioritized_moves: [(Reverse<(MovePriority, Score)>, Move); MoveList::CAPACITY],
     /// `None` by default (`negamax` searches with no transposition table at all, the same
     /// as before one existed); set via [`Search::with_tt`]. Borrowed, not owned: the table
     /// lives in `uci::session::run` (like `history` conceptually does, though `history` is
@@ -520,6 +529,8 @@ impl<'a> Search<'a> {
             deadline: None,
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
+            prioritized_moves: [(Reverse((MovePriority::Quiet, 0)), Move::SENTINEL);
+                MoveList::CAPACITY],
             tt: None,
             killers: KillerTable::new(),
             hash_moves: [None; MAX_TRACKED_PLY],
@@ -1662,21 +1673,36 @@ impl Search<'_> {
     /// accepted ordering approximation since it only affects search order, not
     /// legality or correctness.
     ///
-    /// Uses [`MoveList::as_mut_slice`] to sort in place without a second
-    /// allocation.
-    fn order_moves(&self, board: &Board, moves: &mut MoveList, ply: u8) -> PriorityRuns {
-        moves.sort_unstable_by_key(|&m| Reverse(self.move_priority(board, m, ply)));
-
-        // PLACEHOLDER, to be deleted by the change this interface exists for.
-        // A second pass recomputing exactly what the sort discarded, which is
-        // the defect being fixed rather than the fix. The sort keeps its
-        // current shape so the ordering is provably unchanged while the
-        // interface lands; folding the two passes into one
-        // decorate-sort-undecorate is what removes the recomputation.
+    /// Decorate, sort, undecorate, by way of [`Self::prioritized_moves`].
+    /// Sorting the move list directly has `sort_unstable_by_key` recompute
+    /// [`Self::move_priority`] on every comparison rather than once per move,
+    /// and that key does a killer lookup, a cutoff-history lookup and
+    /// piece-value arithmetic each time it runs.
+    ///
+    /// The sort keys on the pair's priority alone and never on the pair, since
+    /// the tuple's derived ordering would add the move itself as a final
+    /// tiebreak and so break ties among equal priorities differently from a
+    /// sort over the moves on their own.
+    ///
+    /// Returns where each priority's run falls in the ordered result, which is
+    /// the half of the work a plain sort computes and throws away.
+    fn order_moves(&mut self, board: &Board, moves: &mut MoveList, ply: u8) -> PriorityRuns {
+        // Counted here rather than scanned off the sorted result, because
+        // this loop already visits every move.
         let mut counts = [0u16; MovePriority::COUNT];
-        for &m in &*moves {
-            counts[self.move_priority(board, m, ply).0.rank()] += 1;
+        for (i, &m) in moves.into_iter().enumerate() {
+            let priority = self.move_priority(board, m, ply);
+            self.prioritized_moves[i] = (Reverse(priority), m);
+            counts[priority.0.rank()] += 1;
         }
+
+        // The live prefix only: past it sit the leavings of a longer list.
+        self.prioritized_moves[..moves.len()].sort_unstable_by_key(|entry| entry.0);
+
+        for i in 0..moves.len() {
+            moves[i] = self.prioritized_moves[i].1;
+        }
+
         PriorityRuns::from_counts(&counts)
     }
 
@@ -3268,7 +3294,7 @@ mod tests {
     /// search that produced all three.
     fn order_fixture(fen: &str) -> (Board, MoveList, PriorityRuns, Search<'static>) {
         let board = Board::try_from_fen(fen).expect("valid FEN");
-        let search = seeded_search(&board);
+        let mut search = seeded_search(&board);
         let mut moves = legal_moves(&board);
         let runs = search.order_moves(&board, &mut moves, 0);
         (board, moves, runs, search)
@@ -3371,7 +3397,7 @@ mod tests {
     #[test]
     fn an_empty_move_list_leaves_every_run_empty() {
         let board = Board::try_from_fen(ORDERING_FIXTURES[1].0).expect("valid FEN");
-        let search = Search::new(Vec::new());
+        let mut search = Search::new(Vec::new());
         let mut moves = MoveList::new();
         let runs = search.order_moves(&board, &mut moves, 0);
         for tier in MovePriority::ALL {
@@ -3393,12 +3419,12 @@ mod tests {
     #[test]
     fn ordering_one_position_does_not_leak_into_the_next() {
         let board = Board::try_from_fen(ORDERING_FIXTURES[3].0).expect("valid FEN");
-        let alone = seeded_search(&board);
+        let mut alone = seeded_search(&board);
         let mut expected_moves = legal_moves(&board);
         let expected_runs = alone.order_moves(&board, &mut expected_moves, 0);
 
         let other = Board::try_from_fen(ORDERING_FIXTURES[0].0).expect("valid FEN");
-        let reused = seeded_search(&board);
+        let mut reused = seeded_search(&board);
         let mut other_moves = legal_moves(&other);
         let _ = reused.order_moves(&other, &mut other_moves, 0);
         let mut moves = legal_moves(&board);
