@@ -303,16 +303,28 @@ struct LoopCtx {
     /// why the loop needs the number rather than leaving it captured by the
     /// caller's closure.
     depth: u8,
-    /// Whether this node was reached via a genuinely wide window from its
-    /// parent (the root always is; a child is only if its parent was *and*
-    /// it's either the parent's first move or the target of a re-search).
-    /// Gates two things: whether move 0's own child inherits PV status
-    /// (`is_pv` propagates unchanged to move 0; every later move's initial
-    /// probe is `false`, becoming `true` only for that move's own re-search),
-    /// and whether an improvement here is worth recording into `self.pv` at
-    /// all -- a cut node's local best move is bookkeeping for alpha-beta, not
-    /// part of the real principal variation.
-    is_pv: bool,
+}
+
+impl LoopCtx {
+    /// Whether this is a principal variation node.
+    ///
+    /// Derived rather than stored, because the window already says it: a null
+    /// window can only ever prove a bound, and a node searched with one is by
+    /// definition not on the principal variation. Storing it alongside meant
+    /// two sources of truth for one fact, and nothing kept them in step.
+    ///
+    /// Gates two things: whether a child inherits PV status, and whether an
+    /// improvement is worth recording into `Search::pv` at all, since a cut
+    /// node's local best move is bookkeeping for alpha-beta rather than part
+    /// of the real line.
+    ///
+    /// The identity this rests on is that every wide window in the search
+    /// belongs to a PV node and every null window does not. A technique that
+    /// searched a PV node with a null window, or a non-PV node with a wide
+    /// one, would break it silently; none of the queued ones do.
+    const fn is_pv(self) -> bool {
+        self.beta > self.alpha + 1
+    }
 }
 
 /// What the caller decides about one move, asked as the loop reaches it.
@@ -1016,12 +1028,6 @@ impl<'a> Search<'a> {
     /// Generic over `F` rather than taking `&mut dyn FnMut`: this is the
     /// innermost loop of the entire engine, so it monomorphizes per call
     /// site and inlines exactly as hand-written copies would.
-    // Over the hundred-line limit, deliberately. This is the engine's innermost
-    // loop and the sequence *is* the algorithm: decide, probe, re-deepen,
-    // widen, record, cut. Splitting it makes a reader jump between functions to
-    // follow a single move's fate, and it is where throughput work happens, so
-    // the one place a reader returns to most often is the last place worth
-    // fragmenting for a line count.
     #[expect(
         clippy::too_many_lines,
         reason = "the engine's innermost loop; the sequence is the algorithm, and splitting it costs the reader more than the length does"
@@ -1037,12 +1043,12 @@ impl<'a> Search<'a> {
         D: FnMut(&mut Self, Move, &MoveCtx) -> Verdict,
         F: FnMut(&mut Self, Move, LoopCtx) -> Option<Score>,
     {
+        let node_is_pv = ctx.is_pv();
         let LoopCtx {
             ply,
             mut alpha,
             beta,
             depth,
-            is_pv: node_is_pv,
         } = ctx;
 
         let mut max = Score::MIN;
@@ -1090,7 +1096,6 @@ impl<'a> Search<'a> {
                 alpha: -beta,
                 beta: -alpha,
                 depth: full,
-                is_pv,
             };
             let child_result = if searched == 0 {
                 search_child(self, m, child)
@@ -1102,7 +1107,6 @@ impl<'a> Search<'a> {
                     LoopCtx {
                         alpha: child.beta - 1,
                         depth: full - reduction,
-                        is_pv,
                         ..child
                     },
                 );
@@ -1119,13 +1123,12 @@ impl<'a> Search<'a> {
                             m,
                             LoopCtx {
                                 alpha: child.beta - 1,
-                                is_pv: false,
                                 ..child
                             },
                         ) {
                             Some(deep) if -deep > alpha && (-deep < beta || node_is_pv) => {
                                 is_pv = true;
-                                search_child(self, m, LoopCtx { is_pv, ..child })
+                                search_child(self, m, child)
                             }
                             deep => deep,
                         }
@@ -1147,7 +1150,7 @@ impl<'a> Search<'a> {
                     // could ever get overwritten by.
                     Some(p) if -p > alpha && (-p < beta || node_is_pv) => {
                         is_pv = true;
-                        search_child(self, m, LoopCtx { is_pv, ..child })
+                        search_child(self, m, child)
                     }
                     p => p,
                 }
@@ -1341,7 +1344,6 @@ impl<'a> Search<'a> {
                 alpha,
                 beta,
                 depth,
-                is_pv: true,
             },
             // The root searches every legal move, always. A move pruned here
             // is one the engine can never play, however good it was, so this
@@ -1350,7 +1352,7 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv);
+                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv());
                 s.history.pop();
                 result.map(|r| r.score)
             },
@@ -1494,7 +1496,6 @@ impl<'a> Search<'a> {
                 alpha,
                 beta,
                 depth,
-                is_pv,
             },
             // Every move searched at full depth, for now: this is where late
             // move reductions, futility pruning and late move pruning each
@@ -1503,7 +1504,7 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv);
+                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv());
                 s.history.pop();
                 result.map(|r| {
                     any_child_tainted |= r.tainted;
@@ -1937,14 +1938,55 @@ mod tests {
         (outcome, calls.into_inner())
     }
 
+    /// A node at `depth` with a wide window, and therefore a principal
+    /// variation node: `LoopCtx::is_pv` reads the window rather than a flag,
+    /// and the tests below need a window loose enough that a move does not
+    /// cut off before the loop's own behaviour can be observed.
     fn ctx_at(depth: u8) -> LoopCtx {
         LoopCtx {
             ply: 1,
             alpha: -100,
             beta: 100,
             depth,
-            is_pv: false,
         }
+    }
+
+    #[test]
+    fn a_wide_window_is_a_pv_node_and_a_null_window_is_not() {
+        assert!(
+            LoopCtx {
+                ply: 0,
+                alpha: -100,
+                beta: 100,
+                depth: 4
+            }
+            .is_pv(),
+            "a window with room between the bounds can return an exact score"
+        );
+        // The shape every null-window probe in the loop uses: beta is exactly
+        // one above alpha, so the search can only ever prove a bound.
+        assert!(
+            !LoopCtx {
+                ply: 0,
+                alpha: 41,
+                beta: 42,
+                depth: 4
+            }
+            .is_pv(),
+            "a one-point window can only prove a bound, never an exact score"
+        );
+        // Two points apart is still wide enough to be exact, which is what an
+        // aspiration window narrowed around the previous score looks like.
+        assert!(
+            LoopCtx {
+                ply: 0,
+                alpha: 40,
+                beta: 42,
+                depth: 4
+            }
+            .is_pv(),
+            "a narrow window is not a null window"
+        );
     }
 
     #[test]
