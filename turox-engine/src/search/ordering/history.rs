@@ -1,7 +1,7 @@
 //! The history heuristic: a fact about which quiet moves tend to be good, independent of
 //! any one search tree.
 //!
-//! Complements the killer table (`negamax`'s own `Search::killers` field) rather than
+//! Complements the killer table (`MoveOrdering`'s own `killers` field) rather than
 //! replacing it: a killer is a fact about *this search tree's* sibling structure, rebuilt
 //! fresh every `go`. This table accumulates over many more nodes than two killer slots
 //! ever see, so it is threaded in from `uci::session::run` and survives across `go` calls
@@ -11,7 +11,7 @@
 //! Indexed `[side][piece][to]` rather than `[side][from][to]`: two different pieces
 //! leaving the same square are unrelated events for "was this destination good," so the
 //! `from` square carries no information this table needs. Quiet moves only, same rule as
-//! killers (`Search::note_cutoff_move`'s own doc): a capture or promotion is already
+//! killers (`MoveOrdering::on_cutoff`'s own doc): a capture or promotion is already
 //! ordered by MVV-LVA/material gain, so recording it here would duplicate that ordering.
 
 use crate::eval::Score;

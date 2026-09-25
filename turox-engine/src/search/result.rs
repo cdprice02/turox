@@ -18,7 +18,7 @@ use turox_chess::types::Move;
 /// `MAX_TRACKED_PLY / MAX_PV_PLY` squared on `Search::pv`, since that one is triangular
 /// (`[PV; MAX_PV_PLY]`, one row per ply) rather than flat.
 ///
-/// [`MAX_TRACKED_PLY`]: super::MAX_TRACKED_PLY
+/// [`MAX_TRACKED_PLY`]: super::ordering::MAX_TRACKED_PLY
 pub(in crate::search) const MAX_PV_PLY: usize = 64;
 
 /// A principal variation, one move per ply starting from wherever it was read: `None`
@@ -26,7 +26,7 @@ pub(in crate::search) const MAX_PV_PLY: usize = 64;
 /// `Search`'s other per-ply tables carry. Sized to [`MAX_PV_PLY`], not
 /// [`MAX_TRACKED_PLY`]; see that constant's own doc for why the two bounds differ.
 ///
-/// [`MAX_TRACKED_PLY`]: super::MAX_TRACKED_PLY
+/// [`MAX_TRACKED_PLY`]: super::ordering::MAX_TRACKED_PLY
 pub type PV = [Option<Move>; MAX_PV_PLY];
 
 /// One completed call to [`Search::search`]: the best move and score found, and the depth
