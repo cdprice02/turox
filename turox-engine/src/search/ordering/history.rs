@@ -46,7 +46,7 @@ fn cutoff_delta(depth: u8) -> Score {
 pub struct CutoffHistory {
     /// `[side][piece][to]`; see the module doc for why `from` carries no information this
     /// table needs.
-    scores: [[[Score; Square::ALL.len()]; Piece::ALL.len()]; Color::ALL.len()],
+    scores: [[[Score; Square::COUNT]; Piece::COUNT]; Color::COUNT],
 }
 
 impl Default for CutoffHistory {
@@ -62,7 +62,7 @@ impl CutoffHistory {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            scores: [[[0; Square::ALL.len()]; Piece::ALL.len()]; Color::ALL.len()],
+            scores: [[[0; Square::COUNT]; Piece::COUNT]; Color::COUNT],
         }
     }
 

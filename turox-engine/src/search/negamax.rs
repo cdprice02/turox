@@ -290,8 +290,8 @@ pub struct Search<'a> {
     /// search thread, so the main thread can still set it later.
     stop: Arc<AtomicBool>,
     /// Every table that decides which move this search tries first, and the
-    /// pass that reads them. Owned as one field rather than five so that a new
-    /// ordering technique lands entirely inside `ordering`; see that module.
+    /// pass that reads them. One field so that a new ordering technique lands
+    /// entirely inside `ordering`; see that module.
     ordering: MoveOrdering<'a>,
     /// `None` by default (`negamax` searches with no transposition table at all, the same
     /// as before one existed); set via [`Search::with_tt`]. Borrowed, not owned: the table
@@ -1327,7 +1327,7 @@ impl<'a> Search<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::testing::{capture_and_quiet_position, find_move};
+    use crate::search::fixtures::{capture_and_quiet_position, find_move};
     use turox_chess::types::{Color, Piece, Square};
 
     /// A move list of `n` distinct legal moves, for driving `alpha_beta_loop`

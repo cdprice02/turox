@@ -42,7 +42,7 @@ const MAX_TRACKED_PLY: usize = 512;
 
 /// Every table that decides which move a node tries first.
 ///
-/// Held by `Search` as a single field rather than as five, so that the tables
+/// Held by `Search` as one field, so that the tables
 /// a cutoff writes and the pass that reads them cannot drift apart: a new
 /// ordering technique adds a table here and a branch in
 /// [`MoveOrdering::on_cutoff`], and `Search` does not change at all.
@@ -403,7 +403,7 @@ impl<'a> MoveOrdering<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::testing::{capture_and_quiet_position, find_move};
+    use crate::search::fixtures::{capture_and_quiet_position, find_move};
     use crate::search::MATE;
     use turox_chess::board::Board;
     use turox_chess::move_gen::attacks::in_check;

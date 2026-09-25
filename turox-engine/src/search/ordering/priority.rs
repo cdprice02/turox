@@ -52,9 +52,6 @@ pub(super) enum MovePriority {
 }
 
 impl MovePriority {
-    /// How many tiers there are, which is the width of a per-tier count.
-    pub(super) const COUNT: usize = Self::ALL.len();
-
     /// This tier's position in the order [`MoveOrdering::order`](super::MoveOrdering::order) produces, best
     /// first. The inverse of `index`, which numbers by declaration and so runs
     /// worst first.
