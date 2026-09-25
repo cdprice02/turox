@@ -9,7 +9,7 @@ use crate::search::ordering::stats::CutoffStats;
 use std::time::Duration;
 use turox_chess::types::Move;
 
-/// Ply bound for [`PV`] and `Search::pv`, deliberately not [`MAX_TRACKED_PLY`]: that
+/// Ply bound for [`PV`] and `Search::pv`, deliberately not `MAX_TRACKED_PLY`: that
 /// constant's own justification is defensive slack for pathological recursion depth
 /// (quiescence's uncapped in-check evasion chases), which has nothing to do with how
 /// deep a *reported* principal variation can realistically go. A PV line's real ceiling
@@ -17,16 +17,12 @@ use turox_chess::types::Move;
 /// `DEFAULT_MAX_DEPTH` is `64`), so bounding it there instead saves the same factor of
 /// `MAX_TRACKED_PLY / MAX_PV_PLY` squared on `Search::pv`, since that one is triangular
 /// (`[PV; MAX_PV_PLY]`, one row per ply) rather than flat.
-///
-/// [`MAX_TRACKED_PLY`]: super::MAX_TRACKED_PLY
 pub(in crate::search) const MAX_PV_PLY: usize = 64;
 
 /// A principal variation, one move per ply starting from wherever it was read: `None`
 /// past however deep the line actually runs, the same "untouched slot" convention
 /// `Search`'s other per-ply tables carry. Sized to [`MAX_PV_PLY`], not
-/// [`MAX_TRACKED_PLY`]; see that constant's own doc for why the two bounds differ.
-///
-/// [`MAX_TRACKED_PLY`]: super::MAX_TRACKED_PLY
+/// `MAX_TRACKED_PLY`; see that constant's own doc for why the two bounds differ.
 pub type PV = [Option<Move>; MAX_PV_PLY];
 
 /// One completed call to [`Search::search`]: the best move and score found, and the depth

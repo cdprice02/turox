@@ -45,7 +45,7 @@ pub struct CutoffStats {
     /// An array keyed by an enum rather than a counter field per technique:
     /// each new ordering technique that wants its own hit rate adds a variant,
     /// not a field here plus another `bool` parameter on `record`.
-    pub by_cause: [u64; CutoffCause::ALL.len()],
+    pub by_cause: [u64; CutoffCause::COUNT],
     /// `cutoff_index[i]` counts cutoffs at move index `i`, for `i < 15`. Index `15` is an
     /// overflow bucket for the 16th move onward, so a long tail of rare late cutoffs can't
     /// make this array itself unbounded; summing the whole array always equals
