@@ -78,23 +78,6 @@ pub(in crate::search) struct MoveOrdering<'a> {
     /// table. Attribution has to follow the ordering, or it credits a technique
     /// that did not put the move first.
     hash_moves: [Option<Move>; MAX_TRACKED_PLY],
-    /// The previous iterative-deepening iteration's completed best line, one move
-    /// per ply, frozen once that iteration finishes and consulted (never mutated)
-    /// by [`Self::move_priority`] for the whole of the next. `None` past however
-    /// deep that line actually ran, the same convention `hash_moves`/`killers`
-    /// carry for an untouched ply, and unconditionally `None` at ply 0 of the very
-    /// first iteration, when there is no previous iteration yet.
-    ///
-    /// Deliberately flat, not the triangular structure PVS's own in-progress PV
-    /// tracking needs: once an iteration completes, its whole best line collapses
-    /// to exactly one move per ply, so this only ever needs to answer "what was
-    /// the move at this ply," never "what is the rest of the line from here."
-    /// Trusted ahead of `hash_moves` for that ply (see [`MovePriority`]'s own
-    /// doc): a hash move can be a different, more recently searched, position's
-    /// entry if the table's replacement scheme has since overwritten this one, but
-    /// this line is this search's own, uncorrupted record of what actually played
-    /// out.
-    previous_pv_line: [Option<Move>; MAX_TRACKED_PLY],
     /// Quiet-move ordering scores independent of any one search tree, unlike `killers`:
     /// it accumulates over many more nodes than two killer slots ever see, so it is
     /// threaded in from `uci::session::run` rather than owned here, the same way `tt` is.
@@ -112,7 +95,6 @@ impl<'a> MoveOrdering<'a> {
                 MoveList::CAPACITY],
             killers: KillerTable::new(),
             hash_moves: [None; MAX_TRACKED_PLY],
-            previous_pv_line: [None; MAX_TRACKED_PLY],
             cutoff_history: None,
         }
     }
@@ -135,15 +117,6 @@ impl<'a> MoveOrdering<'a> {
     /// This ply's hash move; see [`Self::set_hash_move`].
     fn hash_move(&self, ply: u8) -> Option<Move> {
         self.hash_moves[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
-    }
-
-    /// This ply's move in the previous iteration's completed best line; see
-    /// [`Self::previous_pv_line`]. No setter alongside this one the way
-    /// `hash_move` has `set_hash_move`: populating this is PVS's own job, done
-    /// once per completed iteration from whatever in-progress structure it
-    /// builds the line in, not once per node the way a hash move is recorded.
-    fn previous_pv_move(&self, ply: u8) -> Option<Move> {
-        self.previous_pv_line[usize::from(ply).min(MAX_TRACKED_PLY - 1)]
     }
 
     /// Orders `moves` in place, most promising first, so alpha-beta prunes more
@@ -181,12 +154,13 @@ impl<'a> MoveOrdering<'a> {
         board: &Board,
         moves: &mut MoveList,
         ply: u8,
+        pv_hint: Option<Move>,
     ) -> PriorityRuns {
         // Counted here rather than scanned off the sorted result, because
         // this loop already visits every move.
         let mut counts = [0u16; MovePriority::COUNT];
         for (i, &m) in moves.iter().enumerate() {
-            let priority = self.move_priority(board, m, ply);
+            let priority = self.move_priority(board, m, ply, pv_hint);
             self.prioritized_moves[i] = (Reverse(priority), m);
             counts[priority.0.rank()] += 1;
         }
@@ -230,8 +204,14 @@ impl<'a> MoveOrdering<'a> {
         clippy::expect_used,
         reason = "the flags decide which arm runs, so a promotion arm always has a promotion piece and a capture arm always has a victim; the from-square always holds the moving piece"
     )]
-    fn move_priority(&self, board: &Board, m: Move, ply: u8) -> (MovePriority, Score) {
-        if Some(m) == self.previous_pv_move(ply) {
+    fn move_priority(
+        &self,
+        board: &Board,
+        m: Move,
+        ply: u8,
+        pv_hint: Option<Move>,
+    ) -> (MovePriority, Score) {
+        if Some(m) == pv_hint {
             return (MovePriority::PrincipalVariation, 0);
         }
         if Some(m) == self.hash_move(ply) {
@@ -485,7 +465,7 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            priority_ordering(None, &[]).move_priority(&board, quiet, 0),
+            priority_ordering(None, &[]).move_priority(&board, quiet, 0, None),
             (MovePriority::Quiet, 0)
         );
     }
@@ -505,7 +485,7 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3q4/4P3/8/4K3 w - - 0 1").expect("valid FEN");
         let pawn_takes_queen = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
-            priority_ordering(None, &[]).move_priority(&board, pawn_takes_queen, 0),
+            priority_ordering(None, &[]).move_priority(&board, pawn_takes_queen, 0, None),
             (MovePriority::WinningCapture, 800),
             "a pawn capturing a queen is the textbook winning capture, gain = 900 - 100"
         );
@@ -516,7 +496,7 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3p4/4Q3/8/4K3 w - - 0 1").expect("valid FEN");
         let queen_takes_pawn = find_move(&board, Square::E3, Square::D4);
         assert_eq!(
-            priority_ordering(None, &[]).move_priority(&board, queen_takes_pawn, 0),
+            priority_ordering(None, &[]).move_priority(&board, queen_takes_pawn, 0, None),
             (MovePriority::LosingCapture, -800),
             "a queen capturing an undefended pawn is comparatively unpromising, \
              the opposite end of the scale from a pawn capturing a queen, gain = 100 - 900"
@@ -528,7 +508,7 @@ mod tests {
         let board = Board::try_from_fen("4k3/8/8/8/3r4/8/8/3RK3 w - - 0 1").expect("valid FEN");
         let rook_takes_rook = find_move(&board, Square::D1, Square::D4);
         assert_eq!(
-            priority_ordering(None, &[]).move_priority(&board, rook_takes_rook, 0),
+            priority_ordering(None, &[]).move_priority(&board, rook_takes_rook, 0, None),
             (MovePriority::EqualCapture, 0)
         );
     }
@@ -547,9 +527,9 @@ mod tests {
         let pawn_takes_knight = find_move(&pxn_board, Square::B2, Square::C3);
 
         let rxq_priority =
-            priority_ordering(None, &[]).move_priority(&rxq_board, rook_takes_queen, 0);
+            priority_ordering(None, &[]).move_priority(&rxq_board, rook_takes_queen, 0, None);
         let pxn_priority =
-            priority_ordering(None, &[]).move_priority(&pxn_board, pawn_takes_knight, 0);
+            priority_ordering(None, &[]).move_priority(&pxn_board, pawn_takes_knight, 0, None);
 
         assert_ne!(
             rxq_priority, pxn_priority,
@@ -575,8 +555,8 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
 
         assert!(
-            priority_ordering(None, &[]).move_priority(&board, quiet, 0)
-                > priority_ordering(None, &[]).move_priority(&board, losing_capture, 0),
+            priority_ordering(None, &[]).move_priority(&board, quiet, 0, None)
+                > priority_ordering(None, &[]).move_priority(&board, losing_capture, 0, None),
             "a losing capture must sort behind a quiet move, not ahead of it"
         );
     }
@@ -599,8 +579,13 @@ mod tests {
         let queen_takes_pawn = find_move(&losing_board, Square::E3, Square::D4);
 
         assert!(
-            priority_ordering(None, &[]).move_priority(&winning_board, pawn_takes_queen, 0)
-                > priority_ordering(None, &[]).move_priority(&losing_board, queen_takes_pawn, 0),
+            priority_ordering(None, &[]).move_priority(&winning_board, pawn_takes_queen, 0, None)
+                > priority_ordering(None, &[]).move_priority(
+                    &losing_board,
+                    queen_takes_pawn,
+                    0,
+                    None
+                ),
             "a pawn capturing a queen must be tried before a queen capturing a pawn"
         );
     }
@@ -612,11 +597,11 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
 
         assert_eq!(
-            priority_ordering(Some(capture), &[]).move_priority(&board, capture, 0),
+            priority_ordering(Some(capture), &[]).move_priority(&board, capture, 0, None),
             (MovePriority::Hash, 0)
         );
         assert_eq!(
-            priority_ordering(Some(quiet), &[]).move_priority(&board, quiet, 0),
+            priority_ordering(Some(quiet), &[]).move_priority(&board, quiet, 0, None),
             (MovePriority::Hash, 0)
         );
     }
@@ -630,8 +615,8 @@ mod tests {
         // `quiet` is hinted, but `capture` is the move being scored: the
         // hint shouldn't affect a move it doesn't match.
         assert_eq!(
-            priority_ordering(Some(quiet), &[]).move_priority(&board, capture, 0),
-            priority_ordering(None, &[]).move_priority(&board, capture, 0),
+            priority_ordering(Some(quiet), &[]).move_priority(&board, capture, 0, None),
+            priority_ordering(None, &[]).move_priority(&board, capture, 0, None),
             "a tt hint for a different move must not affect this move's own ordering"
         );
     }
@@ -651,7 +636,7 @@ mod tests {
         let capture = find_move(&board, Square::E4, Square::D5);
         let quiet_hint = find_move(&board, Square::E1, Square::D1);
 
-        priority_ordering(Some(quiet_hint), &[]).order(&board, &mut moves, 0);
+        priority_ordering(Some(quiet_hint), &[]).order(&board, &mut moves, 0, None);
 
         assert_eq!(
             moves.as_slice()[0],
@@ -677,7 +662,7 @@ mod tests {
 
         for &hint in legal.as_slice() {
             let mut moves = legal_moves(&board);
-            priority_ordering(Some(hint), &[]).order(&board, &mut moves, 0);
+            priority_ordering(Some(hint), &[]).order(&board, &mut moves, 0, None);
             assert_eq!(
                 moves.as_slice()[0],
                 hint,
@@ -705,7 +690,7 @@ mod tests {
         let board = promotion_no_capture_position();
         let queen_promo = find_promotion_move(&board, Square::E7, Square::E8, Piece::Queen);
         assert_eq!(
-            priority_ordering(None, &[]).move_priority(&board, queen_promo, 0),
+            priority_ordering(None, &[]).move_priority(&board, queen_promo, 0, None),
             (MovePriority::WinningCapture, 800),
             "a non-capture queen promotion must outrank quiet moves, not tie with \
              them: gain = 900 - 100, the same tier a good capture lands in"
@@ -726,9 +711,9 @@ mod tests {
             find_promotion_move(&capture_board, Square::E7, Square::F8, Piece::Queen);
 
         let plain_priority =
-            priority_ordering(None, &[]).move_priority(&plain_board, plain_promo, 0);
+            priority_ordering(None, &[]).move_priority(&plain_board, plain_promo, 0, None);
         let capturing_priority =
-            priority_ordering(None, &[]).move_priority(&capture_board, capturing_promo, 0);
+            priority_ordering(None, &[]).move_priority(&capture_board, capturing_promo, 0, None);
 
         assert!(
             capturing_priority > plain_priority,
@@ -758,7 +743,7 @@ mod tests {
             let plain = find_promotion_move(&plain_board, Square::E7, Square::E8, piece);
             assert!(
                 matches!(
-                    priority_ordering(None, &[]).move_priority(&plain_board, plain, 0),
+                    priority_ordering(None, &[]).move_priority(&plain_board, plain, 0, None),
                     (MovePriority::WinningCapture, _)
                 ),
                 "{piece:?} promotion alone must classify as WinningCapture, never Quiet"
@@ -767,7 +752,7 @@ mod tests {
             let capturing = find_promotion_move(&capture_board, Square::E7, Square::F8, piece);
             assert!(
                 matches!(
-                    priority_ordering(None, &[]).move_priority(&capture_board, capturing, 0),
+                    priority_ordering(None, &[]).move_priority(&capture_board, capturing, 0, None),
                     (MovePriority::WinningCapture, _)
                 ),
                 "{piece:?} promotion with a capture must classify as WinningCapture, never Quiet"
@@ -786,7 +771,7 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            priority_ordering(None, &[quiet]).move_priority(&board, quiet, 0),
+            priority_ordering(None, &[quiet]).move_priority(&board, quiet, 0, None),
             (MovePriority::Killer, 0)
         );
     }
@@ -797,7 +782,7 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
         let other_quiet = find_move(&board, Square::E1, Square::F1);
         assert_eq!(
-            priority_ordering(None, &[other_quiet, quiet]).move_priority(&board, quiet, 0),
+            priority_ordering(None, &[other_quiet, quiet]).move_priority(&board, quiet, 0, None),
             (MovePriority::Killer, 0),
             "both slots must be checked, not just the first"
         );
@@ -809,7 +794,7 @@ mod tests {
         let quiet = find_move(&board, Square::E1, Square::D1);
         let unrelated = find_move(&board, Square::E1, Square::F1);
         assert_eq!(
-            priority_ordering(None, &[unrelated]).move_priority(&board, quiet, 0),
+            priority_ordering(None, &[unrelated]).move_priority(&board, quiet, 0, None),
             (MovePriority::Quiet, 0),
             "a killer slot holding a different move must not affect this move's own classification"
         );
@@ -820,7 +805,7 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            priority_ordering(None, &[]).move_priority(&board, quiet, 0),
+            priority_ordering(None, &[]).move_priority(&board, quiet, 0, None),
             (MovePriority::Quiet, 0)
         );
     }
@@ -837,11 +822,11 @@ mod tests {
         let mut ordering = MoveOrdering::new();
         ordering.killers.record(5, quiet, false);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 5),
+            ordering.move_priority(&board, quiet, 5, None),
             (MovePriority::Killer, 0)
         );
         assert_eq!(
-            ordering.move_priority(&board, quiet, 9),
+            ordering.move_priority(&board, quiet, 9, None),
             (MovePriority::Quiet, 0),
             "ply 9's own (empty) killer slots must be consulted, not ply 5's"
         );
@@ -852,7 +837,7 @@ mod tests {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         assert_eq!(
-            priority_ordering(Some(quiet), &[quiet]).move_priority(&board, quiet, 0),
+            priority_ordering(Some(quiet), &[quiet]).move_priority(&board, quiet, 0, None),
             (MovePriority::Hash, 0),
             "the tt hint must outrank a killer slot for the same move"
         );
@@ -872,7 +857,7 @@ mod tests {
         let mut ordering = MoveOrdering::new();
         ordering.killers.record(0, quiet, true);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 0),
+            ordering.move_priority(&board, quiet, 0, None),
             (MovePriority::MateKiller, 0)
         );
     }
@@ -885,7 +870,7 @@ mod tests {
         let mut ordering = MoveOrdering::new();
         ordering.killers.record(0, unrelated, true);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 0),
+            ordering.move_priority(&board, quiet, 0, None),
             (MovePriority::Quiet, 0),
             "a mate-killer slot holding a different move must not affect this move's own \
              classification"
@@ -903,7 +888,7 @@ mod tests {
         let mut ordering = priority_ordering(None, &[quiet]);
         ordering.killers.record(0, quiet, true);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 0),
+            ordering.move_priority(&board, quiet, 0, None),
             (MovePriority::MateKiller, 0),
             "a move sitting in both tables must classify as the mate killer, not the ordinary one"
         );
@@ -916,7 +901,7 @@ mod tests {
         let mut ordering = priority_ordering(Some(quiet), &[]);
         ordering.killers.record(0, quiet, true);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 0),
+            ordering.move_priority(&board, quiet, 0, None),
             (MovePriority::Hash, 0),
             "the tt hint must outrank a mate-killer slot for the same move"
         );
@@ -932,11 +917,11 @@ mod tests {
         let mut ordering = MoveOrdering::new();
         ordering.killers.record(5, quiet, true);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 5),
+            ordering.move_priority(&board, quiet, 5, None),
             (MovePriority::MateKiller, 0)
         );
         assert_eq!(
-            ordering.move_priority(&board, quiet, 9),
+            ordering.move_priority(&board, quiet, 9, None),
             (MovePriority::Quiet, 0),
             "ply 9's own (empty) mate-killer slot must be consulted, not ply 5's"
         );
@@ -1029,21 +1014,20 @@ mod tests {
     //
     // `PrincipalVariation` outranks `Hash` (see `MovePriority`'s own doc for
     // why): a hash-table entry can belong to a different, more recently
-    // searched line once replacement has overwritten it, where
-    // `MoveOrdering::previous_pv_line` is this search's own uncorrupted record.
-    // `PVS`'s own recursion is what will ever populate that line for a real
-    // search; these tests poke it directly, the same way the killer tests
-    // above poke `killers` directly rather than running a real search to get
-    // a slot filled.
+    // searched line once replacement has overwritten it, where the previous
+    // line is this search's own uncorrupted record.
+    //
+    // The hint arrives as an argument rather than off a table, so whether a
+    // node is entitled to one is the recursion's question and is tested
+    // there; these check only what ordering does once given one.
 
     #[test]
     fn move_priority_prefers_previous_pv_move_over_hash_when_a_move_matches_both() {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
-        let mut ordering = priority_ordering(Some(quiet), &[]);
-        ordering.previous_pv_line[0] = Some(quiet);
+        let ordering = priority_ordering(Some(quiet), &[]);
         assert_eq!(
-            ordering.move_priority(&board, quiet, 0),
+            ordering.move_priority(&board, quiet, 0, Some(quiet)),
             (MovePriority::PrincipalVariation, 0),
             "the previous iteration's own pv move must outrank a same-move hash hint"
         );
@@ -1062,8 +1046,7 @@ mod tests {
         let pv_hint = find_move(&board, Square::E1, Square::D1);
 
         let mut ordering = priority_ordering(None, &[]);
-        ordering.previous_pv_line[0] = Some(pv_hint);
-        ordering.order(&board, &mut moves, 0);
+        ordering.order(&board, &mut moves, 0, Some(pv_hint));
 
         assert_eq!(
             moves.as_slice()[0],
@@ -1098,7 +1081,7 @@ mod tests {
         // boundary.
         let capture = find_move(&board, Square::E4, Square::D5);
         assert!(matches!(
-            priority_ordering(None, &[capture]).move_priority(&board, capture, 0),
+            priority_ordering(None, &[capture]).move_priority(&board, capture, 0, None),
             (MovePriority::LosingCapture, _)
         ));
     }
@@ -1125,7 +1108,7 @@ mod tests {
         let other_quiet = find_move(&board, Square::E1, Square::F1);
 
         let mut moves = legal_moves(&board);
-        priority_ordering(None, &[killer]).order(&board, &mut moves, 0);
+        priority_ordering(None, &[killer]).order(&board, &mut moves, 0, None);
 
         let killer_index = moves
             .as_slice()
@@ -1193,11 +1176,11 @@ mod tests {
             ordering.set_hash_move(0, Some(quiets[0]));
             ordering.killers.record(0, quiets[1], false);
             ordering.killers.record(0, quiets[2], true);
-            ordering.order(&board, &mut moves, 0);
+            ordering.order(&board, &mut moves, 0, None);
 
             let mut runs: Vec<MovePriority> = Vec::new();
             for &m in &moves {
-                let tier = ordering.move_priority(&board, m, 0).0;
+                let tier = ordering.move_priority(&board, m, 0, None).0;
                 if runs.last() != Some(&tier) {
                     runs.push(tier);
                 }
@@ -1287,7 +1270,7 @@ mod tests {
         let board = Board::try_from_fen(fen).expect("valid FEN");
         let mut ordering = seeded_ordering(&board);
         let mut moves = legal_moves(&board);
-        let runs = ordering.order(&board, &mut moves, 0);
+        let runs = ordering.order(&board, &mut moves, 0, None);
         (board, moves, runs, ordering)
     }
 
@@ -1328,7 +1311,7 @@ mod tests {
         for (fen, _) in ORDERING_FIXTURES {
             let (board, moves, runs, ordering) = order_fixture(fen);
             for (i, &m) in moves.iter().enumerate() {
-                let tier = ordering.move_priority(&board, m, 0).0;
+                let tier = ordering.move_priority(&board, m, 0, None).0;
                 assert!(
                     runs.range(tier).contains(&i),
                     "{fen}: move {i} is {tier:?}, but the runs put that tier at {:?}",
@@ -1352,7 +1335,7 @@ mod tests {
         for (fen, _) in ORDERING_FIXTURES {
             let (board, moves, runs, ordering) = order_fixture(fen);
             for (i, &m) in moves.iter().enumerate() {
-                let tier = ordering.move_priority(&board, m, 0).0;
+                let tier = ordering.move_priority(&board, m, 0, None).0;
                 assert_eq!(
                     runs.is_quiet(i),
                     tier == MovePriority::Quiet,
@@ -1390,7 +1373,7 @@ mod tests {
         let board = Board::try_from_fen(ORDERING_FIXTURES[1].0).expect("valid FEN");
         let mut ordering = MoveOrdering::new();
         let mut moves = MoveList::new();
-        let runs = ordering.order(&board, &mut moves, 0);
+        let runs = ordering.order(&board, &mut moves, 0, None);
         for tier in MovePriority::ALL {
             assert!(
                 runs.range(tier).is_empty(),
@@ -1412,14 +1395,14 @@ mod tests {
         let board = Board::try_from_fen(ORDERING_FIXTURES[3].0).expect("valid FEN");
         let mut alone = seeded_ordering(&board);
         let mut expected_moves = legal_moves(&board);
-        let expected_runs = alone.order(&board, &mut expected_moves, 0);
+        let expected_runs = alone.order(&board, &mut expected_moves, 0, None);
 
         let other = Board::try_from_fen(ORDERING_FIXTURES[0].0).expect("valid FEN");
         let mut reused = seeded_ordering(&board);
         let mut other_moves = legal_moves(&other);
-        let _ = reused.order(&other, &mut other_moves, 0);
+        let _ = reused.order(&other, &mut other_moves, 0, None);
         let mut moves = legal_moves(&board);
-        let runs = reused.order(&board, &mut moves, 0);
+        let runs = reused.order(&board, &mut moves, 0, None);
 
         assert_eq!(
             rendered(&moves),

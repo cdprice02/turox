@@ -248,6 +248,35 @@ struct LoopOutcome {
     cutoff_index: Option<usize>,
 }
 
+/// The previous iteration's best line, as much of it as still lies ahead of
+/// the node being searched.
+///
+/// A shrinking slice rather than a table indexed by ply, because "the move at
+/// ply N" is only about this position while the path from the root still
+/// matches the line. Off the line the slice is empty, which is already the
+/// same thing as having no hint, so nothing has to carry a flag saying which
+/// side of that boundary a node is on.
+type PvLine<'a> = &'a [Option<Move>];
+
+/// The move `line` expects at the node it was handed to, if it reaches here.
+const fn pv_hint(line: PvLine<'_>) -> Option<Move> {
+    line.first().copied().flatten()
+}
+
+/// `line` as seen from the child reached by `m`: the tail when `m` is the move
+/// the line expected here, and empty otherwise.
+///
+/// The empty case is what confines the hint to the path. Without it a move
+/// that merely happens to be legal at the same ply somewhere else in the tree
+/// is promoted above the hash move on a coincidence, which measured as nearly
+/// double the nodes on `kiwipete` at depth 7.
+fn pv_child(line: PvLine<'_>, m: Move) -> PvLine<'_> {
+    match line.split_first() {
+        Some((&Some(expected), tail)) if expected == m => tail,
+        _ => &[],
+    }
+}
+
 /// Mutable search state threaded through one [`Search::search`] call: the node counter
 /// and abort conditions the periodic check reads, and the repetition hash stack.
 ///
@@ -528,6 +557,11 @@ impl<'a> Search<'a> {
         let mut previous_iteration_nodes: Option<u64> = None;
         let mut nodes_before_previous_iteration: Option<u64> = None;
 
+        // The last completed iteration's best line, for the next one to order
+        // along. A local rather than a field of `Search`, so that passing a
+        // slice of it into a `&mut self` search is not two borrows of `self`.
+        let mut previous: PV = [None; MAX_PV_PLY];
+
         for depth in 1..=max_depth {
             let nodes_before_this_iteration = self.nodes();
 
@@ -548,8 +582,13 @@ impl<'a> Search<'a> {
             }
 
             let iteration_started = self.deadline.is_some().then(Instant::now);
-            match self.search_root(board, depth) {
+            match self.search_root(board, &previous, depth) {
                 RootOutcome::Completed(score, pv) => {
+                    // Only a completed iteration's line is kept, the same rule
+                    // the reported result already follows: a move that was
+                    // merely best-so-far when the search was cut off is not
+                    // one any iteration finished preferring.
+                    previous = pv;
                     result = SearchResult {
                         pv,
                         score,
@@ -894,7 +933,8 @@ impl<'a> Search<'a> {
     /// values; only the one move that was mid-flight is discarded, which is
     /// why `best_so_far` reports the finished moves' result rather than
     /// discarding it wholesale.
-    fn search_root(&mut self, board: &Board, depth: u8) -> RootOutcome {
+    fn search_root(&mut self, board: &Board, previous: PvLine<'_>, depth: u8) -> RootOutcome {
+        let hint = pv_hint(previous);
         self.nodes += 1;
         if self.should_abort() {
             return RootOutcome::Aborted { best_so_far: None };
@@ -912,7 +952,7 @@ impl<'a> Search<'a> {
             if drawn_moves.is_empty() {
                 return RootOutcome::Completed(0, pv);
             }
-            self.ordering.order(board, &mut drawn_moves, 0);
+            self.ordering.order(board, &mut drawn_moves, 0, hint);
             pv[0] = Some(drawn_moves[0]);
             return RootOutcome::Completed(0, pv);
         }
@@ -946,7 +986,7 @@ impl<'a> Search<'a> {
         // sharing a class gets tried first, while still leaving the ordering
         // itself intact.
         self.shuffle_root_moves(&mut moves);
-        self.ordering.order(board, &mut moves, 0);
+        self.ordering.order(board, &mut moves, 0, hint);
 
         let outcome = self.alpha_beta_loop(
             &moves,
@@ -963,7 +1003,15 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv());
+                let result = s.negamax(
+                    &child,
+                    c.depth,
+                    c.ply,
+                    c.alpha,
+                    c.beta,
+                    c.is_pv(),
+                    pv_child(previous, m),
+                );
                 s.history.pop();
                 result.map(|r| r.score)
             },
@@ -1022,6 +1070,20 @@ impl<'a> Search<'a> {
         clippy::expect_used,
         reason = "the move list's emptiness is checked and returned on well above this point, so the loop always records a best move before the store"
     )]
+    // Two clippy thresholds cross here at once, and the change that crossed
+    // them added one parameter. Both are evidence for the decomposition
+    // question rather than something to dodge by hiding arguments in a
+    // struct: the loop and the recursion are what a reader opens this crate
+    // to read, and packing their inputs out of sight would cost more than the
+    // lint does.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct search input; a bundle would hide the window and the line behind one name"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function per node of the tree walk, and splitting it would separate the TT probe from the store it pairs with"
+    )]
     fn negamax(
         &mut self,
         board: &Board,
@@ -1030,7 +1092,9 @@ impl<'a> Search<'a> {
         alpha: Score,
         beta: Score,
         is_pv: bool,
+        previous: PvLine<'_>,
     ) -> Option<TaintedScore> {
+        let hint = pv_hint(previous);
         self.nodes += 1;
         if self.should_abort() {
             return None;
@@ -1098,7 +1162,7 @@ impl<'a> Search<'a> {
 
         let original_alpha = alpha;
         self.ordering.set_hash_move(ply, tt_move);
-        let runs = self.ordering.order(board, &mut moves, ply);
+        let runs = self.ordering.order(board, &mut moves, ply, hint);
 
         let mut any_child_tainted = false;
         let outcome = self.alpha_beta_loop(
@@ -1119,7 +1183,15 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.is_pv());
+                let result = s.negamax(
+                    &child,
+                    c.depth,
+                    c.ply,
+                    c.alpha,
+                    c.beta,
+                    c.is_pv(),
+                    pv_child(previous, m),
+                );
                 s.history.pop();
                 result.map(|r| {
                     any_child_tainted |= r.tainted;
@@ -1241,7 +1313,7 @@ impl<'a> Search<'a> {
                 });
             }
 
-            self.ordering.order(board, &mut evasions, ply);
+            self.ordering.order(board, &mut evasions, ply, None);
 
             let mut any_child_tainted = false;
             let outcome =
@@ -1300,7 +1372,7 @@ impl<'a> Search<'a> {
         let mut qmoves = moves.unwrap_or_else(|| legal_moves(board));
         qmoves.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
 
-        self.ordering.order(board, &mut qmoves, ply);
+        self.ordering.order(board, &mut qmoves, ply, None);
 
         let mut any_child_tainted = false;
         let outcome = self.quiescence_loop(&qmoves, ply, alpha, beta, stand_pat, |s, m, a, b| {
@@ -1624,6 +1696,70 @@ mod tests {
         );
     }
 
+    /// The rule that confines the hint to the previous line's own path.
+    /// Everything the recursion does with the line is these two functions, so
+    /// this is where it is worth pinning down rather than through a search.
+    #[test]
+    fn a_line_hints_only_the_move_it_expects_and_only_along_its_own_path() {
+        let moves = legal_moves(&Board::start_pos());
+        let (expected, other) = (moves[0], moves[1]);
+
+        let line = [Some(expected), Some(other), Some(expected)];
+
+        assert_eq!(
+            pv_hint(&line),
+            Some(expected),
+            "the head is this node's hint"
+        );
+        assert_eq!(
+            pv_child(&line, expected).len(),
+            2,
+            "following the expected move keeps the rest of the line"
+        );
+        assert_eq!(
+            pv_hint(pv_child(&line, expected)),
+            Some(other),
+            "and the child's hint is the line's next move, not this one again"
+        );
+
+        assert!(
+            pv_child(&line, other).is_empty(),
+            "any other move leaves the path, and a node off the path gets no hint"
+        );
+        assert_eq!(
+            pv_hint(pv_child(&line, other)),
+            None,
+            "which is what stops an unrelated position's move being promoted"
+        );
+    }
+
+    /// A line runs out, either by reaching its end or by being empty to begin
+    /// with. Both have to read as "no hint" rather than panicking or wrapping.
+    #[test]
+    fn a_line_that_has_run_out_hints_nothing() {
+        let m = legal_moves(&Board::start_pos())[0];
+
+        assert_eq!(pv_hint(&[]), None, "no line at all");
+        assert!(
+            pv_child(&[], m).is_empty(),
+            "and descending from nothing stays nothing"
+        );
+
+        // `None` inside a line marks where it stopped, the same convention
+        // `PV` carries everywhere else.
+        assert_eq!(pv_hint(&[None, Some(m)]), None, "a line that ended here");
+        assert!(
+            pv_child(&[None, Some(m)], m).is_empty(),
+            "and nothing past its end is reachable, however the moves line up"
+        );
+
+        let single = [Some(m)];
+        assert!(
+            pv_child(&single, m).is_empty(),
+            "the last move on the line leaves its child with none"
+        );
+    }
+
     /// Every `history.push` in the move loop is matched by a `pop` before the
     /// `-score?` that can propagate an abort, even along the path that aborts.
     #[test]
@@ -1653,7 +1789,7 @@ mod tests {
         let score = {
             let mut search = Search::new(Vec::new()).with_tt(&mut tt);
             search
-                .negamax(&board, 2, 0, -MATE, MATE, true)
+                .negamax(&board, 2, 0, -MATE, MATE, true, &[])
                 .expect("no abort condition is configured, so this can't return None")
                 .score
         };
