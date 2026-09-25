@@ -11,10 +11,10 @@ use turox_macros::Ordinal;
 /// enum compares by declaration order, so this declaration *is* the ranking,
 /// not a lookup table alongside it. Declared worst-first, the reverse of how
 /// it reads in prose, so a move's raw `Ord` already agrees with `Score`'s own
-/// "bigger is better": [`MoveOrdering::move_priority`] returns `(MovePriority,
+/// "bigger is better": [`MoveOrdering::move_priority`](super::MoveOrdering::move_priority) returns `(MovePriority,
 /// Score)` with neither half wrapped in `Reverse`, and the one flip
 /// `sort_unstable_by_key`'s ascending sort needs happens once, in
-/// [`MoveOrdering::order`], instead of being smuggled into half the tuple.
+/// [`MoveOrdering::order`](super::MoveOrdering::order), instead of being smuggled into half the tuple.
 /// Carries no payload of its own: `move_priority`'s tuple has a second element
 /// for that, so the fine-grained tiebreak *within* a tier (MVV-LVA's delta
 /// among captures, [`CutoffHistory`](super::history::CutoffHistory)'s score among quiets) has one shared
@@ -31,12 +31,12 @@ pub(super) enum MovePriority {
     Killer,
     /// A quiet move that refuted a sibling *with a mate score*. Ranked above
     /// ordinary killers because a forced mate is worth more than material.
-    /// See [`MoveOrdering::on_cutoff`].
+    /// See [`MoveOrdering::on_cutoff`](super::MoveOrdering::on_cutoff).
     MateKiller,
     /// An even trade. Gain is exactly `0` by definition, so unlike the winning and losing
     /// tiers it needs no tiebreak beyond ordinary declaration order.
     EqualCapture,
-    /// A capture winning material, ordered by how much; see [`MoveOrdering::move_priority`]'s
+    /// A capture winning material, ordered by how much; see [`MoveOrdering::move_priority`](super::MoveOrdering::move_priority)'s
     /// own doc for why the ordering value lives in the tuple this enum is half of, not a
     /// payload on the variant.
     WinningCapture,
@@ -55,7 +55,7 @@ impl MovePriority {
     /// How many tiers there are, which is the width of a per-tier count.
     pub(super) const COUNT: usize = Self::ALL.len();
 
-    /// This tier's position in the order [`MoveOrdering::order`] produces, best
+    /// This tier's position in the order [`MoveOrdering::order`](super::MoveOrdering::order) produces, best
     /// first. The inverse of `index`, which numbers by declaration and so runs
     /// worst first.
     pub(super) const fn rank(self) -> usize {
