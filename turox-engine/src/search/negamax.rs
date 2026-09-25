@@ -8,11 +8,11 @@
 
 use crate::eval::{evaluate, Score};
 use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
-use crate::search::lmr;
 use crate::search::ordering::history::CutoffHistory;
 use crate::search::ordering::stats::CutoffStats;
 use crate::search::ordering::MoveOrdering;
 use crate::search::result::{SearchResult, MAX_PV_PLY, PV};
+use crate::search::selectivity::lmr;
 use crate::search::time::should_skip_next_iteration;
 use crate::search::tt::Tt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -156,13 +156,14 @@ impl LoopCtx {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // Only outside `cfg(test)`: the tests below construct every variant to prove
 // the loop handles it, which is the point of writing them before any policy
-// exists. In a normal build nothing returns these yet, and this expectation
-// fails the build as soon as something does, so it removes itself.
+// exists. Late move reductions construct `Reduce`; `Skip` and `Stop` wait on
+// futility pruning and late move pruning, and this expectation fails the
+// build once both arrive.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "the policy returning these arrives with the first pruning technique; the loop's handling of them is already tested"
+        reason = "futility pruning and late move pruning are what construct Skip and Stop; the loop's handling of both is already tested"
     )
 )]
 enum Verdict {
@@ -178,11 +179,13 @@ enum Verdict {
 }
 
 /// What [`Verdict`] is decided against.
+// `index` and `searched` are read by late move reductions; `alpha` is the one
+// field still waiting for a reader.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "read by the policy that arrives with the first pruning technique; this expectation fails the build once one does"
+        reason = "futility pruning is what reads alpha, since its condition needs the alpha the loop currently holds"
     )
 )]
 struct MoveCtx {

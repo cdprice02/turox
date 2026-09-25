@@ -10,10 +10,10 @@
 //! repetition check and the transposition table (`tt`) both key on.
 
 pub mod draw;
-mod lmr;
 mod negamax;
 mod ordering;
 mod result;
+mod selectivity;
 #[cfg(test)]
 mod testing;
 pub mod time;
