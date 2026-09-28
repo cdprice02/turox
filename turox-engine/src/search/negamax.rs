@@ -117,7 +117,7 @@ enum RootOutcome {
 /// destructure and shadow `alpha` without the caller losing its own copy,
 /// which is exactly what `negamax` relies on to keep `original_alpha`.
 #[derive(Clone, Copy)]
-struct LoopCtx {
+struct LoopCtx<'a> {
     /// Distance from the root, for the killer table, the mate formula, and
     /// indexing [`Search::pv`]'s row for this node.
     ply: u8,
@@ -132,9 +132,11 @@ struct LoopCtx {
     /// why the loop needs the number rather than leaving it captured by the
     /// caller's closure.
     depth: u8,
+    /// The previous iteration's line from this node on, empty off it.
+    previous: PvLine<'a>,
 }
 
-impl LoopCtx {
+impl LoopCtx<'_> {
     /// Whether this is a principal variation node: a null window can only ever
     /// prove a bound, so a node searched with one is not on the line.
     ///
@@ -142,8 +144,14 @@ impl LoopCtx {
     /// every null window not. A technique that searched a PV node with a null
     /// window, or a non-PV node with a wide one, would break this silently.
     const fn is_pv(self) -> bool {
-        self.beta > self.alpha + 1
+        is_pv_window(self.alpha, self.beta)
     }
+}
+
+/// Whether a window is wide enough for a principal-variation node, as opposed
+/// to one of PVS's null-window probes.
+const fn is_pv_window(alpha: Score, beta: Score) -> bool {
+    beta > alpha + 1
 }
 
 /// What the caller decides about one move, asked as the loop reaches it.
@@ -248,14 +256,11 @@ struct LoopOutcome {
     cutoff_index: Option<usize>,
 }
 
-/// The previous iteration's best line, as much of it as still lies ahead of
-/// the node being searched.
+/// The previous iteration's best line, from the node being searched onward.
 ///
-/// A shrinking slice rather than a table indexed by ply, because "the move at
-/// ply N" is only about this position while the path from the root still
-/// matches the line. Off the line the slice is empty, which is already the
-/// same thing as having no hint, so nothing has to carry a flag saying which
-/// side of that boundary a node is on.
+/// A slice rather than a table indexed by ply: a move is only this position's
+/// best guess while the path from the root still matches the line. Off it the
+/// slice is empty, which is already the same as having no hint.
 type PvLine<'a> = &'a [Option<Move>];
 
 /// The move `line` expects at the node it was handed to, if it reaches here.
@@ -263,13 +268,12 @@ const fn pv_hint(line: PvLine<'_>) -> Option<Move> {
     line.first().copied().flatten()
 }
 
-/// `line` as seen from the child reached by `m`: the tail when `m` is the move
-/// the line expected here, and empty otherwise.
+/// `line` as seen from the child reached by `m`: the tail when `m` is what the
+/// line expected here, empty otherwise.
 ///
-/// The empty case is what confines the hint to the path. Without it a move
-/// that merely happens to be legal at the same ply somewhere else in the tree
-/// is promoted above the hash move on a coincidence, which measured as nearly
-/// double the nodes on `kiwipete` at depth 7.
+/// Emptying it off-path is what keeps the hint about this position. Elsewhere
+/// in the tree the same ply is a different position, whose move would be
+/// promoted above the hash move on nothing but a coincidence of legality.
 fn pv_child(line: PvLine<'_>, m: Move) -> PvLine<'_> {
     match line.split_first() {
         Some((&Some(expected), tail)) if expected == m => tail,
@@ -557,9 +561,7 @@ impl<'a> Search<'a> {
         let mut previous_iteration_nodes: Option<u64> = None;
         let mut nodes_before_previous_iteration: Option<u64> = None;
 
-        // The last completed iteration's best line, for the next one to order
-        // along. A local rather than a field of `Search`, so that passing a
-        // slice of it into a `&mut self` search is not two borrows of `self`.
+        // A local, not a field: a slice of it is passed into `&mut self`.
         let mut previous: PV = [None; MAX_PV_PLY];
 
         for depth in 1..=max_depth {
@@ -584,10 +586,7 @@ impl<'a> Search<'a> {
             let iteration_started = self.deadline.is_some().then(Instant::now);
             match self.search_root(board, &previous, depth) {
                 RootOutcome::Completed(score, pv) => {
-                    // Only a completed iteration's line is kept, the same rule
-                    // the reported result already follows: a move that was
-                    // merely best-so-far when the search was cut off is not
-                    // one any iteration finished preferring.
+                    // Completed iterations only, the rule `result` follows too.
                     previous = pv;
                     result = SearchResult {
                         pv,
@@ -691,7 +690,7 @@ impl<'a> Search<'a> {
     ) -> LoopOutcome
     where
         D: FnMut(&mut Self, Move, &MoveCtx) -> Verdict,
-        F: FnMut(&mut Self, Move, LoopCtx) -> Option<Score>,
+        F: FnMut(&mut Self, Move, LoopCtx<'_>) -> Option<Score>,
     {
         let node_is_pv = ctx.is_pv();
         let LoopCtx {
@@ -699,6 +698,7 @@ impl<'a> Search<'a> {
             mut alpha,
             beta,
             depth,
+            previous,
         } = ctx;
 
         let mut max = Score::MIN;
@@ -746,6 +746,7 @@ impl<'a> Search<'a> {
                 alpha: -beta,
                 beta: -alpha,
                 depth: full,
+                previous: pv_child(previous, m),
             };
             let child_result = if searched == 0 {
                 search_child(self, m, child)
@@ -995,6 +996,7 @@ impl<'a> Search<'a> {
                 alpha,
                 beta,
                 depth,
+                previous,
             },
             // The root searches every legal move, always. A move pruned here
             // is one the engine can never play, however good it was, so this
@@ -1003,15 +1005,7 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(
-                    &child,
-                    c.depth,
-                    c.ply,
-                    c.alpha,
-                    c.beta,
-                    c.is_pv(),
-                    pv_child(previous, m),
-                );
+                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.previous);
                 s.history.pop();
                 result.map(|r| r.score)
             },
@@ -1070,20 +1064,6 @@ impl<'a> Search<'a> {
         clippy::expect_used,
         reason = "the move list's emptiness is checked and returned on well above this point, so the loop always records a best move before the store"
     )]
-    // Two clippy thresholds cross here at once, and the change that crossed
-    // them added one parameter. Both are evidence for the decomposition
-    // question rather than something to dodge by hiding arguments in a
-    // struct: the loop and the recursion are what a reader opens this crate
-    // to read, and packing their inputs out of sight would cost more than the
-    // lint does.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each parameter is a distinct search input; a bundle would hide the window and the line behind one name"
-    )]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one function per node of the tree walk, and splitting it would separate the TT probe from the store it pairs with"
-    )]
     fn negamax(
         &mut self,
         board: &Board,
@@ -1091,9 +1071,9 @@ impl<'a> Search<'a> {
         ply: u8,
         alpha: Score,
         beta: Score,
-        is_pv: bool,
         previous: PvLine<'_>,
     ) -> Option<TaintedScore> {
+        let is_pv = is_pv_window(alpha, beta);
         let hint = pv_hint(previous);
         self.nodes += 1;
         if self.should_abort() {
@@ -1172,6 +1152,7 @@ impl<'a> Search<'a> {
                 alpha,
                 beta,
                 depth,
+                previous,
             },
             // Futility pruning and late move pruning join this match, each
             // behind its own gate. A reduction of zero is the policy declining
@@ -1183,15 +1164,7 @@ impl<'a> Search<'a> {
             |s, m, c| {
                 s.history.push(board.hash());
                 let child = board.make_move(m);
-                let result = s.negamax(
-                    &child,
-                    c.depth,
-                    c.ply,
-                    c.alpha,
-                    c.beta,
-                    c.is_pv(),
-                    pv_child(previous, m),
-                );
+                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.previous);
                 s.history.pop();
                 result.map(|r| {
                     any_child_tainted |= r.tainted;
@@ -1454,12 +1427,13 @@ mod tests {
     /// variation node: `LoopCtx::is_pv` reads the window rather than a flag,
     /// and the tests below need a window loose enough that a move does not
     /// cut off before the loop's own behaviour can be observed.
-    fn ctx_at(depth: u8) -> LoopCtx {
+    fn ctx_at(depth: u8) -> LoopCtx<'static> {
         LoopCtx {
             ply: 1,
             alpha: -100,
             beta: 100,
             depth,
+            previous: &[],
         }
     }
 
@@ -1470,7 +1444,8 @@ mod tests {
                 ply: 0,
                 alpha: -100,
                 beta: 100,
-                depth: 4
+                depth: 4,
+                previous: &[],
             }
             .is_pv(),
             "a window with room between the bounds can return an exact score"
@@ -1482,7 +1457,8 @@ mod tests {
                 ply: 0,
                 alpha: 41,
                 beta: 42,
-                depth: 4
+                depth: 4,
+                previous: &[],
             }
             .is_pv(),
             "a one-point window can only prove a bound, never an exact score"
@@ -1494,7 +1470,8 @@ mod tests {
                 ply: 0,
                 alpha: 40,
                 beta: 42,
-                depth: 4
+                depth: 4,
+                previous: &[],
             }
             .is_pv(),
             "a narrow window is not a null window"
@@ -1696,9 +1673,7 @@ mod tests {
         );
     }
 
-    /// The rule that confines the hint to the previous line's own path.
-    /// Everything the recursion does with the line is these two functions, so
-    /// this is where it is worth pinning down rather than through a search.
+    /// These two functions are everything the recursion does with the line.
     #[test]
     fn a_line_hints_only_the_move_it_expects_and_only_along_its_own_path() {
         let moves = legal_moves(&Board::start_pos());
@@ -1733,8 +1708,7 @@ mod tests {
         );
     }
 
-    /// A line runs out, either by reaching its end or by being empty to begin
-    /// with. Both have to read as "no hint" rather than panicking or wrapping.
+    /// Reaching the end of a line and never having one both read as no hint.
     #[test]
     fn a_line_that_has_run_out_hints_nothing() {
         let m = legal_moves(&Board::start_pos())[0];
@@ -1745,8 +1719,7 @@ mod tests {
             "and descending from nothing stays nothing"
         );
 
-        // `None` inside a line marks where it stopped, the same convention
-        // `PV` carries everywhere else.
+        // `None` marks where a line stopped, as it does in `PV`.
         assert_eq!(pv_hint(&[None, Some(m)]), None, "a line that ended here");
         assert!(
             pv_child(&[None, Some(m)], m).is_empty(),
@@ -1789,7 +1762,7 @@ mod tests {
         let score = {
             let mut search = Search::new(Vec::new()).with_tt(&mut tt);
             search
-                .negamax(&board, 2, 0, -MATE, MATE, true, &[])
+                .negamax(&board, 2, 0, -MATE, MATE, &[])
                 .expect("no abort condition is configured, so this can't return None")
                 .score
         };
@@ -1803,43 +1776,36 @@ mod tests {
         );
     }
 
-    /// The property ADR 0002's suppression exists for, asserted where it
-    /// happens rather than inferred from two whole sessions agreeing on a
-    /// score.
+    /// A repetition's availability belongs to the path, and the table is keyed
+    /// on the position alone, so a score drawn from a repeating subtree must
+    /// not be stored. See ADR 0002.
     ///
-    /// A repetition's availability is a property of the path, and the table
-    /// is keyed on the position alone, so a score drawn from a subtree that
-    /// repeated must not be stored under a key that says nothing about how it
-    /// was reached.
-    ///
-    /// The control is the load-bearing half: without it this passes just as
-    /// well when nothing is stored for any reason at all.
+    /// The control is load-bearing: without it this passes equally well when
+    /// nothing is stored at all.
     #[test]
     fn a_score_from_a_repeating_subtree_is_never_stored() {
         let board = capture_and_quiet_position();
         let quiet = find_move(&board, Square::E1, Square::D1);
         let child = board.make_move(quiet);
 
-        // Two prior occurrences, so the child this node searches is the
-        // third, matching `is_threefold_repetition`'s own contract.
+        // Two prior occurrences, so the child searched here is the third.
         let repeating = vec![child.hash(), child.hash()];
 
         let mut control_tt = Tt::new(Tt::MIN_HASH_MB);
         Search::new(Vec::new())
             .with_tt(&mut control_tt)
-            .negamax(&board, 2, 0, -MATE, MATE, true, &[])
+            .negamax(&board, 2, 0, -MATE, MATE, &[])
             .expect("no abort condition is configured, so this can't return None");
         assert!(
             control_tt.probe(board.hash()).is_some(),
-            "control: with no repetition on the path this node does store, so \
-             the assertion below is about the taint and not about the store \
-             never happening"
+            "without a repetition this node does store, so the assertion below \
+             is about the taint"
         );
 
         let mut tainted_tt = Tt::new(Tt::MIN_HASH_MB);
         Search::new(repeating)
             .with_tt(&mut tainted_tt)
-            .negamax(&board, 2, 0, -MATE, MATE, true, &[])
+            .negamax(&board, 2, 0, -MATE, MATE, &[])
             .expect("no abort condition is configured, so this can't return None");
         assert!(
             tainted_tt.probe(board.hash()).is_none(),
