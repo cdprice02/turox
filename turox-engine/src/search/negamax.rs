@@ -1803,6 +1803,51 @@ mod tests {
         );
     }
 
+    /// The property ADR 0002's suppression exists for, asserted where it
+    /// happens rather than inferred from two whole sessions agreeing on a
+    /// score.
+    ///
+    /// A repetition's availability is a property of the path, and the table
+    /// is keyed on the position alone, so a score drawn from a subtree that
+    /// repeated must not be stored under a key that says nothing about how it
+    /// was reached.
+    ///
+    /// The control is the load-bearing half: without it this passes just as
+    /// well when nothing is stored for any reason at all.
+    #[test]
+    fn a_score_from_a_repeating_subtree_is_never_stored() {
+        let board = capture_and_quiet_position();
+        let quiet = find_move(&board, Square::E1, Square::D1);
+        let child = board.make_move(quiet);
+
+        // Two prior occurrences, so the child this node searches is the
+        // third, matching `is_threefold_repetition`'s own contract.
+        let repeating = vec![child.hash(), child.hash()];
+
+        let mut control_tt = Tt::new(Tt::MIN_HASH_MB);
+        Search::new(Vec::new())
+            .with_tt(&mut control_tt)
+            .negamax(&board, 2, 0, -MATE, MATE, true, &[])
+            .expect("no abort condition is configured, so this can't return None");
+        assert!(
+            control_tt.probe(board.hash()).is_some(),
+            "control: with no repetition on the path this node does store, so \
+             the assertion below is about the taint and not about the store \
+             never happening"
+        );
+
+        let mut tainted_tt = Tt::new(Tt::MIN_HASH_MB);
+        Search::new(repeating)
+            .with_tt(&mut tainted_tt)
+            .negamax(&board, 2, 0, -MATE, MATE, true, &[])
+            .expect("no abort condition is configured, so this can't return None");
+        assert!(
+            tainted_tt.probe(board.hash()).is_none(),
+            "a score whose subtree contained a threefold repetition must not \
+             reach the table"
+        );
+    }
+
     /// A lone king and a pawn one push from queening, against a lone king:
     /// no capture exists anywhere on the board, so quiescence's only real
     /// qmove here is the pawn's own non-capturing promotion. Searching it
