@@ -91,7 +91,7 @@ fn table(depth: u8, searched: usize) -> u8 {
 /// The caller turns a non-zero answer into `Verdict::Reduce`. Clamping a
 /// reduction so the child still has depth to search is the loop's job, not
 /// this function's.
-pub(super) fn reduction(depth: u8, searched: usize, is_quiet: bool, is_pv: bool) -> u8 {
+pub(in crate::search) fn reduction(depth: u8, searched: usize, is_quiet: bool, is_pv: bool) -> u8 {
     if depth < MIN_DEPTH || searched < MIN_SEARCHED || !is_quiet {
         return 0;
     }

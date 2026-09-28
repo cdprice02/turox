@@ -15,7 +15,7 @@ why each of these exists; this file is the lookup.
 | typecheck         | `cargo check --all-targets`                                           |
 | lint              | `cargo clippy --all-targets --all-features -- -D warnings`            |
 | fmt               | `cargo fmt --all`                                                     |
-| docs              | `RUSTDOCFLAGS="--deny warnings" cargo doc --workspace --no-deps`      |
+| docs              | `RUSTDOCFLAGS="--deny warnings" cargo doc --workspace --no-deps --document-private-items` |
 | bench             | `cargo bench -p turox-engine`                                         |
 | bench vs baseline | `cargo bench -p turox-engine -- --save-baseline before`, then `-- --baseline before` |
 | self-play A/B     | `tools/selfplay/sprt.sh --base main --test my-branch`                 |
@@ -130,6 +130,12 @@ that needs judgement is not made safer by mechanising the part that does not.
   round-robin; locally, scope it (`--file '**/phase.rs'`, `--re SomeName`) or
   run a shard. `--shard` is zero-indexed, so eight shards are `0/8` through
   `7/8` and `8/8` silently selects nothing.
+- **`--document-private-items` is not optional on the docs command.** Most of
+  this crate's items are private, and rustdoc checks an item's intra-doc links
+  only when it renders that item. Without the flag the command passes while
+  every link in a private module goes unchecked, which is a green run that
+  proves nothing and a red CI job afterwards.
+
 - **Nothing checks prose.** `docs/agents/voice.md` is enforced by review and
   by reading it, not by a script. One existed for its two most mechanical
   rules and was deleted: a green tick on two rules out of nine was not evidence

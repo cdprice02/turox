@@ -337,6 +337,25 @@ mod tests {
         assert_eq!(Square::from_u8(64), None);
     }
 
+    /// `COUNT` is what every per-variant array is sized by, so it agreeing
+    /// with `ALL` is what keeps those arrays the right width. Checked on all
+    /// three rather than one, since the three have different variant counts
+    /// and an off-by-one would only show on some of them.
+    #[test]
+    fn count_agrees_with_all_and_bounds_from_u8() {
+        assert_eq!(Square::COUNT, Square::ALL.len());
+        assert_eq!(File::COUNT, File::ALL.len());
+        assert_eq!(Rank::COUNT, Rank::ALL.len());
+
+        // The boundary `from_u8` rejects at, stated through `COUNT` rather
+        // than a literal, so this keeps holding if a variant is ever added.
+        assert!(Square::from_u8(u8::try_from(Square::COUNT - 1).expect("fits")).is_some());
+        assert_eq!(
+            Square::from_u8(u8::try_from(Square::COUNT).expect("fits")),
+            None
+        );
+    }
+
     /// `File`/`Rank` share `Square`'s `#[derive(Ordinal)]`; this is the same
     /// property, checked for the other two so a bug isn't only ever caught
     /// on the one of the three that happens to have 64 variants.

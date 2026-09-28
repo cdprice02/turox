@@ -1,4 +1,4 @@
-//! `#[derive(Ordinal)]`: the `ALL` / `to_u8` / `index` / `from_u8` accessors shared
+//! `#[derive(Ordinal)]`: the `ALL` / `COUNT` / `to_u8` / `index` / `from_u8` accessors shared
 //! by every small `#[repr(u8)]` enum in `turox-engine` (`Color`, `Piece`,
 //! `ColoredPiece`, `File`, `Rank`, `Square`).
 //!
@@ -13,7 +13,7 @@
 #![deny(clippy::missing_docs_in_private_items)]
 use proc_macro::{Delimiter, TokenStream, TokenTree};
 
-/// Derives `ALL`, `to_u8`, `index`, and `from_u8` for a fieldless `#[repr(u8)]`
+/// Derives `ALL`, `COUNT`, `to_u8`, `index`, and `from_u8` for a fieldless `#[repr(u8)]`
 /// enum whose variants are numbered by declaration order.
 ///
 /// An explicit discriminant is allowed on a variant, but only if it matches
@@ -174,6 +174,11 @@ fn generate(name: &str, variants: &[String]) -> TokenStream {
         "impl {name} {{
             /// Every variant, in declaration order.
             pub const ALL: [Self; {count}] = [{all}];
+
+            /// How many variants there are, which is the width every
+            /// per-variant array wants and the bound every per-variant loop
+            /// runs to.
+            pub const COUNT: usize = {count};
 
             /// This variant's discriminant.
             #[must_use]

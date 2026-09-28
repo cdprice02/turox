@@ -2,7 +2,7 @@
 //! early at sibling nodes on the bet that what refuted one sibling refutes the
 //! next.
 //!
-//! Tree-scoped and owned by `Search` rather than the session, because a killer
+//! Tree-scoped and owned by [`super::MoveOrdering`] rather than the session, because a killer
 //! is a refutation specific to this search tree's shape rather than a fact
 //! about a position. See `docs/adr/0003-killer-table-owned-by-search-not-session.md`.
 

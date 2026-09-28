@@ -770,7 +770,7 @@ fn mate_killer_table_is_consulted_during_a_real_search() {
 #[test]
 fn search_with_cutoff_history_actually_updates_it() {
     use turox_chess::types::{Color, Piece, Square};
-    use turox_engine::search::cutoff_history::CutoffHistory;
+    use turox_engine::search::CutoffHistory;
 
     let board =
         Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")

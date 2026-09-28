@@ -19,9 +19,9 @@
 //! through `Command::Position` itself, which is a deliberately separate,
 //! later change, not something to fold into this loop silently.
 
-use crate::search::cutoff_history::CutoffHistory;
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
+use crate::search::CutoffHistory;
 use crate::search::{CutoffCause, CutoffStats, Search, SearchResult};
 use crate::uci::{self, Command, GoOptions, Response};
 use std::io::{BufRead, Write};
