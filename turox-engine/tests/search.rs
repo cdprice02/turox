@@ -541,20 +541,21 @@ fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() 
 
 // ---- Quiescence in check ----
 //
-// `quiescence` only ever generates captures today, with `evaluate(board)` as
-// an unconditional stand-pat floor, regardless of whether the side to move is
-// in check. Both scenarios below reach a position through one real search
-// move so quiescence sees it directly (not `negamax`, which already handles
-// its own board's terminal case before ever calling `quiescence`); the bug
-// only lives in what `quiescence` itself does with a board it's handed.
+// In check, `quiescence` generates evasions and recurses without a depth cap
+// rather than standing pat on a capture list, which is an unbounded check
+// extension. Out of check it is the capture-only, depth-capped stand-pat
+// search.
 //
-// `expected_quiescence` computes the score the fix owes these positions:
-// generate evasions and recurse without a depth cap while in check (an
-// unbounded check extension, matching the stated design), fall back to the
-// existing capture-only, depth-capped stand-pat search otherwise. It calls
-// the real `evaluate`, so both tests below assert an exact match against
-// `Search::search`, not a hand-computed number that eval retuning could
-// silently invalidate.
+// `expected_quiescence` is an independent reference for both halves, not a
+// copy of the real one: it has no alpha/beta window and no transposition
+// table, so it agrees with `Search::search` only where the real pruning is
+// sound. It calls the real `evaluate`, so these assert an exact match rather
+// than a hand-computed number that retuning eval could silently invalidate.
+//
+// Both scenarios reach their position through one real search move, so
+// quiescence is handed it directly. `negamax` resolves its own board's
+// terminal case before ever calling quiescence, so routing through it would
+// test the wrong function.
 
 fn expected_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64>) -> i16 {
     use turox_chess::move_gen::attacks::in_check;
