@@ -29,8 +29,14 @@
 //! fingerprint of the build's `board::zobrist` key table, a 4-byte entry
 //! count, then for each entry an 8-byte hash, a 4-byte move count, and that
 //! many `(2-byte move bits, 4-byte weight)` pairs. After the entries, a
-//! 4-byte name count and that many `(8-byte hash, name)` pairs, where `name`
-//! is a 2-byte length followed by that many UTF-8 bytes.
+//! 4-byte count of distinct names and that many names, each a 2-byte length
+//! followed by that many UTF-8 bytes, then a 4-byte count of named positions
+//! and that many `(8-byte hash, 2-byte name index)` pairs.
+//!
+//! Names are interned because the same one covers a whole line: a book of
+//! four hundred thousand named positions draws on a few thousand distinct
+//! names, so storing each position's own copy would cost several times what
+//! the moves do.
 //!
 //! Names sit in their own table, keyed by position, rather than on each move.
 //! A name describes a position reached, so keying it that way is what lets a
@@ -40,6 +46,7 @@
 
 use crate::board::zobrist;
 use crate::types::Move;
+use std::collections::BTreeMap;
 use turox_rng::xorshift64star;
 
 /// This crate's own book format version, bumped whenever [`Book::to_bytes`]'s
@@ -182,10 +189,11 @@ pub struct Book {
     /// One entry per book position: its hash and the moves known for it.
     /// Order carries no meaning; lookups go by hash, not position.
     entries: Vec<(u64, Vec<BookMove>)>,
-    /// Opening name per position, sorted by hash so a lookup is a binary
-    /// search. Far shorter than `entries`: only positions a named line
-    /// reaches carry one.
-    names: Vec<(u64, String)>,
+    /// The distinct opening names, indexed by `named_positions`.
+    names: Vec<String>,
+    /// Which name each named position carries, sorted by hash so a lookup is
+    /// a binary search.
+    named_positions: Vec<(u64, u16)>,
 }
 
 impl Book {
@@ -197,6 +205,7 @@ impl Book {
         Self {
             entries,
             names: Vec::new(),
+            named_positions: Vec::new(),
         }
     }
 
@@ -206,19 +215,41 @@ impl Book {
     /// [`Book::name`]'s binary search answers wrongly rather than slowly
     /// against a table that is not.
     #[must_use]
-    pub fn with_names(entries: Vec<(u64, Vec<BookMove>)>, mut names: Vec<(u64, String)>) -> Self {
-        names.sort_unstable_by_key(|(hash, _)| *hash);
-        Self { entries, names }
+    pub fn with_names(
+        entries: Vec<(u64, Vec<BookMove>)>,
+        per_position: Vec<(u64, String)>,
+    ) -> Self {
+        let mut names: Vec<String> = Vec::new();
+        let mut index_of: BTreeMap<String, u16> = BTreeMap::new();
+        let mut named_positions = Vec::with_capacity(per_position.len());
+
+        for (hash, name) in per_position {
+            let next = u16::try_from(names.len()).unwrap_or(u16::MAX);
+            let index = *index_of.entry(name.clone()).or_insert_with(|| {
+                names.push(name);
+                next
+            });
+            named_positions.push((hash, index));
+        }
+
+        named_positions.sort_unstable_by_key(|(hash, _)| *hash);
+        Self {
+            entries,
+            names,
+            named_positions,
+        }
     }
 
     /// The opening name recorded for `hash`, or `None` for a position no
     /// named line reaches.
     #[must_use]
     pub fn name(&self, hash: u64) -> Option<&str> {
-        self.names
+        let at = self
+            .named_positions
             .binary_search_by_key(&hash, |(hash, _)| *hash)
-            .ok()
-            .map(|i| self.names[i].1.as_str())
+            .ok()?;
+        let (_, index) = self.named_positions[at];
+        self.names.get(usize::from(index)).map(String::as_str)
     }
 
     /// The candidate moves recorded for `hash`, or an empty slice if `hash`
@@ -229,6 +260,17 @@ impl Book {
             .iter()
             .find(|entry| entry.0 == hash)
             .map_or(&[], |bm| bm.1.as_slice())
+    }
+
+    /// Every position in the book with its moves.
+    ///
+    /// For a generator walking the whole book, which [`Book::moves`] cannot
+    /// serve: that scans linearly, so calling it per position would be
+    /// quadratic in the book's size.
+    pub fn positions(&self) -> impl Iterator<Item = (u64, &[BookMove])> {
+        self.entries
+            .iter()
+            .map(|(hash, mvs)| (*hash, mvs.as_slice()))
     }
 
     /// A weighted-random choice among `hash`'s candidate moves, seeded for
@@ -291,9 +333,15 @@ impl Book {
 
         let name_count = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
         buf.extend_from_slice(&name_count.to_le_bytes());
-        for (hash, name) in &self.names {
-            buf.extend_from_slice(&hash.to_le_bytes());
+        for name in &self.names {
             write_name(&mut buf, name);
+        }
+
+        let position_count = u32::try_from(self.named_positions.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&position_count.to_le_bytes());
+        for (hash, index) in &self.named_positions {
+            buf.extend_from_slice(&hash.to_le_bytes());
+            buf.extend_from_slice(&index.to_le_bytes());
         }
 
         buf
@@ -341,20 +389,32 @@ impl Book {
             entries.push((hash, moves));
         }
 
+        // Neither table is pre-allocated from its count: both come from the
+        // file, and a corrupt one would reserve on a promise the bytes need
+        // not keep.
         let name_count = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
-        // Not pre-allocated from `name_count`: it comes from the file, and a
-        // corrupt one would reserve on a promise the bytes need not keep.
         let mut names = Vec::new();
         for _ in 0..name_count {
+            names.push(read_name(bytes, &mut pos)?);
+        }
+
+        let position_count = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+        let mut named_positions = Vec::new();
+        for _ in 0..position_count {
             let hash = read_u64(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
-            names.push((hash, read_name(bytes, &mut pos)?));
+            let index = read_u16(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+            named_positions.push((hash, index));
         }
 
         // Sorted on the way in as well as in `with_names`: bytes from disk
         // have not been through that constructor, and `name`'s binary search
         // answers wrongly rather than slowly against an unsorted table.
-        names.sort_unstable_by_key(|(hash, _)| *hash);
+        named_positions.sort_unstable_by_key(|(hash, _)| *hash);
 
-        Ok(Self { entries, names })
+        Ok(Self {
+            entries,
+            names,
+            named_positions,
+        })
     }
 }

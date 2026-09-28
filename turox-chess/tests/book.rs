@@ -6,7 +6,9 @@
 //! rejecting a too-short byte stream, rejecting a fingerprint mismatch, and
 //! the weighting actually mattering rather than just being random.
 
-use turox_chess::book::{Book, BookLoadError, BookMove};
+use turox_chess::board::Board;
+use turox_chess::book::{default_book, Book, BookLoadError, BookMove};
+use turox_chess::move_gen::legal::legal_moves;
 use turox_chess::{Move, MoveFlags, Square};
 
 /// A `BookMove`'s `(from, to, flags, weight)`, used to compare book contents
@@ -254,5 +256,57 @@ fn from_bytes_rejects_a_fingerprint_that_does_not_match_this_build() {
         Book::from_bytes(&bytes),
         Err(BookLoadError::FingerprintMismatch),
         "a corrupted fingerprint must be rejected, not silently misread"
+    );
+}
+
+/// Plays `line` from the start position, for the shipped-book tests below.
+fn after(line: &[&str]) -> Board {
+    let mut board = Board::start_pos();
+    for uci in line {
+        let legal = legal_moves(&board);
+        let matching: Vec<_> = legal
+            .as_slice()
+            .iter()
+            .filter(|m| m.to_uci() == *uci)
+            .collect();
+        assert_eq!(matching.len(), 1, "{uci} is exactly one legal move here");
+        board = board.make_move(*matching[0]);
+    }
+    board
+}
+
+/// The shipped book's own names, which the format tests above cannot reach:
+/// they build books in memory, so nothing else notices if a regeneration
+/// produces a book that loads but names the wrong positions.
+#[test]
+fn the_shipped_book_names_the_openings_its_lines_reach() {
+    let book = default_book().expect("the embedded book loads");
+    for (line, expected) in [
+        (&["e2e4", "c7c5"][..], "Sicilian Defense"),
+        (&["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"][..], "Ruy Lopez"),
+        (&["g1f3"][..], "Zukertort Opening"),
+    ] {
+        assert_eq!(
+            book.name(after(line).hash()),
+            Some(expected),
+            "line {line:?}"
+        );
+    }
+}
+
+/// The start position precedes every opening, so it has no name to inherit.
+/// It is also reachable from itself (1.Nf3 Nf6 2.Ng1 Ng8), which is what
+/// makes this worth pinning: a walk that names by any path rather than the
+/// shortest one gives the start position the name of an opening it comes
+/// before.
+#[test]
+fn the_shipped_book_does_not_name_the_start_position() {
+    let book = default_book().expect("the embedded book loads");
+    assert_eq!(book.name(Board::start_pos().hash()), None);
+
+    assert_eq!(
+        after(&["g1f3", "g8f6", "f3g1", "f6g8"]).hash(),
+        Board::start_pos().hash(),
+        "the knights return to the start position, which is the case this guards"
     );
 }

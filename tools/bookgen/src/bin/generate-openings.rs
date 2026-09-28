@@ -22,39 +22,20 @@
 //! so a regeneration reproduces the checked-in suite rather than drifting
 //! with upstream.
 
+use bookgen::openings::{
+    fetch, parse_tsv, replay, OpeningRow, ECO_VOLUMES, FETCH_TIMEOUT, UPSTREAM_COMMIT, UPSTREAM_URL,
+};
 use clap::Parser;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::thread;
-use std::time::Duration;
 use turox_chess::board::Board;
 use turox_chess::move_gen::legal::legal_moves;
 use turox_chess::{Color, Piece};
 use turox_engine::eval::weights::PIECE_VALUES;
 use turox_notation::pgn::tokenize_movetext;
-use turox_notation::san::resolve_san;
-
-/// Pinned upstream revision, so regenerating reproduces the checked-in
-/// suite.
-const UPSTREAM_COMMIT: &str = "4b8622759e7ae6f93f011cc6c83a3823401ab45e";
-const UPSTREAM_URL: &str =
-    "https://raw.githubusercontent.com/lichess-org/chess-openings/{commit}/{volume}.tsv";
-const ECO_VOLUMES: [char; 5] = ['a', 'b', 'c', 'd', 'e'];
-
-/// A regeneration is five requests run by hand, so these bounds are not
-/// about sustained load: they are about never leaving an unattended retry
-/// running. A request with no timeout waits on a dead socket indefinitely,
-/// and a retry loop with no ceiling turns one unreachable host into an
-/// endless stream of connection attempts. That combination is what got
-/// this machine's address null-routed by lichess once already, from a
-/// different script, so nothing here talks to the network without both a
-/// timeout and a bounded, spaced retry.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-const FETCH_ATTEMPTS: u32 = 3;
-const FETCH_BACKOFF: Duration = Duration::from_secs(5);
 
 /// Ply bounds on a line to be usable as a start position. Below the lower
 /// bound the positions are too generic to spread games out (there are
@@ -74,14 +55,6 @@ const MAX_PLIES: usize = 12;
 /// independently maintained table: this tool is judging the same
 /// material balance the engine itself evaluates.
 const MAX_MATERIAL_IMBALANCE: i32 = 100;
-
-/// One row of the upstream TSV: an ECO code, a human-readable name, and a
-/// SAN movetext line, not yet replayed into a position.
-struct OpeningRow {
-    eco: String,
-    name: String,
-    pgn: String,
-}
 
 /// A start position kept for the suite: its FEN, and the ECO/name pair
 /// `openings.epd`'s EPD comment attributes it to.
@@ -164,85 +137,6 @@ fn main() -> ExitCode {
 /// same regardless of where the binary is invoked from.
 fn default_output_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../selfplay/openings.epd")
-}
-
-/// Returns the body of `url`, retrying only what a retry could fix.
-fn fetch(agent: &ureq::Agent, url: &str) -> Result<String, String> {
-    let mut last_err = String::new();
-    for attempt in 1..=FETCH_ATTEMPTS {
-        match agent.get(url).call() {
-            Ok(mut response) => {
-                return response
-                    .body_mut()
-                    .read_to_string()
-                    .map_err(|err| format!("{url}: reading body: {err}"));
-            }
-            // A 4xx will not become a 2xx by asking again, and the
-            // revision above is pinned, so a missing file means the pin
-            // is wrong rather than that upstream is having a bad minute.
-            Err(ureq::Error::StatusCode(code)) if code < 500 => {
-                return Err(format!("{url}: HTTP {code}"));
-            }
-            Err(err) => {
-                last_err = err.to_string();
-                if attempt < FETCH_ATTEMPTS {
-                    thread::sleep(FETCH_BACKOFF * attempt);
-                }
-            }
-        }
-    }
-    Err(format!(
-        "{url}: {last_err} (after {FETCH_ATTEMPTS} attempts)"
-    ))
-}
-
-/// Parses a `chess-openings` TSV (`eco`, `name`, `pgn` columns, in
-/// whatever order the header row gives them) into its rows. A row this
-/// crate's own tab-splitting can't make sense of is dropped rather than
-/// aborting the whole volume: these are hand-maintained TSVs upstream,
-/// not adversarial input, but treating a stray malformed line as fatal
-/// would make one upstream typo break every regeneration.
-fn parse_tsv(text: &str) -> Vec<OpeningRow> {
-    let mut lines = text.lines();
-    let Some(header) = lines.next() else {
-        return Vec::new();
-    };
-    let columns: Vec<&str> = header.split('\t').collect();
-    let Some(eco_col) = columns.iter().position(|&c| c == "eco") else {
-        return Vec::new();
-    };
-    let Some(name_col) = columns.iter().position(|&c| c == "name") else {
-        return Vec::new();
-    };
-    let Some(pgn_col) = columns.iter().position(|&c| c == "pgn") else {
-        return Vec::new();
-    };
-
-    lines
-        .filter_map(|line| {
-            let fields: Vec<&str> = line.split('\t').collect();
-            let eco = fields.get(eco_col)?;
-            let name = fields.get(name_col)?;
-            let pgn = fields.get(pgn_col)?;
-            Some(OpeningRow {
-                eco: (*eco).to_string(),
-                name: (*name).to_string(),
-                pgn: (*pgn).to_string(),
-            })
-        })
-        .collect()
-}
-
-/// Replays `moves` into the position it reaches, or `None` if any token
-/// along the way fails to resolve against the position at that point (a
-/// malformed or ambiguous line, discarded whole rather than truncated).
-fn replay(moves: &[String]) -> Option<Board> {
-    let mut board = Board::start_pos();
-    for token in moves {
-        let mv = resolve_san(&board, token)?;
-        board = board.make_move(mv);
-    }
-    Some(board)
 }
 
 /// The absolute material imbalance in `board`, by `turox_engine`'s own

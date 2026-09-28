@@ -12,6 +12,7 @@
 //! adds `turox_notation::pgn::parse_pgn` in front of it for a small in-memory source.
 
 pub mod aggregate;
+pub mod openings;
 pub mod weight;
 
 use aggregate::BuildOptions;
