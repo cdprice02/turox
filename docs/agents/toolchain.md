@@ -25,6 +25,14 @@ why each of these exists; this file is the lookup.
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
 | mutants, scoped   | `cargo mutants -p turox-engine --file '**/NAME.rs'`                    |
 | coverage          | `cargo llvm-cov --workspace`                                          |
+| opening book names | `cargo run -p bookgen --features fetch --bin name-book -- --input turox-chess/src/book/opening.bin` |
+| SPRT opening suite | `cargo run -p bookgen --features fetch --bin generate-openings`      |
+
+Both book commands reach the network, which is why they sit behind
+`--features fetch` rather than in a default build: five requests to a pinned
+`lichess-org/chess-openings` revision, each with a timeout and a bounded,
+spaced retry. They are run by hand when the checked-in artifact needs
+regenerating, never as part of a build or a test.
 
 ## What lives in `tools/`
 

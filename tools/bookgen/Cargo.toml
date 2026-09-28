@@ -30,6 +30,11 @@ ureq = { version = "3", optional = true }
 fetch = ["dep:ureq", "dep:turox-engine"]
 
 [[bin]]
+name = "name-book"
+path = "src/bin/name-book.rs"
+required-features = ["fetch"]
+
+[[bin]]
 name = "generate-openings"
 path = "src/bin/generate-openings.rs"
 required-features = ["fetch"]

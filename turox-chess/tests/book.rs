@@ -6,7 +6,9 @@
 //! rejecting a too-short byte stream, rejecting a fingerprint mismatch, and
 //! the weighting actually mattering rather than just being random.
 
-use turox_chess::book::{Book, BookLoadError, BookMove};
+use turox_chess::board::Board;
+use turox_chess::book::{default_book, Book, BookLoadError, BookMove};
+use turox_chess::move_gen::legal::legal_moves;
 use turox_chess::{Move, MoveFlags, Square};
 
 /// A `BookMove`'s `(from, to, flags, weight)`, used to compare book contents
@@ -129,62 +131,65 @@ fn to_bytes_from_bytes_round_trips_every_entry() {
 }
 
 #[test]
-fn to_bytes_from_bytes_round_trips_a_moves_name() {
-    let book = Book::new(vec![(
-        HASH_A,
-        vec![BookMove::with_name(e2e4(), 10, "Open Game".to_string())],
-    )]);
+fn to_bytes_from_bytes_round_trips_a_positions_name() {
+    let book = Book::with_names(
+        vec![(HASH_A, vec![BookMove::new(e2e4(), 10)])],
+        vec![(HASH_A, "Open Game".to_string())],
+    );
 
     let bytes = book.to_bytes();
     let round_tripped = Book::from_bytes(&bytes).expect("a book's own bytes must load back");
 
-    assert_eq!(
-        round_tripped.moves(HASH_A)[0].name,
-        Some("Open Game".to_string())
-    );
+    assert_eq!(round_tripped.name(HASH_A), Some("Open Game"));
 }
 
+/// A name belongs to a position, so a position the name table does not
+/// mention has none, even when it sits next to one that does and even when
+/// both are in the same book.
 #[test]
-fn to_bytes_from_bytes_round_trips_a_mix_of_named_and_unnamed_moves() {
-    let book = Book::new(vec![(
-        HASH_A,
+fn a_position_with_no_name_does_not_borrow_a_neighbours() {
+    let book = Book::with_names(
         vec![
-            BookMove::with_name(e2e4(), 10, "Open Game".to_string()),
-            BookMove::new(d2d4(), 5),
+            (HASH_A, vec![BookMove::new(e2e4(), 10)]),
+            (HASH_B, vec![BookMove::new(d2d4(), 5)]),
         ],
-    )]);
-
-    let bytes = book.to_bytes();
-    let round_tripped = Book::from_bytes(&bytes).expect("a book's own bytes must load back");
-
-    let named = round_tripped
-        .moves(HASH_A)
-        .iter()
-        .find(|bm| bm.mv == e2e4())
-        .expect("e2e4 recorded");
-    let unnamed = round_tripped
-        .moves(HASH_A)
-        .iter()
-        .find(|bm| bm.mv == d2d4())
-        .expect("d2d4 recorded");
-    assert_eq!(named.name, Some("Open Game".to_string()));
-    assert_eq!(
-        unnamed.name, None,
-        "a move recorded with no name must not pick one up from a sibling's bytes"
+        vec![(HASH_A, "Open Game".to_string())],
     );
+
+    let round_tripped =
+        Book::from_bytes(&book.to_bytes()).expect("a book's own bytes must load back");
+
+    assert_eq!(round_tripped.name(HASH_A), Some("Open Game"));
+    assert_eq!(round_tripped.name(HASH_B), None);
 }
 
+/// `name` binary-searches, so it is wrong rather than slow if the table it
+/// searches is out of order. Both ways in sort, and this is what says so:
+/// the names go in descending and every one is still found.
 #[test]
-fn to_bytes_from_bytes_round_trips_an_empty_book() {
-    let book = Book::new(vec![]);
-    let bytes = book.to_bytes();
-    let round_tripped = Book::from_bytes(&bytes).expect("an empty book must still load back");
+fn names_are_found_however_they_were_ordered_going_in() {
+    let mut hashes: Vec<u64> = (0..64u64)
+        .map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .collect();
+    hashes.sort_unstable();
+    hashes.reverse();
 
-    assert_eq!(
-        round_tripped.moves(HASH_A),
-        [],
-        "an empty book must round-trip to an empty book"
-    );
+    let names: Vec<(u64, String)> = hashes
+        .iter()
+        .map(|h| (*h, format!("opening {h:016x}")))
+        .collect();
+    let book = Book::with_names(Vec::new(), names.clone());
+    let round_tripped =
+        Book::from_bytes(&book.to_bytes()).expect("a book's own bytes must load back");
+
+    for (hash, name) in &names {
+        assert_eq!(book.name(*hash), Some(name.as_str()), "in memory");
+        assert_eq!(
+            round_tripped.name(*hash),
+            Some(name.as_str()),
+            "round tripped"
+        );
+    }
 }
 
 #[test]
@@ -251,5 +256,57 @@ fn from_bytes_rejects_a_fingerprint_that_does_not_match_this_build() {
         Book::from_bytes(&bytes),
         Err(BookLoadError::FingerprintMismatch),
         "a corrupted fingerprint must be rejected, not silently misread"
+    );
+}
+
+/// Plays `line` from the start position, for the shipped-book tests below.
+fn after(line: &[&str]) -> Board {
+    let mut board = Board::start_pos();
+    for uci in line {
+        let legal = legal_moves(&board);
+        let matching: Vec<_> = legal
+            .as_slice()
+            .iter()
+            .filter(|m| m.to_uci() == *uci)
+            .collect();
+        assert_eq!(matching.len(), 1, "{uci} is exactly one legal move here");
+        board = board.make_move(*matching[0]);
+    }
+    board
+}
+
+/// The shipped book's own names, which the format tests above cannot reach:
+/// they build books in memory, so nothing else notices if a regeneration
+/// produces a book that loads but names the wrong positions.
+#[test]
+fn the_shipped_book_names_the_openings_its_lines_reach() {
+    let book = default_book().expect("the embedded book loads");
+    for (line, expected) in [
+        (&["e2e4", "c7c5"][..], "Sicilian Defense"),
+        (&["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"][..], "Ruy Lopez"),
+        (&["g1f3"][..], "Zukertort Opening"),
+    ] {
+        assert_eq!(
+            book.name(after(line).hash()),
+            Some(expected),
+            "line {line:?}"
+        );
+    }
+}
+
+/// The start position precedes every opening, so it has no name to inherit.
+/// It is also reachable from itself (1.Nf3 Nf6 2.Ng1 Ng8), which is what
+/// makes this worth pinning: a walk that names by any path rather than the
+/// shortest one gives the start position the name of an opening it comes
+/// before.
+#[test]
+fn the_shipped_book_does_not_name_the_start_position() {
+    let book = default_book().expect("the embedded book loads");
+    assert_eq!(book.name(Board::start_pos().hash()), None);
+
+    assert_eq!(
+        after(&["g1f3", "g8f6", "f3g1", "f6g8"]).hash(),
+        Board::start_pos().hash(),
+        "the knights return to the start position, which is the case this guards"
     );
 }

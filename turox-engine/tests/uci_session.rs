@@ -685,14 +685,10 @@ fn a_book_hits_info_string_names_the_opening_when_the_move_carries_one() {
         .iter()
         .find(|m| m.to_uci() == "e2e4")
         .expect("e2e4 is legal from startpos");
-    let book = Book::new(vec![(
-        Board::start_pos().hash(),
-        vec![BookMove::with_name(
-            e2e4,
-            1,
-            "King's Pawn Opening".to_string(),
-        )],
-    )]);
+    let book = Book::with_names(
+        vec![(Board::start_pos().hash(), vec![BookMove::new(e2e4, 1)])],
+        vec![(Board::start_pos().hash(), "King's Pawn Opening".to_string())],
+    );
 
     let output = run_session_with_book(book, "position startpos\ngo depth 5\nquit\n");
 

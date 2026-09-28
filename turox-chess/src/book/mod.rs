@@ -28,12 +28,25 @@
 //! unrecognized version makes every byte after it meaningless), an 8-byte
 //! fingerprint of the build's `board::zobrist` key table, a 4-byte entry
 //! count, then for each entry an 8-byte hash, a 4-byte move count, and that
-//! many `(2-byte move bits, 4-byte weight, name)` triples, where `name` is a
-//! 2-byte length followed by that many UTF-8 bytes (length `0` means no
-//! name).
+//! many `(2-byte move bits, 4-byte weight)` pairs. After the entries, a
+//! 4-byte count of distinct names and that many names, each a 2-byte length
+//! followed by that many UTF-8 bytes, then a 4-byte count of named positions
+//! and that many `(8-byte hash, 2-byte name index)` pairs.
+//!
+//! Names are interned because the same one covers a whole line: a book of
+//! four hundred thousand named positions draws on a few thousand distinct
+//! names, so storing each position's own copy would cost several times what
+//! the moves do.
+//!
+//! Names sit in their own table, keyed by position, rather than on each move.
+//! A name describes a position reached, so keying it that way is what lets a
+//! transposition into a named line find its name rather than only the one
+//! move that happened to record it. It is also much smaller: a per-move name
+//! costs its length field on every move whether or not one exists.
 
 use crate::board::zobrist;
 use crate::types::Move;
+use std::collections::BTreeMap;
 use turox_rng::xorshift64star;
 
 /// This crate's own book format version, bumped whenever [`Book::to_bytes`]'s
@@ -42,7 +55,7 @@ use turox_rng::xorshift64star;
 /// *key table* a stored hash was computed against, not which *layout* the
 /// bytes around it are in, and the two can change independently of each
 /// other.
-const FORMAT_VERSION: u8 = 2;
+const FORMAT_VERSION: u8 = 3;
 
 /// The generated book file itself: see the module doc's "The embedded
 /// default book" section for exactly what source data and settings
@@ -100,37 +113,27 @@ fn read_u8(bytes: &[u8], pos: &mut usize) -> Option<u8> {
     read_bytes(bytes, pos).map(u8::from_le_bytes)
 }
 
-/// Reads a length-prefixed, possibly-empty name at `*pos`, advancing past
-/// it: a 2-byte length, then that many UTF-8 bytes. Length `0` reads as
-/// `Ok(None)`, matching [`write_name`]'s own convention, so an absent name
-/// costs exactly the 2-byte length field and nothing more.
+/// Reads a length-prefixed name at `*pos`, advancing past it: a 2-byte
+/// length, then that many UTF-8 bytes.
 ///
-/// Returns `Result`, not `Option<Option<String>>` (a `clippy::option_option`
-/// lint denial, and confusing regardless): running out of bytes and
-/// declared-but-invalid-UTF-8 bytes are both [`BookLoadError::Truncated`],
-/// the same "malformed either way" treatment [`BookLoadError::Truncated`]'s
-/// own doc already gives a name whose length runs past the stream.
-fn read_name(bytes: &[u8], pos: &mut usize) -> Result<Option<String>, BookLoadError> {
+/// Running out of bytes and declared-but-invalid-UTF-8 bytes are both
+/// [`BookLoadError::Truncated`], the same "malformed either way" treatment
+/// that error's own doc already gives a name whose length runs past the
+/// stream.
+fn read_name(bytes: &[u8], pos: &mut usize) -> Result<String, BookLoadError> {
     let len = read_u16(bytes, pos).ok_or(BookLoadError::Truncated)?;
-    if len == 0 {
-        return Ok(None);
-    }
     let chunk = bytes
         .get(*pos..*pos + usize::from(len))
         .ok_or(BookLoadError::Truncated)?;
     *pos += usize::from(len);
-    String::from_utf8(chunk.to_vec())
-        .map(Some)
-        .map_err(|_| BookLoadError::Truncated)
+    String::from_utf8(chunk.to_vec()).map_err(|_| BookLoadError::Truncated)
 }
 
 /// Writes `name` in [`read_name`]'s format: a 2-byte length, then that many
-/// UTF-8 bytes, or just a `0` length for `None`.
-fn write_name(buf: &mut Vec<u8>, name: Option<&str>) {
-    let Some(name) = name else {
-        buf.extend_from_slice(&0u16.to_le_bytes());
-        return;
-    };
+/// UTF-8 bytes. Truncated rather than refused past `u16::MAX`, since no
+/// opening name comes near it and a whole book is not worth failing to write
+/// over one.
+fn write_name(buf: &mut Vec<u8>, name: &str) {
     let len = u16::try_from(name.len()).unwrap_or(u16::MAX);
     buf.extend_from_slice(&len.to_le_bytes());
     buf.extend_from_slice(&name.as_bytes()[..usize::from(len)]);
@@ -150,35 +153,13 @@ pub struct BookMove {
     /// meaningful relative to the other weights at the same position, not
     /// on its own.
     pub weight: u32,
-    /// The opening or variation name this move belongs to, if the book's
-    /// source data carried one (e.g. "Ruy Lopez: Berlin Defense" or an ECO
-    /// code). Per move, not per position: two replies from the same
-    /// position can genuinely be different named openings, so a name one
-    /// level up would be a false merge, not a simplification.
-    pub name: Option<String>,
 }
 
 impl BookMove {
-    /// A `BookMove` with no name, the common case: most callers (every
-    /// test in this crate, and any move a real generator run didn't manage
-    /// to attribute to a named opening) have no use for one.
+    /// A move and the weight it carries among its position's candidates.
     #[must_use]
     pub const fn new(mv: Move, weight: u32) -> Self {
-        Self {
-            mv,
-            weight,
-            name: None,
-        }
-    }
-
-    /// A `BookMove` carrying `name`, for a generator that resolved one.
-    #[must_use]
-    pub const fn with_name(mv: Move, weight: u32, name: String) -> Self {
-        Self {
-            mv,
-            weight,
-            name: Some(name),
-        }
+        Self { mv, weight }
     }
 }
 
@@ -208,6 +189,11 @@ pub struct Book {
     /// One entry per book position: its hash and the moves known for it.
     /// Order carries no meaning; lookups go by hash, not position.
     entries: Vec<(u64, Vec<BookMove>)>,
+    /// The distinct opening names, indexed by `named_positions`.
+    names: Vec<String>,
+    /// Which name each named position carries, sorted by hash so a lookup is
+    /// a binary search.
+    named_positions: Vec<(u64, u16)>,
 }
 
 impl Book {
@@ -216,7 +202,54 @@ impl Book {
     /// test, uses to construct one in memory.
     #[must_use]
     pub const fn new(entries: Vec<(u64, Vec<BookMove>)>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            names: Vec::new(),
+            named_positions: Vec::new(),
+        }
+    }
+
+    /// [`Book::new`], with an opening name per position.
+    ///
+    /// Sorted here rather than trusted to arrive sorted, since
+    /// [`Book::name`]'s binary search answers wrongly rather than slowly
+    /// against a table that is not.
+    #[must_use]
+    pub fn with_names(
+        entries: Vec<(u64, Vec<BookMove>)>,
+        per_position: Vec<(u64, String)>,
+    ) -> Self {
+        let mut names: Vec<String> = Vec::new();
+        let mut index_of: BTreeMap<String, u16> = BTreeMap::new();
+        let mut named_positions = Vec::with_capacity(per_position.len());
+
+        for (hash, name) in per_position {
+            let next = u16::try_from(names.len()).unwrap_or(u16::MAX);
+            let index = *index_of.entry(name.clone()).or_insert_with(|| {
+                names.push(name);
+                next
+            });
+            named_positions.push((hash, index));
+        }
+
+        named_positions.sort_unstable_by_key(|(hash, _)| *hash);
+        Self {
+            entries,
+            names,
+            named_positions,
+        }
+    }
+
+    /// The opening name recorded for `hash`, or `None` for a position no
+    /// named line reaches.
+    #[must_use]
+    pub fn name(&self, hash: u64) -> Option<&str> {
+        let at = self
+            .named_positions
+            .binary_search_by_key(&hash, |(hash, _)| *hash)
+            .ok()?;
+        let (_, index) = self.named_positions[at];
+        self.names.get(usize::from(index)).map(String::as_str)
     }
 
     /// The candidate moves recorded for `hash`, or an empty slice if `hash`
@@ -227,6 +260,17 @@ impl Book {
             .iter()
             .find(|entry| entry.0 == hash)
             .map_or(&[], |bm| bm.1.as_slice())
+    }
+
+    /// Every position in the book with its moves.
+    ///
+    /// For a generator walking the whole book, which [`Book::moves`] cannot
+    /// serve: that scans linearly, so calling it per position would be
+    /// quadratic in the book's size.
+    pub fn positions(&self) -> impl Iterator<Item = (u64, &[BookMove])> {
+        self.entries
+            .iter()
+            .map(|(hash, mvs)| (*hash, mvs.as_slice()))
     }
 
     /// A weighted-random choice among `hash`'s candidate moves, seeded for
@@ -284,8 +328,20 @@ impl Book {
             for bm in moves {
                 buf.extend_from_slice(&bm.mv.bits().to_le_bytes());
                 buf.extend_from_slice(&bm.weight.to_le_bytes());
-                write_name(&mut buf, bm.name.as_deref());
             }
+        }
+
+        let name_count = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&name_count.to_le_bytes());
+        for name in &self.names {
+            write_name(&mut buf, name);
+        }
+
+        let position_count = u32::try_from(self.named_positions.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&position_count.to_le_bytes());
+        for (hash, index) in &self.named_positions {
+            buf.extend_from_slice(&hash.to_le_bytes());
+            buf.extend_from_slice(&index.to_le_bytes());
         }
 
         buf
@@ -324,17 +380,41 @@ impl Book {
             for _ in 0..move_count {
                 let bits = read_u16(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
                 let weight = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
-                let name = read_name(bytes, &mut pos)?;
                 moves.push(BookMove {
                     mv: Move::from_bits(bits),
                     weight,
-                    name,
                 });
             }
 
             entries.push((hash, moves));
         }
 
-        Ok(Self { entries })
+        // Neither table is pre-allocated from its count: both come from the
+        // file, and a corrupt one would reserve on a promise the bytes need
+        // not keep.
+        let name_count = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+        let mut names = Vec::new();
+        for _ in 0..name_count {
+            names.push(read_name(bytes, &mut pos)?);
+        }
+
+        let position_count = read_u32(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+        let mut named_positions = Vec::new();
+        for _ in 0..position_count {
+            let hash = read_u64(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+            let index = read_u16(bytes, &mut pos).ok_or(BookLoadError::Truncated)?;
+            named_positions.push((hash, index));
+        }
+
+        // Sorted on the way in as well as in `with_names`: bytes from disk
+        // have not been through that constructor, and `name`'s binary search
+        // answers wrongly rather than slowly against an unsorted table.
+        named_positions.sort_unstable_by_key(|(hash, _)| *hash);
+
+        Ok(Self {
+            entries,
+            names,
+            named_positions,
+        })
     }
 }
