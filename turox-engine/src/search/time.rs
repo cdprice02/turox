@@ -345,4 +345,27 @@ mod tests {
             Duration::ZERO
         ));
     }
+
+    /// One more ply is never cheaper than the last, so a ratio below 1 is
+    /// measurement noise rather than a prediction, and acting on it commits to
+    /// an iteration that cannot finish.
+    ///
+    /// A shrinking node count is reachable as soon as an iteration can cost
+    /// more than its own depth implies: one that re-searched a widened window
+    /// is dearer than the iteration after it, which found its score first try.
+    /// The ratio then reads 0.2, the estimate comes out at a fifth of a cost
+    /// already paid, and the guard waves through an iteration five times too
+    /// expensive for the time left.
+    #[test]
+    fn a_shrinking_node_count_never_predicts_a_cheaper_next_iteration() {
+        // 5_000 -> 1_000 nodes is a 0.2x ratio, projecting 20ms against the
+        // 100ms the last iteration actually took. Floored at 1.0 the estimate
+        // is that same 100ms, which does not fit in the 50ms left.
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(50);
+        assert!(
+            should_skip_next_iteration(elapsed, 1_000, Some(5_000), remaining),
+            "a ratio below 1 must not project a next iteration cheaper than the last"
+        );
+    }
 }

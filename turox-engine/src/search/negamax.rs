@@ -1985,4 +1985,90 @@ mod tests {
             deep_history.score(side, piece, to)
         );
     }
+    /// The position the widening path is tested against, and the reason it was
+    /// chosen: its score moves far enough between consecutive deep iterations to
+    /// land outside any window a narrow search would open, in both directions.
+    /// Depths 5 through 10 report 105, 104, 155, 125, 105, 105 centipawns, so
+    /// the seventh iteration escapes upward from a window centred on the sixth
+    /// and the eighth escapes downward from one centred on the seventh.
+    ///
+    /// Measured with no transposition table and no cutoff history, which is how
+    /// the tests here search. The same position under a warm table and the
+    /// session's own history table reports a different curve, so a fixture
+    /// picked by watching the engine play would not be the fixture these tests
+    /// get.
+    const WIDEN_FIXTURE: &str = "r1bqkbnr/pp2pppp/2n5/3p4/3NP3/8/PPP2PPP/RNBQKB1R w KQkq d6 0 5";
+
+    /// Searches to `depth` with aspiration windows on or off, and is the one
+    /// place the switch is wired: the comparison below is written against this
+    /// helper so that turning the windows on does not touch the test itself.
+    /// Both answers come from the same full-window search while no narrower one
+    /// exists.
+    fn aspirated_score(board: &Board, depth: u8, _aspiration: bool) -> Score {
+        Search::new(Vec::new()).search(board, depth).score
+    }
+
+    /// Guards the fixture rather than the search. A widening re-search is only
+    /// reachable from a position whose score actually escapes its window, and
+    /// that is a property of the position: an evaluation change could flatten
+    /// the curve and leave a passing test that no longer exercises the branch it
+    /// exists for.
+    ///
+    /// The two floors differ because the two swings do. The rise is 51
+    /// centipawns and is checked against 40, comfortably clear of any window
+    /// half-width worth opening. The fall is 30 and is checked against 20,
+    /// which is the looser of the two on purpose: it leaves the fall close to a
+    /// plausible half-width, so a fixture with more room on the fail-low side
+    /// is still worth finding. Neither floor is compared against the delta the
+    /// implementation uses, which would only assert that someone edited two
+    /// places at once.
+    #[test]
+    fn the_widen_fixture_still_moves_the_score_between_deep_iterations() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let mut scores: Vec<(u8, Score)> = Vec::new();
+        Search::new(Vec::new()).search_with_info(&board, 8, |r| scores.push((r.depth, r.score)));
+
+        let at = |d: u8| {
+            scores
+                .iter()
+                .find(|(depth, _)| *depth == d)
+                .map(|(_, s)| *s)
+                .expect("every iteration up to the requested depth completes here")
+        };
+        let rise = at(7) - at(6);
+        let fall = at(7) - at(8);
+        assert!(
+            rise > 40,
+            "the seventh iteration must rise far enough to escape upward: {scores:?}"
+        );
+        assert!(
+            fall > 20,
+            "the eighth iteration must fall far enough to escape downward: {scores:?}"
+        );
+    }
+
+    /// A narrower window may only change how much of the tree gets searched,
+    /// never the answer: a result that escapes the window is re-searched wider
+    /// until it does not, so the score that comes back is the one a full window
+    /// would have returned.
+    ///
+    /// No transposition table on either side. A table is the one thing that can
+    /// break this property for reasons of its own, by storing a bound derived
+    /// from a narrow window and handing it to a later probe, and whether it does
+    /// is a question with its own tests rather than this one's to answer.
+    ///
+    /// Stops at depth 7, which is two iterations past where a window would first
+    /// narrow. Every depth here costs a full search on both sides, so the range
+    /// is worth widening only once the two sides genuinely differ.
+    #[test]
+    fn a_narrow_window_changes_the_tree_and_not_the_score() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        for depth in 1..=7u8 {
+            assert_eq!(
+                aspirated_score(&board, depth, true),
+                aspirated_score(&board, depth, false),
+                "depth {depth}: a narrow window returned a different score than a full one"
+            );
+        }
+    }
 }
