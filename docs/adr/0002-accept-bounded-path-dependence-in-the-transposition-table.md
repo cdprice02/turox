@@ -76,11 +76,32 @@ and more churn, which is the same pressure null-move pruning and reductions were
 named for, without any of them being implemented. The lesson for anyone reading
 this list as a checklist: "the engine got faster" belongs on it.
 
-Two tests document the current behaviour and are expected to fail:
-`accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary` and
-`accepted_gap_shared_table_leaks_a_repetition_tainted_score_across_go_commands`.
-They are the acceptance criteria rather than dead weight: when the fix lands
-they flip to passing.
+The repetition half has since been taken. Suppressing the store when a subtree
+returned a repetition draw is what `negamax` does today, and
+`a_score_from_a_repeating_subtree_is_never_stored` asserts it where it happens:
+a node whose child repeats leaves no entry under its key, next to a control
+showing the same node does store when nothing on the path repeats.
+
+It is asserted there rather than end to end because the end-to-end form stopped
+being a reachable claim. It compared a whole session run against a reused table
+with the same session against a cleared one and required identical scores, which
+holds only while nothing the table holds can influence move ordering. Late move
+reductions made a search result depend on move order, since which moves are
+reduced follows their position in the list and a reduced move that fails low is
+never re-searched. Ordering by the previous iteration's principal variation then
+made move order depend on the table. Either alone is harmless and the comparison
+still holds; together the two runs order differently from each other and settle
+on different moves of equal value, with no tainted score involved. Shuffling the
+root does not break it, because that perturbs both runs the same way.
+
+So the proxy expired rather than the property. The property is now checked
+directly, and it no longer breaks when ordering changes, which internal
+iterative reductions and countermove history would both otherwise do.
+
+One test still documents behaviour that is expected to fail:
+`accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary`.
+It is the acceptance criterion rather than dead weight: when the fix lands it
+flips to passing.
 
 They are kept out of ordinary runs twice over, and both are load-bearing. The
 `accepted_gap_` prefix is what the default nextest filter excludes, which is what
