@@ -911,6 +911,45 @@ impl<'a> Search<'a> {
         }
     }
 
+    /// Searches the child `m` leads to, with `board` on the repetition stack
+    /// for the length of that search.
+    ///
+    /// `is_threefold_repetition` reads the stack as the path to the position
+    /// being searched, so a node's own hash belongs there while its children
+    /// are searched and not while it is checked itself. Pairing the push with
+    /// the pop here is what keeps that true along the abort path as well,
+    /// where an early return is easy to add and easy to leak through.
+    fn descend<F>(&mut self, board: &Board, m: Move, search: F) -> Option<TaintedScore>
+    where
+        F: FnOnce(&mut Self, &Board) -> Option<TaintedScore>,
+    {
+        self.history.push(board.hash());
+        let child = board.make_move(m);
+        let result = search(self, &child);
+        self.history.pop();
+        result
+    }
+
+    /// [`Self::descend`], folding the child's repetition taint into `tainted`.
+    ///
+    /// Separate rather than a flag on `descend`, because the root genuinely
+    /// has no taint to track: it never stores, so it has nothing to protect,
+    /// and giving it a bit to discard would read as an oversight.
+    fn descend_tracking_taint<F>(
+        &mut self,
+        board: &Board,
+        m: Move,
+        tainted: &mut bool,
+        search: F,
+    ) -> Option<Score>
+    where
+        F: FnOnce(&mut Self, &Board) -> Option<TaintedScore>,
+    {
+        let child = self.descend(board, m, search)?;
+        *tainted |= child.tainted;
+        Some(child.score)
+    }
+
     /// One ply of root move loop: like `negamax`, but remembers *which*
     /// move produced the best score, not just the score, so it's a
     /// separate small loop rather than a `ply == 0` special case buried
@@ -1003,11 +1042,10 @@ impl<'a> Search<'a> {
             // is permanent rather than a policy waiting to be filled in.
             |_, _, _| Verdict::Search,
             |s, m, c| {
-                s.history.push(board.hash());
-                let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.previous);
-                s.history.pop();
-                result.map(|r| r.score)
+                s.descend(board, m, |s, child| {
+                    s.negamax(child, c.depth, c.ply, c.alpha, c.beta, c.previous)
+                })
+                .map(|r| r.score)
             },
         );
 
@@ -1162,13 +1200,8 @@ impl<'a> Search<'a> {
                 plies => Verdict::Reduce(plies),
             },
             |s, m, c| {
-                s.history.push(board.hash());
-                let child = board.make_move(m);
-                let result = s.negamax(&child, c.depth, c.ply, c.alpha, c.beta, c.previous);
-                s.history.pop();
-                result.map(|r| {
-                    any_child_tainted |= r.tainted;
-                    r.score
+                s.descend_tracking_taint(board, m, &mut any_child_tainted, |s, child| {
+                    s.negamax(child, c.depth, c.ply, c.alpha, c.beta, c.previous)
                 })
             },
         );
@@ -1291,14 +1324,8 @@ impl<'a> Search<'a> {
             let mut any_child_tainted = false;
             let outcome =
                 self.quiescence_loop(&evasions, ply, alpha, beta, Score::MIN, |s, m, a, b| {
-                    s.history.push(board.hash());
-                    let child = board.make_move(m);
-                    let result =
-                        s.quiescence(&child, a, b, ply + 1, qdepth.saturating_sub(1), None);
-                    s.history.pop();
-                    result.map(|r| {
-                        any_child_tainted |= r.tainted;
-                        r.score
+                    s.descend_tracking_taint(board, m, &mut any_child_tainted, |s, child| {
+                        s.quiescence(child, a, b, ply + 1, qdepth.saturating_sub(1), None)
                     })
                 });
 
@@ -1349,13 +1376,8 @@ impl<'a> Search<'a> {
 
         let mut any_child_tainted = false;
         let outcome = self.quiescence_loop(&qmoves, ply, alpha, beta, stand_pat, |s, m, a, b| {
-            s.history.push(board.hash());
-            let child = board.make_move(m);
-            let result = s.quiescence(&child, a, b, ply + 1, qdepth - 1, None);
-            s.history.pop();
-            result.map(|r| {
-                any_child_tainted |= r.tainted;
-                r.score
+            s.descend_tracking_taint(board, m, &mut any_child_tainted, |s, child| {
+                s.quiescence(child, a, b, ply + 1, qdepth - 1, None)
             })
         });
 

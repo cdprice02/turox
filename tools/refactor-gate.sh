@@ -161,6 +161,20 @@ resolve() {
     cp "$resolved_target/release/turox-cli" "$resolved_bin"
 }
 
+# A base that trails its own remote silently answers a different question:
+# the diff picked up whatever landed in between, so a pure refactor is
+# reported as changing what the engine plays. Worth a warning rather than an
+# error, since an intentionally older base is a legitimate thing to ask for.
+upstream=$(cd "$repo_root" && git rev-parse --verify --quiet "$base_ref@{upstream}" 2>/dev/null) || upstream=""
+if [ -n "$upstream" ]; then
+    behind=$(cd "$repo_root" && git rev-list --count "$base_ref..$base_ref@{upstream}" 2>/dev/null) || behind=0
+    if [ "$behind" -gt 0 ]; then
+        printf '\nwarning: %s is %s commit(s) behind its upstream.\n' "$base_ref" "$behind" >&2
+        printf '         Comparing against it measures those commits too.\n' >&2
+        printf '         Use the upstream ref directly if that is not what you meant.\n\n' >&2
+    fi
+fi
+
 resolve "$base_ref" base
 base_src="$resolved_src"
 base_target="$resolved_target"
