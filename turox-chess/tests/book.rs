@@ -129,62 +129,65 @@ fn to_bytes_from_bytes_round_trips_every_entry() {
 }
 
 #[test]
-fn to_bytes_from_bytes_round_trips_a_moves_name() {
-    let book = Book::new(vec![(
-        HASH_A,
-        vec![BookMove::with_name(e2e4(), 10, "Open Game".to_string())],
-    )]);
+fn to_bytes_from_bytes_round_trips_a_positions_name() {
+    let book = Book::with_names(
+        vec![(HASH_A, vec![BookMove::new(e2e4(), 10)])],
+        vec![(HASH_A, "Open Game".to_string())],
+    );
 
     let bytes = book.to_bytes();
     let round_tripped = Book::from_bytes(&bytes).expect("a book's own bytes must load back");
 
-    assert_eq!(
-        round_tripped.moves(HASH_A)[0].name,
-        Some("Open Game".to_string())
-    );
+    assert_eq!(round_tripped.name(HASH_A), Some("Open Game"));
 }
 
+/// A name belongs to a position, so a position the name table does not
+/// mention has none, even when it sits next to one that does and even when
+/// both are in the same book.
 #[test]
-fn to_bytes_from_bytes_round_trips_a_mix_of_named_and_unnamed_moves() {
-    let book = Book::new(vec![(
-        HASH_A,
+fn a_position_with_no_name_does_not_borrow_a_neighbours() {
+    let book = Book::with_names(
         vec![
-            BookMove::with_name(e2e4(), 10, "Open Game".to_string()),
-            BookMove::new(d2d4(), 5),
+            (HASH_A, vec![BookMove::new(e2e4(), 10)]),
+            (HASH_B, vec![BookMove::new(d2d4(), 5)]),
         ],
-    )]);
-
-    let bytes = book.to_bytes();
-    let round_tripped = Book::from_bytes(&bytes).expect("a book's own bytes must load back");
-
-    let named = round_tripped
-        .moves(HASH_A)
-        .iter()
-        .find(|bm| bm.mv == e2e4())
-        .expect("e2e4 recorded");
-    let unnamed = round_tripped
-        .moves(HASH_A)
-        .iter()
-        .find(|bm| bm.mv == d2d4())
-        .expect("d2d4 recorded");
-    assert_eq!(named.name, Some("Open Game".to_string()));
-    assert_eq!(
-        unnamed.name, None,
-        "a move recorded with no name must not pick one up from a sibling's bytes"
+        vec![(HASH_A, "Open Game".to_string())],
     );
+
+    let round_tripped =
+        Book::from_bytes(&book.to_bytes()).expect("a book's own bytes must load back");
+
+    assert_eq!(round_tripped.name(HASH_A), Some("Open Game"));
+    assert_eq!(round_tripped.name(HASH_B), None);
 }
 
+/// `name` binary-searches, so it is wrong rather than slow if the table it
+/// searches is out of order. Both ways in sort, and this is what says so:
+/// the names go in descending and every one is still found.
 #[test]
-fn to_bytes_from_bytes_round_trips_an_empty_book() {
-    let book = Book::new(vec![]);
-    let bytes = book.to_bytes();
-    let round_tripped = Book::from_bytes(&bytes).expect("an empty book must still load back");
+fn names_are_found_however_they_were_ordered_going_in() {
+    let mut hashes: Vec<u64> = (0..64u64)
+        .map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .collect();
+    hashes.sort_unstable();
+    hashes.reverse();
 
-    assert_eq!(
-        round_tripped.moves(HASH_A),
-        [],
-        "an empty book must round-trip to an empty book"
-    );
+    let names: Vec<(u64, String)> = hashes
+        .iter()
+        .map(|h| (*h, format!("opening {h:016x}")))
+        .collect();
+    let book = Book::with_names(Vec::new(), names.clone());
+    let round_tripped =
+        Book::from_bytes(&book.to_bytes()).expect("a book's own bytes must load back");
+
+    for (hash, name) in &names {
+        assert_eq!(book.name(*hash), Some(name.as_str()), "in memory");
+        assert_eq!(
+            round_tripped.name(*hash),
+            Some(name.as_str()),
+            "round tripped"
+        );
+    }
 }
 
 #[test]

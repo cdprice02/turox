@@ -10,8 +10,8 @@ fn game(white_elo: u32, black_elo: u32, result: GameResult, moves: &[&str]) -> P
         white_elo: Some(white_elo),
         black_elo: Some(black_elo),
         result,
-        opening_name: None,
         moves: moves.iter().map(|s| (*s).to_string()).collect(),
+        opening_name: None,
     }
 }
 
@@ -137,55 +137,7 @@ fn the_same_move_from_two_games_merges_into_one_candidate_with_summed_counts() {
     );
 }
 
-fn game_with_opening(result: GameResult, moves: &[&str], opening_name: &str) -> PgnGame {
-    PgnGame {
-        white_elo: Some(2400),
-        black_elo: Some(2400),
-        result,
-        opening_name: Some(opening_name.to_string()),
-        moves: moves.iter().map(|s| (*s).to_string()).collect(),
-    }
-}
-
 /// The first qualifying game recorded for a (position, move) pair decides
-/// its `opening_name`; a later game playing the same move under a
-/// different name must not overwrite it. See `MoveStats::opening_name`'s
-/// own doc for why first-seen, not a plurality vote.
-#[test]
-fn a_moves_opening_name_comes_from_the_first_game_that_played_it() {
-    let first = game_with_opening(GameResult::WhiteWins, &["e4"], "King's Pawn Opening");
-    let second = game_with_opening(GameResult::WhiteWins, &["e4"], "Open Game");
-
-    let result = aggregate([first, second], &LOOSE_OPTIONS);
-
-    let start_hash = Board::start_pos().hash();
-    let (_, stats) = result
-        .iter()
-        .find(|(h, _)| *h == start_hash)
-        .expect("startpos recorded");
-    assert_eq!(
-        stats[0].opening_name,
-        Some("King's Pawn Opening".to_string()),
-        "the first game's name must win, not the second's: {stats:?}"
-    );
-}
-
-/// A move whose recording game carried no opening name at all stays
-/// unnamed, even once density-filtered into the book: there is nothing to
-/// fall back to.
-#[test]
-fn a_move_from_a_game_with_no_opening_tag_has_no_name() {
-    let g = game(2400, 2400, GameResult::WhiteWins, &["e4"]);
-
-    let result = aggregate([g], &LOOSE_OPTIONS);
-
-    let start_hash = Board::start_pos().hash();
-    let (_, stats) = result
-        .iter()
-        .find(|(h, _)| *h == start_hash)
-        .expect("startpos recorded");
-    assert_eq!(stats[0].opening_name, None);
-}
 
 #[test]
 fn games_reaching_the_same_position_by_different_move_orders_merge() {
@@ -321,7 +273,6 @@ const fn dummy_stats(mv: Move, times_played: u32) -> MoveStats {
         wins: times_played,
         draws: 0,
         losses: 0,
-        opening_name: None,
     }
 }
 

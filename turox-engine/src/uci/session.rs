@@ -121,7 +121,10 @@ where
                     if let Some(book) = book {
                         if let Some(bm) = book.choose_move(board.hash(), root_seed()) {
                             if legal_moves(board).contains(&bm.mv) {
-                                send(&mut writer, &book_hit_info_string(bm));
+                                send(
+                                    &mut writer,
+                                    &book_hit_info_string(bm, book.name(board.hash())),
+                                );
                                 send(&mut writer, &Response::BestMove(Some(bm.mv)));
                                 continue;
                             }
@@ -241,17 +244,14 @@ fn info_response(result: &SearchResult) -> Response {
 }
 
 /// Builds the `info string` line reporting a book hit: which move was
-/// played from the book, and the opening or variation name it belongs to,
-/// if the book carries one for it. The only trace a book hit leaves in the
+/// played from the book, and the name of the opening the position belongs
+/// to, if the book carries one for it. The only trace a book hit leaves in the
 /// engine's own output otherwise, since `Command::Go`'s book-hit path
 /// answers with `bestmove` alone and skips `Search` entirely: without this,
 /// nothing in a GUI's log (or a human watching one) can tell a book move
 /// happened at all, let alone which line it was.
-fn book_hit_info_string(bm: &BookMove) -> Response {
-    let opening = bm
-        .name
-        .as_deref()
-        .map_or(String::new(), |name| format!(" opening {name}"));
+fn book_hit_info_string(bm: &BookMove, name: Option<&str>) -> Response {
+    let opening = name.map_or(String::new(), |name| format!(" opening {name}"));
     Response::InfoString(format!("book move {}{opening}", bm.mv.to_uci()))
 }
 
