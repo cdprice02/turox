@@ -36,7 +36,14 @@ pub enum Command {
     NewGame,
     /// `position [startpos | fen <fen>] [moves <move> ...]`, resolved to
     /// the final `Board`.
-    Position(Board),
+    Position {
+        /// The position to search, with every move in the `moves` list applied.
+        board: Board,
+        /// Every position the `moves` list passed through before `board`, in
+        /// order, which is what `is_threefold_repetition` reads as the path.
+        /// Empty when the command carried no moves.
+        path: Vec<u64>,
+    },
     /// `go [...]`: start searching under `GoOptions`.
     Go(GoOptions),
     /// `setoption name <name> [value <value>]`: configure an engine option.
@@ -155,6 +162,7 @@ pub fn parse(line: &str) -> Option<Command> {
 /// engine would go on to search a position the GUI never actually asked
 /// for.
 fn parse_position<'a>(mut tokens: Peekable<impl Iterator<Item = &'a str>>) -> Option<Command> {
+    let mut path = Vec::new();
     let mut board = match tokens.next()? {
         "startpos" => Board::start_pos(),
         "fen" => {
@@ -171,6 +179,9 @@ fn parse_position<'a>(mut tokens: Peekable<impl Iterator<Item = &'a str>>) -> Op
         None => {}
         Some("moves") => {
             for uci_move in tokens {
+                // Before the move, so `path` holds every position leading up
+                // to `board` and never `board` itself.
+                path.push(board.hash());
                 let legal = legal_moves(&board);
                 board = board.make_move(Move::from_uci(uci_move, &legal)?);
             }
@@ -178,7 +189,7 @@ fn parse_position<'a>(mut tokens: Peekable<impl Iterator<Item = &'a str>>) -> Op
         Some(_) => return None,
     }
 
-    Some(Command::Position(board))
+    Some(Command::Position { board, path })
 }
 
 /// `go [...]`, everything after the `go` token itself: an unordered set of

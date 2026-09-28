@@ -26,6 +26,9 @@ proptest! {
         let expected = board.make_move(m);
 
         let line = format!("position fen {} moves {}", board.to_fen(), m.to_uci());
-        prop_assert_eq!(parse(&line), Some(Command::Position(expected)));
+        prop_assert_eq!(
+            parse(&line),
+            Some(Command::Position { board: expected, path: vec![board.hash()] })
+        );
     }
 }
