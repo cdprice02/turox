@@ -34,21 +34,55 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 BUILD_ROOT = REPO / "target" / "treeshape"
 
-# Deliberately small and varied: the start position for comparability with
-# published figures, Kiwipete because it is the standard wide-open middlegame
-# and already the perft suite's second position, plus a quiet middlegame and a
-# pawn endgame so the number is not dominated by one tree shape.
+# Chosen for variety of tree shape, since the number this tool reports is a
+# growth rate and one dominant shape would decide it: an open middlegame is
+# capture-rich and spends its budget in quiescence, a closed one has few
+# captures and leans on move ordering instead, and an endgame is cheap per node
+# with a high branching factor for the pieces left.
+#
+# Two kinds of position are excluded, both because they measure
+# re-verification rather than search growth. One is a forced mate found at
+# shallow depth: iterative deepening stops learning from further iterations and
+# the ratios report how fast the engine re-confirms an answer it already had.
+# The other is a position whose score is flat from depth 1, which is the same
+# defect arrived at by material rather than by mate. Check a candidate by
+# reading its score per depth before adding it; a working position's score
+# moves.
+#
+# Watch for an immediate free capture when composing one by hand: two rooks
+# sharing a file with nothing between them hands the side to move a piece, and
+# the resulting score looks like a positional judgement rather than the
+# one-move tactic it is.
+#
+# Both colours are to move somewhere in this set. A tree-shape measurement
+# crossed with a colour is the shape that has produced scrambled bugs in this
+# engine before, and a suite that only ever moves White cannot see one.
+#
+# Labels name the shape rather than the position, since reading EBF by shape is
+# the point of the table. Two of them have names worth knowing anyway:
+# `open-mid` is Kiwipete, the perft suite's second position, and `pawn-end` is
+# its third, so both are already legality-checked by the perft tests and appear
+# under those names elsewhere in the repo.
 POSITIONS = [
     ("startpos", None),
     (
-        "kiwipete",
+        "open-mid",
         "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
     ),
     (
-        "midgame",
-        "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+        "quiet-mid",
+        "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
     ),
-    ("endgame", "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1"),
+    (
+        "closed-mid",
+        "r1bq1rk1/ppp1npbp/3p1np1/3Pp3/2P1P3/2N2N1P/PP2BPP1/R1BQ1RK1 b - - 0 10",
+    ),
+    (
+        "sharp-mid",
+        "r1b1k2r/2qnbppp/p2ppn2/1p4B1/3NPP2/2N2Q2/PPP3PP/2KR1B1R w kq - 0 11",
+    ),
+    ("pawn-end", "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1"),
+    ("rook-end", "8/5pk1/6p1/8/8/1R4P1/5PK1/3r4 w - - 0 1"),
 ]
 
 INFO = re.compile(r"^info depth (\d+)\b(.*)$", re.M)
