@@ -108,6 +108,49 @@ const PUZZLES: &[MatePuzzle] = &[
         found_at: 6,
         deep_depth: 7,
     },
+    // The three rook ladders below are the deep half of this set, and they are
+    // here for the shape of their mating lines rather than their length. Each
+    // one needs a quiet waiting move partway through (`Kh2` in both sevens,
+    // and `Kh2` plus a second quiet rook move in the nine), because the ladder
+    // runs out of checks and has to hand the move back to reach the mate. A
+    // quiet move late in a long list is precisely what a reduction shortens and
+    // what a futility margin discards, so a mate that depends on one is the
+    // case a selective technique fails at. A line of nothing but checks would
+    // not test that, since every move in it is forcing.
+    //
+    // Sparse on purpose, as the counterpart to the crowded mate above: few
+    // pieces buy the depth these need at a runtime the pull request can afford,
+    // while the crowded position buys a wide move list at shallow depth. One
+    // position cannot be both.
+    MatePuzzle {
+        name: "rook ladder against a king on e7, White mating",
+        fen: "8/4k3/8/8/8/8/R7/1R5K w - - 0 1",
+        mate_in_plies: 7,
+        found_at: 7,
+        deep_depth: 10,
+    },
+    MatePuzzle {
+        name: "rook ladder against a king on e7, Black mating",
+        fen: "1r5k/r7/8/8/8/8/4K3/8 b - - 0 1",
+        mate_in_plies: 7,
+        found_at: 7,
+        deep_depth: 10,
+    },
+    // Two plies longer than the sevens above for one file of king travel, and
+    // the only one of the three whose mirror does not belong here: mated from
+    // d7 the line is found at its own depth, and the rank-flipped position with
+    // the colours swapped needs two plies more to find the same mate at the
+    // same distance. Both report the true distance once they see it, so the
+    // mate-score formula agrees across colours and it is the search that
+    // differs, but a puzzle costs roughly twice as much per ply and the mirror
+    // would be the slowest entry here by a wide margin.
+    MatePuzzle {
+        name: "rook ladder against a king on d7, White mating",
+        fen: "8/3k4/8/8/8/8/R7/1R5K w - - 0 1",
+        mate_in_plies: 9,
+        found_at: 9,
+        deep_depth: 11,
+    },
 ];
 
 #[test]
