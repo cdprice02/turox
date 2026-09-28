@@ -41,7 +41,10 @@ fn parses_quit() {
 fn parses_position_startpos_with_no_moves() {
     assert_eq!(
         parse("position startpos"),
-        Some(Command::Position(Board::start_pos()))
+        Some(Command::Position {
+            board: Board::start_pos(),
+            path: Vec::new()
+        })
     );
 }
 
@@ -63,7 +66,10 @@ fn parses_position_startpos_with_a_move_list() {
 
     assert_eq!(
         parse("position startpos moves e2e4 e7e5"),
-        Some(Command::Position(expected))
+        Some(Command::Position {
+            board: expected,
+            path: vec![board.hash(), after_e4.hash()]
+        })
     );
 }
 
@@ -73,7 +79,10 @@ fn parses_position_fen_with_no_moves() {
     let expected = Board::try_from_fen(fen).expect("valid FEN");
     assert_eq!(
         parse(&format!("position fen {fen}")),
-        Some(Command::Position(expected))
+        Some(Command::Position {
+            board: expected,
+            path: Vec::new()
+        })
     );
 }
 
@@ -90,7 +99,10 @@ fn parses_position_fen_with_a_move_list() {
 
     assert_eq!(
         parse(&format!("position fen {fen} moves e1d1")),
-        Some(Command::Position(expected))
+        Some(Command::Position {
+            board: expected,
+            path: vec![board.hash()]
+        })
     );
 }
 

@@ -795,3 +795,32 @@ fn a_later_go_can_hit_the_book_again_after_an_earlier_miss() {
         "the first go, out of book, must still have run a real search, output: {output:?}"
     );
 }
+
+/// A repetition contained entirely inside one `position` command's move list.
+///
+/// The knights walk out and back twice, so the start position is reached for
+/// the third time and the game is drawn before the engine is asked to move.
+/// Nothing outside this single command shows that, which is what makes it the
+/// case the old one-hash-per-command history could not see: it sampled only
+/// the position each command ended on and discarded the path taken to it.
+#[test]
+fn a_repetition_inside_one_position_command_is_seen() {
+    let output = run_session(
+        "setoption name Randomize value false
+setoption name Book value false
+position startpos moves g1f3 g8f6 f3g1 f6g8 g1f3 g8f6 f3g1 f6g8
+go depth 6
+quit
+",
+    );
+
+    let last = output
+        .rsplit("score cp ")
+        .next()
+        .and_then(|c| c.split_whitespace().next())
+        .expect("a depth iteration must report a score");
+    assert_eq!(
+        last, "0",
+        "the start position has occurred three times, so this is a draw, output: {output:?}"
+    );
+}

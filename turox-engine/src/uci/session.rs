@@ -3,21 +3,10 @@
 //! piece in the `uci` module; `command::parse` and `response::Response`
 //! both stay pure.
 //!
-//! **Known simplification**: `Search::new`'s `history` (real-game position
-//! hashes, for repetition detection that sees repeats from actual play, not
-//! just within one search tree) is approximated here as one hash pushed per
-//! `position` command received, not one per half-move actually played.
-//! `Command::Position` resolves a whole `position ... moves ...` line
-//! down to just the final `Board`, discarding the intermediate positions
-//! each move in that list passed through, so there's currently no finer
-//! granularity to work with. A GUI that resends the full move list on every
-//! `position` command (the normal case) means this only sees one sample
-//! point per command rather than the true position graph: good enough to
-//! catch a repetition a GUI's own successive `position` commands span, not
-//! guaranteed to catch every repetition within a single command's move
-//! list. Fixing this properly means threading the per-move hash trail
-//! through `Command::Position` itself, which is a deliberately separate,
-//! later change, not something to fold into this loop silently.
+//! Repetition history comes from the `position` command's own move list,
+//! which `Command::Position` walks a move at a time and reports as the path
+//! it took. A repetition inside a single command is visible for that reason,
+//! not only one spanning several of them.
 
 use crate::search::time::allocate_time;
 use crate::search::tt::Tt;
@@ -103,8 +92,14 @@ where
                 tt.clear();
                 cutoff_history.clear();
             }
-            Command::Position(new_board) => {
-                history.push(board.hash());
+            Command::Position {
+                board: new_board,
+                path,
+            } => {
+                // Replaced, not appended: a `position` command carries the
+                // whole game from its base position, so the trail it brings
+                // is the history rather than an addition to one.
+                history = path;
                 *board = new_board;
             }
             Command::Go(options) => {
