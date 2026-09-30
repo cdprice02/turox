@@ -7,6 +7,7 @@
 //! read-through.
 
 use crate::eval::{evaluate, Score};
+use crate::search::aspiration;
 use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
 use crate::search::ordering::history::CutoffHistory;
 use crate::search::ordering::stats::CutoffStats;
@@ -358,6 +359,9 @@ pub struct Search<'a> {
     /// Accumulates across `search_root` and `negamax`'s move loops; see
     /// [`CutoffStats`] and [`SearchResult::negamax_cutoffs`].
     negamax_cutoffs: CutoffStats,
+    /// What this search's aspiration windows cost. Reported on
+    /// [`SearchResult`] the same way the cutoff histograms are.
+    aspiration: aspiration::Stats,
     /// Accumulates across `quiescence`'s move loop (captures and evasions
     /// both); see [`CutoffStats`] and [`SearchResult::quiescence_cutoffs`].
     quiescence_cutoffs: CutoffStats,
@@ -374,6 +378,7 @@ impl<'a> Search<'a> {
         Self {
             nodes: 0,
             history,
+            aspiration: aspiration::Stats::default(),
             deadline: None,
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
@@ -562,6 +567,7 @@ impl<'a> Search<'a> {
             hashfull: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
+            aspiration: aspiration::Stats::default(),
         };
         // Only tracked when `self.deadline` is set: a `max_nodes`-bounded or
         // fully unbounded search has nothing to estimate against, so these
@@ -576,6 +582,12 @@ impl<'a> Search<'a> {
 
         // A local, not a field: a slice of it is passed into `&mut self`.
         let mut previous: PV = [None; MAX_PV_PLY];
+        // The score beside that line, and from the same place: the last
+        // iteration that finished. Kept separately from `result.score`, which
+        // the abort path also writes and which starts at a score no iteration
+        // reported, so reading the window's centre off it would centre one on a
+        // number nothing measured.
+        let mut previous_score: Option<Score> = None;
 
         'deepening: for depth in 1..=max_depth {
             let nodes_before_this_iteration = self.nodes();
@@ -598,12 +610,18 @@ impl<'a> Search<'a> {
 
             let iteration_started = self.deadline.is_some().then(Instant::now);
 
-            let (mut alpha, mut beta) = (-MATE, MATE);
+            let mut window = aspiration::Window::new(previous_score, depth);
             loop {
+                let (alpha, beta) = window.bounds();
+                // Before the attempt, so a discarded one can be charged for the
+                // nodes it actually spent rather than a share of the iteration.
+                let nodes_before_attempt = self.nodes();
+                self.aspiration.attempts = self.aspiration.attempts.saturating_add(1);
                 match self.search_root(board, depth, alpha, beta, &previous) {
                     RootOutcome::Completed(score, pv) => {
                         // Completed iterations only, the rule `result` follows too.
                         previous = pv;
+                        previous_score = Some(score);
                         result = SearchResult {
                             pv,
                             score,
@@ -613,6 +631,7 @@ impl<'a> Search<'a> {
                             hashfull: self.tt.as_deref().map(Tt::hashfull),
                             negamax_cutoffs: self.negamax_cutoffs,
                             quiescence_cutoffs: self.quiescence_cutoffs,
+                            aspiration: self.aspiration,
                         };
                         on_iteration_complete(&result);
                         break;
@@ -628,12 +647,14 @@ impl<'a> Search<'a> {
                     // variation node at all, and the attempt after it lands in
                     // the same place.
                     RootOutcome::FailedHigh(bound) => {
-                        alpha = bound - 1;
-                        beta = MATE;
+                        self.aspiration.fail_high = self.aspiration.fail_high.saturating_add(1);
+                        self.charge_escape(nodes_before_attempt);
+                        window.failed_high(bound);
                     }
                     RootOutcome::FailedLow(bound) => {
-                        alpha = -MATE;
-                        beta = bound + 1;
+                        self.aspiration.fail_low = self.aspiration.fail_low.saturating_add(1);
+                        self.charge_escape(nodes_before_attempt);
+                        window.failed_low(bound);
                     }
                     RootOutcome::Aborted { best_so_far } => {
                         // Only depth 1 aborting can reach here with `result.pv`
@@ -651,6 +672,7 @@ impl<'a> Search<'a> {
                                     hashfull: self.tt.as_deref().map(Tt::hashfull),
                                     negamax_cutoffs: self.negamax_cutoffs,
                                     quiescence_cutoffs: self.quiescence_cutoffs,
+                                    aspiration: self.aspiration,
                                 };
                             }
                         }
@@ -665,6 +687,18 @@ impl<'a> Search<'a> {
             }
         }
         result
+    }
+
+    /// Charges the nodes an abandoned attempt spent to the aspiration counters.
+    ///
+    /// A method rather than the same three lines in both escape arms, which is
+    /// the one thing the two directions genuinely share: what an escape cost
+    /// does not depend on which way it went.
+    const fn charge_escape(&mut self, nodes_before: u64) {
+        self.aspiration.wasted_nodes = self
+            .aspiration
+            .wasted_nodes
+            .saturating_add(self.nodes().saturating_sub(nodes_before));
     }
 
     /// The alpha-beta move loop shared by `negamax` and `search_root` (see
@@ -2222,6 +2256,56 @@ mod tests {
         assert!(
             pv[0].is_some(),
             "a completed root iteration always reports a move"
+        );
+    }
+    /// Every iteration is one attempt unless its window was escaped, so the
+    /// attempts past the depth reached are exactly the escapes. Worth asserting
+    /// because the counter is the only thing that reports a re-search happened,
+    /// and a miscount there is invisible: the search still returns the right
+    /// move, and the number that would have said what it cost is simply wrong.
+    #[test]
+    fn attempts_past_the_depth_reached_are_exactly_the_escapes() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let depth = 9;
+        let result = Search::new(Vec::new()).search(&board, depth);
+        let stats = result.aspiration;
+        let escapes = stats.fail_low + stats.fail_high;
+
+        assert!(
+            escapes > 0,
+            "this fixture is chosen to escape its window, so a run that never does \
+             is measuring nothing: {stats:?}"
+        );
+        assert_eq!(
+            stats.attempts,
+            u32::from(depth) + escapes,
+            "one attempt per iteration, plus one per escape: {stats:?}"
+        );
+        assert!(
+            stats.wasted_nodes > 0,
+            "an escape throws away the attempt that caused it, so it cost nodes: {stats:?}"
+        );
+    }
+
+    /// The counters stay at rest when the technique never engages, which is the
+    /// control for the test above: an `attempts` that counted something other
+    /// than root calls would still satisfy the arithmetic there while being
+    /// wrong here.
+    #[test]
+    fn a_search_too_shallow_to_aspirate_reports_one_attempt_per_iteration() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let depth = aspiration::MIN_DEPTH - 1;
+        let stats = Search::new(Vec::new()).search(&board, depth).aspiration;
+
+        assert_eq!(
+            stats,
+            aspiration::Stats {
+                attempts: u32::from(depth),
+                fail_low: 0,
+                fail_high: 0,
+                wasted_nodes: 0,
+            },
+            "below the depth floor every window opens full and cannot be escaped"
         );
     }
 }

@@ -69,6 +69,8 @@ pub struct SearchResult {
     /// node's, and mixing the two would flatter or distort whichever one
     /// dominates the combined count.
     pub quiescence_cutoffs: CutoffStats,
+    /// What this search's aspiration windows cost, when they were escaped.
+    pub aspiration: crate::search::aspiration::Stats,
 }
 
 impl SearchResult {
@@ -106,6 +108,7 @@ impl PartialEq for SearchResult {
             hashfull,
             negamax_cutoffs,
             quiescence_cutoffs,
+            aspiration,
         } = self;
         *pv == other.pv
             && *score == other.score
@@ -114,5 +117,6 @@ impl PartialEq for SearchResult {
             && *hashfull == other.hashfull
             && *negamax_cutoffs == other.negamax_cutoffs
             && *quiescence_cutoffs == other.quiescence_cutoffs
+            && *aspiration == other.aspiration
     }
 }
