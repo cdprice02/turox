@@ -117,6 +117,14 @@ const FALLBACK_SAFETY_MARGIN: u32 = 2;
 /// `nodes_before_last`), tracking whatever this search's move ordering is
 /// actually doing right now rather than a hand-picked constant that goes
 /// stale the moment ordering changes.
+///
+/// That measured ratio is floored at 1. One more ply is never cheaper than the
+/// last, so a ratio below 1 describes how the two iterations happened to be
+/// measured rather than how the tree grows, and believing it commits to an
+/// iteration there is no time to finish. A shrinking count is reachable
+/// whenever an iteration's cost is not fixed by its depth alone, the plain case
+/// being one that searched the same depth more than once and so cost more than
+/// the iteration after it.
 #[must_use]
 pub fn should_skip_next_iteration(
     elapsed_last: Duration,
@@ -131,7 +139,7 @@ pub fn should_skip_next_iteration(
                 clippy::cast_precision_loss,
                 reason = "node counts as a growth ratio: `f64` has no infallible `From<u64>` since a count past 2^52 would lose precision, but a real search is nowhere near that, and a ratio of two node counts is an estimate already, not a value this cast could meaningfully corrupt"
             )]
-            let ratio = nodes_last as f64 / before as f64;
+            let ratio = (nodes_last as f64 / before as f64).max(1.0);
             elapsed_last.mul_f64(ratio)
         }
         _ => elapsed_last.saturating_mul(FALLBACK_SAFETY_MARGIN),

@@ -79,10 +79,23 @@ pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 
 /// What [`Search::search_root`] found for one depth: either the full move loop finished,
 /// or an abort cut it short partway through.
+#[derive(Debug)]
 enum RootOutcome {
     /// The move loop finished every move at this depth. `best_move` is `None` only for
     /// the genuine terminal case: no legal moves at all.
     Completed(Score, PV),
+    /// Every move came back at or below the window's floor, so the score is an
+    /// upper bound and nothing here is worth reporting: no move proved better
+    /// than the floor, so which of them is best is exactly what the search
+    /// declined to work out. Carries that bound rather than a principal
+    /// variation for the same reason.
+    FailedLow(Score),
+    /// A move came back at or above the window's ceiling, which is a cutoff and
+    /// so a lower bound: the move is at least this good, and the moves after it
+    /// were never tried. Worth less than it sounds at the root, where a ceiling
+    /// is a guess about the previous score rather than a sibling's real
+    /// refutation, which is why this reports a bound and not a move.
+    FailedHigh(Score),
     /// The abort hit before every move at this depth could be tried. `best_so_far` is
     /// the best move and score among moves whose subtree had already fully resolved
     /// before the interruption, if any had; `None` when the abort landed before the
@@ -564,7 +577,7 @@ impl<'a> Search<'a> {
         // A local, not a field: a slice of it is passed into `&mut self`.
         let mut previous: PV = [None; MAX_PV_PLY];
 
-        for depth in 1..=max_depth {
+        'deepening: for depth in 1..=max_depth {
             let nodes_before_this_iteration = self.nodes();
 
             if let (Some(deadline), Some(elapsed), Some(nodes_last)) = (
@@ -584,42 +597,65 @@ impl<'a> Search<'a> {
             }
 
             let iteration_started = self.deadline.is_some().then(Instant::now);
-            match self.search_root(board, &previous, depth) {
-                RootOutcome::Completed(score, pv) => {
-                    // Completed iterations only, the rule `result` follows too.
-                    previous = pv;
-                    result = SearchResult {
-                        pv,
-                        score,
-                        depth,
-                        nodes: self.nodes(),
-                        time: started.elapsed(),
-                        hashfull: self.tt.as_deref().map(Tt::hashfull),
-                        negamax_cutoffs: self.negamax_cutoffs,
-                        quiescence_cutoffs: self.quiescence_cutoffs,
-                    };
-                    on_iteration_complete(&result);
-                }
-                RootOutcome::Aborted { best_so_far } => {
-                    // Only depth 1 aborting can reach here with `result.pv`
-                    // still full of `None`: every later depth has a completed iteration
-                    // already sitting in `result` to fall back on instead, per
-                    // this method's own doc.
-                    if result.best_move().is_none() {
-                        if let Some((score, pv)) = best_so_far {
-                            result = SearchResult {
-                                pv,
-                                score,
-                                depth: 0,
-                                nodes: self.nodes(),
-                                time: started.elapsed(),
-                                hashfull: self.tt.as_deref().map(Tt::hashfull),
-                                negamax_cutoffs: self.negamax_cutoffs,
-                                quiescence_cutoffs: self.quiescence_cutoffs,
-                            };
-                        }
+
+            let (mut alpha, mut beta) = (-MATE, MATE);
+            loop {
+                match self.search_root(board, depth, alpha, beta, &previous) {
+                    RootOutcome::Completed(score, pv) => {
+                        // Completed iterations only, the rule `result` follows too.
+                        previous = pv;
+                        result = SearchResult {
+                            pv,
+                            score,
+                            depth,
+                            nodes: self.nodes(),
+                            time: started.elapsed(),
+                            hashfull: self.tt.as_deref().map(Tt::hashfull),
+                            negamax_cutoffs: self.negamax_cutoffs,
+                            quiescence_cutoffs: self.quiescence_cutoffs,
+                        };
+                        on_iteration_complete(&result);
+                        break;
                     }
-                    break;
+                    // Both sides are re-seeded, not just the one that gave
+                    // way. A fail-soft bound is one-sided evidence: a fail-high
+                    // says the score is at least `bound` and nothing about how
+                    // much more, so the ceiling has to open all the way or the
+                    // next attempt fails high again against the same wall. The
+                    // side that held is what would trap it: leaving a ceiling
+                    // one point above the new floor is a window a search cannot
+                    // answer in, narrow enough to stop being a principal
+                    // variation node at all, and the attempt after it lands in
+                    // the same place.
+                    RootOutcome::FailedHigh(bound) => {
+                        alpha = bound - 1;
+                        beta = MATE;
+                    }
+                    RootOutcome::FailedLow(bound) => {
+                        alpha = -MATE;
+                        beta = bound + 1;
+                    }
+                    RootOutcome::Aborted { best_so_far } => {
+                        // Only depth 1 aborting can reach here with `result.pv`
+                        // still full of `None`: every later depth has a completed iteration
+                        // already sitting in `result` to fall back on instead, per
+                        // this method's own doc.
+                        if result.best_move().is_none() {
+                            if let Some((score, pv)) = best_so_far {
+                                result = SearchResult {
+                                    pv,
+                                    score,
+                                    depth: 0,
+                                    nodes: self.nodes(),
+                                    time: started.elapsed(),
+                                    hashfull: self.tt.as_deref().map(Tt::hashfull),
+                                    negamax_cutoffs: self.negamax_cutoffs,
+                                    quiescence_cutoffs: self.quiescence_cutoffs,
+                                };
+                            }
+                        }
+                        break 'deepening;
+                    }
                 }
             }
             if let Some(started) = iteration_started {
@@ -646,16 +682,21 @@ impl<'a> Search<'a> {
     /// recursive call is at, and whether the repetition stack is maintained
     /// across it) while the loop keeps the parts that must not: fail-soft
     /// score comparison, alpha raising, the cutoff test, and recording the
-    /// cutoff to the killer table and the histogram. The window is passed in
+    /// cutoff to the killer table and the histogram, the last of these
+    /// everywhere but the root (see the cutoff test's own comment). The window is passed in
     /// already negated, so the caller never repeats negamax's sign convention
-    /// either. The closure's `bool` parameter is `is_pv` for *that specific
-    /// call*: move 0 gets `ctx.is_pv` itself (a PV node's first move stays on
-    /// the principal variation; a cut node's first move was never on it to
-    /// begin with), every other move's initial probe gets `false` (a null
-    /// window can only ever prove a bound, never hand back an exact score
-    /// worth recording), and a re-search (see below) gets `true` regardless of
-    /// `ctx.is_pv`, since a move that just proved itself better than
-    /// everything else found so far is a live candidate for the real line.
+    /// either. Whether a given call sits on the principal variation is tracked
+    /// per move in a local, and decides one thing only: whether that move's
+    /// line is copied into [`Search::pv`]. Move 0 inherits the node's own
+    /// answer (a PV node's first move stays on the variation; a cut node's
+    /// first move was never on it), every later move's initial probe is not on
+    /// it (a null window can only prove a bound, never hand back an exact score
+    /// worth recording), and a re-search is, whatever the node was, since a
+    /// move that just proved itself better than everything found so far is a
+    /// live candidate for the real line. The child is not told any of this: it
+    /// reads its own PV-ness off the width of the window it was handed, which
+    /// is the same answer by construction, since the probe is what makes that
+    /// window narrow.
     ///
     /// The null-window probe and its possible re-search: for every move after
     /// the first, `search_child` first runs with a one-point window just
@@ -700,6 +741,11 @@ impl<'a> Search<'a> {
             depth,
             previous,
         } = ctx;
+        // `search_root` is the only caller that reaches this loop at ply 0,
+        // since it enters `negamax` one ply down and every deeper call inherits
+        // that. Quiescence's loop is a different function and carries no such
+        // rule: it does run at ply 0, from the root's own depth-0 handoff.
+        let is_root = ply == 0;
 
         let mut max = Score::MIN;
         let mut best_move = None;
@@ -836,8 +882,18 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let cause = self.ordering.on_cutoff(ply, m, max);
-                self.negamax_cutoffs.record(i, cause);
+                // The root learns nothing from its own ceiling. A cutoff at an
+                // interior node means a sibling refuted this line, which is
+                // what the killer table and the histogram exist to remember; at
+                // the root the ceiling is a guess about what the score will be,
+                // so a move that beats it has refuted a prediction rather than
+                // a move, and crediting it would teach ordering a fact about
+                // the window. The break still stands: there is no reason to
+                // search the remaining root moves once the window is escaped.
+                if !is_root {
+                    let cause = self.ordering.on_cutoff(ply, m, max);
+                    self.negamax_cutoffs.record(i, cause);
+                }
                 cutoff_index = Some(i);
                 break;
             }
@@ -973,7 +1029,14 @@ impl<'a> Search<'a> {
     /// values; only the one move that was mid-flight is discarded, which is
     /// why `best_so_far` reports the finished moves' result rather than
     /// discarding it wholesale.
-    fn search_root(&mut self, board: &Board, previous: PvLine<'_>, depth: u8) -> RootOutcome {
+    fn search_root(
+        &mut self,
+        board: &Board,
+        depth: u8,
+        alpha: Score,
+        beta: Score,
+        previous: PvLine<'_>,
+    ) -> RootOutcome {
         let hint = pv_hint(previous);
         self.nodes += 1;
         if self.should_abort() {
@@ -1005,9 +1068,6 @@ impl<'a> Search<'a> {
                 RootOutcome::Completed(0, pv)
             };
         }
-
-        let alpha = -MATE;
-        let beta = MATE;
 
         // Unreachable from `search`, whose iterative deepening starts at 1,
         // but `depth` is a plain `u8` with no type-level floor, so a future
@@ -1052,6 +1112,16 @@ impl<'a> Search<'a> {
         if outcome.aborted {
             let best_so_far = outcome.best_move.map(|_| (outcome.max, self.pv[0]));
             return RootOutcome::Aborted { best_so_far };
+        }
+        // Classified before the history update, not after: a result that escaped
+        // its window is a statement about the window and leaves the tables as it
+        // found them, so only an attempt that lands inside one gets to move
+        // them.
+        if outcome.max <= alpha {
+            return RootOutcome::FailedLow(outcome.max);
+        }
+        if outcome.max >= beta {
+            return RootOutcome::FailedHigh(outcome.max);
         }
         self.ordering
             .update_history(board, &moves, outcome.cutoff_index, depth);
@@ -2070,5 +2140,88 @@ mod tests {
                 "depth {depth}: a narrow window returned a different score than a full one"
             );
         }
+    }
+    /// Both escape directions, on one position, asserted against a window placed
+    /// deliberately on the wrong side of the true score.
+    ///
+    /// Worth a test of its own rather than trusting the comparison by reading
+    /// it: a floor and a ceiling crossed with a lower and an upper bound is the
+    /// shape that has produced scrambled results in this engine before, and a
+    /// swapped pair still typechecks, still terminates, and still returns a
+    /// number. What it does instead is widen away from the answer, which looks
+    /// like a slow search rather than a wrong one.
+    ///
+    /// Each window is placed relative to the score a full-window search
+    /// reports, so the test does not encode what the position is worth and
+    /// survives any evaluation change that keeps it a search rather than a
+    /// rewrite. Each is ten points wide rather than one: a one-point window
+    /// would escape just as reliably and is also a window no caller may open,
+    /// since nothing can be answered inside it, so the test would be resting on
+    /// a shape the search is entitled to reject.
+    #[test]
+    fn a_score_outside_its_window_is_reported_on_the_side_it_escaped() {
+        let board = capture_and_quiet_position();
+        let depth = 4;
+        let full = Search::new(Vec::new()).search_root(&board, depth, -MATE, MATE, &[]);
+        let RootOutcome::Completed(truth, _) = full else {
+            panic!("a full window cannot be escaped, got {full:?}");
+        };
+
+        // Ceiling below the answer: the search proves it can do better than the
+        // ceiling and stops there, so the bound it reports is a floor under the
+        // true score rather than the score itself.
+        let ceiling = truth - 50;
+        let high = Search::new(Vec::new()).search_root(&board, depth, ceiling - 10, ceiling, &[]);
+        let RootOutcome::FailedHigh(bound) = high else {
+            panic!(
+                "a ceiling of {ceiling} below the true score {truth} must fail high, got {high:?}"
+            );
+        };
+        assert!(
+            bound >= ceiling,
+            "a fail-high reports a lower bound, so it cannot sit under the ceiling it escaped: \
+             bound {bound}, ceiling {ceiling}"
+        );
+
+        // Floor above the answer: nothing reaches the floor, so the bound is a
+        // ceiling over the true score and no move earned a report.
+        let floor = truth + 50;
+        let low = Search::new(Vec::new()).search_root(&board, depth, floor, floor + 10, &[]);
+        let RootOutcome::FailedLow(bound) = low else {
+            panic!("a floor of {floor} above the true score {truth} must fail low, got {low:?}");
+        };
+        assert!(
+            bound <= floor,
+            "a fail-low reports an upper bound, so it cannot sit above the floor nothing \
+             reached: bound {bound}, floor {floor}"
+        );
+    }
+
+    /// A window wide enough to hold the answer is not escaped, which is the
+    /// control the two failures above are only meaningful against: a
+    /// classification that answered one of them unconditionally would satisfy
+    /// half of that test, and this one catches it.
+    #[test]
+    fn a_score_inside_its_window_completes() {
+        let board = capture_and_quiet_position();
+        let depth = 4;
+        let full = Search::new(Vec::new()).search_root(&board, depth, -MATE, MATE, &[]);
+        let RootOutcome::Completed(truth, _) = full else {
+            panic!("a full window cannot be escaped, got {full:?}");
+        };
+
+        let narrow =
+            Search::new(Vec::new()).search_root(&board, depth, truth - 30, truth + 30, &[]);
+        let RootOutcome::Completed(score, pv) = narrow else {
+            panic!("a window centred on the true score must complete, got {narrow:?}");
+        };
+        assert_eq!(
+            score, truth,
+            "a window the score sits inside returns the same score a full one does"
+        );
+        assert!(
+            pv[0].is_some(),
+            "a completed root iteration always reports a move"
+        );
     }
 }
