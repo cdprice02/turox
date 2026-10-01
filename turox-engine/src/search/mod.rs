@@ -9,6 +9,7 @@
 //! node makes before recursing further, and `board::zobrist` for the hashes `draw`'s
 //! repetition check and the transposition table (`tt`) both key on.
 
+mod aspiration;
 pub mod draw;
 #[cfg(test)]
 mod fixtures;
@@ -19,6 +20,7 @@ mod selectivity;
 pub mod time;
 pub mod tt;
 
+pub use aspiration::Stats as AspirationStats;
 pub use negamax::{is_mate_score, Search, MATE, MAX_MATE_PLY, MAX_QUIESCENCE_DEPTH};
 pub use ordering::history::CutoffHistory;
 pub use ordering::stats::{CutoffCause, CutoffStats};

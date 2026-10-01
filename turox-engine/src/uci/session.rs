@@ -173,6 +173,7 @@ where
                     send(&mut writer, &info_response(&result));
                 }
                 send(&mut writer, &cutoff_info_string(&result));
+                send(&mut writer, &aspiration_info_string(&result));
                 send(&mut writer, &Response::BestMove(result.best_move()));
             }
             // Already handled by `read_commands` setting `active_stop`
@@ -253,6 +254,25 @@ fn info_response(result: &SearchResult) -> Response {
 fn book_hit_info_string(bm: &BookMove, name: Option<&str>) -> Response {
     let opening = name.map_or(String::new(), |name| format!(" opening {name}"));
     Response::InfoString(format!("book move {}{opening}", bm.mv.to_uci()))
+}
+
+/// Builds the `info string` line reporting what this search's aspiration
+/// windows cost.
+///
+/// Its own line rather than another field on the cutoffs line: these count
+/// attempts and iterations, where that line counts nodes, and an escaped window
+/// is not a cutoff even though the move loop stops the same way.
+///
+/// `attempts` above the depth reached is the whole signal: it means a window was
+/// escaped and an iteration was searched more than once. `wasted_nodes` is what
+/// says whether that mattered, since an escape at a shallow depth costs almost
+/// nothing and one at the deepest costs most of the search.
+fn aspiration_info_string(result: &SearchResult) -> Response {
+    let stats = result.aspiration;
+    Response::InfoString(format!(
+        "aspiration attempts={} fail_low={} fail_high={} wasted_nodes={}",
+        stats.attempts, stats.fail_low, stats.fail_high, stats.wasted_nodes
+    ))
 }
 
 /// Builds the `info string` line reporting the cutoff-index histogram, the

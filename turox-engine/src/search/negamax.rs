@@ -7,6 +7,7 @@
 //! read-through.
 
 use crate::eval::{evaluate, Score};
+use crate::search::aspiration;
 use crate::search::draw::{is_draw, is_fifty_move_draw, is_threefold_repetition};
 use crate::search::ordering::history::CutoffHistory;
 use crate::search::ordering::stats::CutoffStats;
@@ -79,10 +80,23 @@ pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
 
 /// What [`Search::search_root`] found for one depth: either the full move loop finished,
 /// or an abort cut it short partway through.
+#[derive(Debug)]
 enum RootOutcome {
     /// The move loop finished every move at this depth. `best_move` is `None` only for
     /// the genuine terminal case: no legal moves at all.
     Completed(Score, PV),
+    /// Every move came back at or below the window's floor, so the score is an
+    /// upper bound and nothing here is worth reporting: no move proved better
+    /// than the floor, so which of them is best is exactly what the search
+    /// declined to work out. Carries that bound rather than a principal
+    /// variation for the same reason.
+    FailedLow(Score),
+    /// A move came back at or above the window's ceiling, which is a cutoff and
+    /// so a lower bound: the move is at least this good, and the moves after it
+    /// were never tried. Worth less than it sounds at the root, where a ceiling
+    /// is a guess about the previous score rather than a sibling's real
+    /// refutation, which is why this reports a bound and not a move.
+    FailedHigh(Score),
     /// The abort hit before every move at this depth could be tried. `best_so_far` is
     /// the best move and score among moves whose subtree had already fully resolved
     /// before the interruption, if any had; `None` when the abort landed before the
@@ -345,6 +359,9 @@ pub struct Search<'a> {
     /// Accumulates across `search_root` and `negamax`'s move loops; see
     /// [`CutoffStats`] and [`SearchResult::negamax_cutoffs`].
     negamax_cutoffs: CutoffStats,
+    /// What this search's aspiration windows cost. Reported on
+    /// [`SearchResult`] the same way the cutoff histograms are.
+    aspiration: aspiration::Stats,
     /// Accumulates across `quiescence`'s move loop (captures and evasions
     /// both); see [`CutoffStats`] and [`SearchResult::quiescence_cutoffs`].
     quiescence_cutoffs: CutoffStats,
@@ -361,6 +378,7 @@ impl<'a> Search<'a> {
         Self {
             nodes: 0,
             history,
+            aspiration: aspiration::Stats::default(),
             deadline: None,
             max_nodes: None,
             stop: Arc::new(AtomicBool::new(false)),
@@ -549,6 +567,7 @@ impl<'a> Search<'a> {
             hashfull: None,
             negamax_cutoffs: CutoffStats::default(),
             quiescence_cutoffs: CutoffStats::default(),
+            aspiration: aspiration::Stats::default(),
         };
         // Only tracked when `self.deadline` is set: a `max_nodes`-bounded or
         // fully unbounded search has nothing to estimate against, so these
@@ -563,8 +582,14 @@ impl<'a> Search<'a> {
 
         // A local, not a field: a slice of it is passed into `&mut self`.
         let mut previous: PV = [None; MAX_PV_PLY];
+        // The score beside that line, and from the same place: the last
+        // iteration that finished. Kept separately from `result.score`, which
+        // the abort path also writes and which starts at a score no iteration
+        // reported, so reading the window's centre off it would centre one on a
+        // number nothing measured.
+        let mut previous_score: Option<Score> = None;
 
-        for depth in 1..=max_depth {
+        'deepening: for depth in 1..=max_depth {
             let nodes_before_this_iteration = self.nodes();
 
             if let (Some(deadline), Some(elapsed), Some(nodes_last)) = (
@@ -584,42 +609,75 @@ impl<'a> Search<'a> {
             }
 
             let iteration_started = self.deadline.is_some().then(Instant::now);
-            match self.search_root(board, &previous, depth) {
-                RootOutcome::Completed(score, pv) => {
-                    // Completed iterations only, the rule `result` follows too.
-                    previous = pv;
-                    result = SearchResult {
-                        pv,
-                        score,
-                        depth,
-                        nodes: self.nodes(),
-                        time: started.elapsed(),
-                        hashfull: self.tt.as_deref().map(Tt::hashfull),
-                        negamax_cutoffs: self.negamax_cutoffs,
-                        quiescence_cutoffs: self.quiescence_cutoffs,
-                    };
-                    on_iteration_complete(&result);
-                }
-                RootOutcome::Aborted { best_so_far } => {
-                    // Only depth 1 aborting can reach here with `result.pv`
-                    // still full of `None`: every later depth has a completed iteration
-                    // already sitting in `result` to fall back on instead, per
-                    // this method's own doc.
-                    if result.best_move().is_none() {
-                        if let Some((score, pv)) = best_so_far {
-                            result = SearchResult {
-                                pv,
-                                score,
-                                depth: 0,
-                                nodes: self.nodes(),
-                                time: started.elapsed(),
-                                hashfull: self.tt.as_deref().map(Tt::hashfull),
-                                negamax_cutoffs: self.negamax_cutoffs,
-                                quiescence_cutoffs: self.quiescence_cutoffs,
-                            };
-                        }
+
+            let mut window = aspiration::Window::new(previous_score, depth);
+            loop {
+                let (alpha, beta) = window.bounds();
+                // Before the attempt, so a discarded one can be charged for the
+                // nodes it actually spent rather than a share of the iteration.
+                let nodes_before_attempt = self.nodes();
+                self.aspiration.attempts = self.aspiration.attempts.saturating_add(1);
+                match self.search_root(board, depth, alpha, beta, &previous) {
+                    RootOutcome::Completed(score, pv) => {
+                        // Completed iterations only, the rule `result` follows too.
+                        previous = pv;
+                        previous_score = Some(score);
+                        result = SearchResult {
+                            pv,
+                            score,
+                            depth,
+                            nodes: self.nodes(),
+                            time: started.elapsed(),
+                            hashfull: self.tt.as_deref().map(Tt::hashfull),
+                            negamax_cutoffs: self.negamax_cutoffs,
+                            quiescence_cutoffs: self.quiescence_cutoffs,
+                            aspiration: self.aspiration,
+                        };
+                        on_iteration_complete(&result);
+                        break;
                     }
-                    break;
+                    // Both sides are re-seeded, not just the one that gave
+                    // way. A fail-soft bound is one-sided evidence: a fail-high
+                    // says the score is at least `bound` and nothing about how
+                    // much more, so the ceiling has to open all the way or the
+                    // next attempt fails high again against the same wall. The
+                    // side that held is what would trap it: leaving a ceiling
+                    // one point above the new floor is a window a search cannot
+                    // answer in, narrow enough to stop being a principal
+                    // variation node at all, and the attempt after it lands in
+                    // the same place.
+                    RootOutcome::FailedHigh(bound) => {
+                        self.aspiration.fail_high = self.aspiration.fail_high.saturating_add(1);
+                        self.charge_escape(nodes_before_attempt);
+                        window.failed_high(bound);
+                    }
+                    RootOutcome::FailedLow(bound) => {
+                        self.aspiration.fail_low = self.aspiration.fail_low.saturating_add(1);
+                        self.charge_escape(nodes_before_attempt);
+                        window.failed_low(bound);
+                    }
+                    RootOutcome::Aborted { best_so_far } => {
+                        // Only depth 1 aborting can reach here with `result.pv`
+                        // still full of `None`: every later depth has a completed iteration
+                        // already sitting in `result` to fall back on instead, per
+                        // this method's own doc.
+                        if result.best_move().is_none() {
+                            if let Some((score, pv)) = best_so_far {
+                                result = SearchResult {
+                                    pv,
+                                    score,
+                                    depth: 0,
+                                    nodes: self.nodes(),
+                                    time: started.elapsed(),
+                                    hashfull: self.tt.as_deref().map(Tt::hashfull),
+                                    negamax_cutoffs: self.negamax_cutoffs,
+                                    quiescence_cutoffs: self.quiescence_cutoffs,
+                                    aspiration: self.aspiration,
+                                };
+                            }
+                        }
+                        break 'deepening;
+                    }
                 }
             }
             if let Some(started) = iteration_started {
@@ -629,6 +687,18 @@ impl<'a> Search<'a> {
             }
         }
         result
+    }
+
+    /// Charges the nodes an abandoned attempt spent to the aspiration counters.
+    ///
+    /// A method rather than the same three lines in both escape arms, which is
+    /// the one thing the two directions genuinely share: what an escape cost
+    /// does not depend on which way it went.
+    const fn charge_escape(&mut self, nodes_before: u64) {
+        self.aspiration.wasted_nodes = self
+            .aspiration
+            .wasted_nodes
+            .saturating_add(self.nodes().saturating_sub(nodes_before));
     }
 
     /// The alpha-beta move loop shared by `negamax` and `search_root` (see
@@ -646,16 +716,21 @@ impl<'a> Search<'a> {
     /// recursive call is at, and whether the repetition stack is maintained
     /// across it) while the loop keeps the parts that must not: fail-soft
     /// score comparison, alpha raising, the cutoff test, and recording the
-    /// cutoff to the killer table and the histogram. The window is passed in
+    /// cutoff to the killer table and the histogram, the last of these
+    /// everywhere but the root (see the cutoff test's own comment). The window is passed in
     /// already negated, so the caller never repeats negamax's sign convention
-    /// either. The closure's `bool` parameter is `is_pv` for *that specific
-    /// call*: move 0 gets `ctx.is_pv` itself (a PV node's first move stays on
-    /// the principal variation; a cut node's first move was never on it to
-    /// begin with), every other move's initial probe gets `false` (a null
-    /// window can only ever prove a bound, never hand back an exact score
-    /// worth recording), and a re-search (see below) gets `true` regardless of
-    /// `ctx.is_pv`, since a move that just proved itself better than
-    /// everything else found so far is a live candidate for the real line.
+    /// either. Whether a given call sits on the principal variation is tracked
+    /// per move in a local, and decides one thing only: whether that move's
+    /// line is copied into [`Search::pv`]. Move 0 inherits the node's own
+    /// answer (a PV node's first move stays on the variation; a cut node's
+    /// first move was never on it), every later move's initial probe is not on
+    /// it (a null window can only prove a bound, never hand back an exact score
+    /// worth recording), and a re-search is, whatever the node was, since a
+    /// move that just proved itself better than everything found so far is a
+    /// live candidate for the real line. The child is not told any of this: it
+    /// reads its own PV-ness off the width of the window it was handed, which
+    /// is the same answer by construction, since the probe is what makes that
+    /// window narrow.
     ///
     /// The null-window probe and its possible re-search: for every move after
     /// the first, `search_child` first runs with a one-point window just
@@ -700,6 +775,11 @@ impl<'a> Search<'a> {
             depth,
             previous,
         } = ctx;
+        // `search_root` is the only caller that reaches this loop at ply 0,
+        // since it enters `negamax` one ply down and every deeper call inherits
+        // that. Quiescence's loop is a different function and carries no such
+        // rule: it does run at ply 0, from the root's own depth-0 handoff.
+        let is_root = ply == 0;
 
         let mut max = Score::MIN;
         let mut best_move = None;
@@ -836,8 +916,18 @@ impl<'a> Search<'a> {
                 alpha = max;
             }
             if alpha >= beta {
-                let cause = self.ordering.on_cutoff(ply, m, max);
-                self.negamax_cutoffs.record(i, cause);
+                // The root learns nothing from its own ceiling. A cutoff at an
+                // interior node means a sibling refuted this line, which is
+                // what the killer table and the histogram exist to remember; at
+                // the root the ceiling is a guess about what the score will be,
+                // so a move that beats it has refuted a prediction rather than
+                // a move, and crediting it would teach ordering a fact about
+                // the window. The break still stands: there is no reason to
+                // search the remaining root moves once the window is escaped.
+                if !is_root {
+                    let cause = self.ordering.on_cutoff(ply, m, max);
+                    self.negamax_cutoffs.record(i, cause);
+                }
                 cutoff_index = Some(i);
                 break;
             }
@@ -973,7 +1063,14 @@ impl<'a> Search<'a> {
     /// values; only the one move that was mid-flight is discarded, which is
     /// why `best_so_far` reports the finished moves' result rather than
     /// discarding it wholesale.
-    fn search_root(&mut self, board: &Board, previous: PvLine<'_>, depth: u8) -> RootOutcome {
+    fn search_root(
+        &mut self,
+        board: &Board,
+        depth: u8,
+        alpha: Score,
+        beta: Score,
+        previous: PvLine<'_>,
+    ) -> RootOutcome {
         let hint = pv_hint(previous);
         self.nodes += 1;
         if self.should_abort() {
@@ -1005,9 +1102,6 @@ impl<'a> Search<'a> {
                 RootOutcome::Completed(0, pv)
             };
         }
-
-        let alpha = -MATE;
-        let beta = MATE;
 
         // Unreachable from `search`, whose iterative deepening starts at 1,
         // but `depth` is a plain `u8` with no type-level floor, so a future
@@ -1052,6 +1146,16 @@ impl<'a> Search<'a> {
         if outcome.aborted {
             let best_so_far = outcome.best_move.map(|_| (outcome.max, self.pv[0]));
             return RootOutcome::Aborted { best_so_far };
+        }
+        // Classified before the history update, not after: a result that escaped
+        // its window is a statement about the window and leaves the tables as it
+        // found them, so only an attempt that lands inside one gets to move
+        // them.
+        if outcome.max <= alpha {
+            return RootOutcome::FailedLow(outcome.max);
+        }
+        if outcome.max >= beta {
+            return RootOutcome::FailedHigh(outcome.max);
         }
         self.ordering
             .update_history(board, &moves, outcome.cutoff_index, depth);
@@ -1983,6 +2087,225 @@ mod tests {
              must weigh the same cutoff more, not the same: shallow={}, deep={}",
             shallow_history.score(side, piece, to),
             deep_history.score(side, piece, to)
+        );
+    }
+    /// The position the widening path is tested against, and the reason it was
+    /// chosen: its score moves far enough between consecutive deep iterations to
+    /// land outside any window a narrow search would open, in both directions.
+    /// Depths 5 through 10 report 105, 104, 155, 125, 105, 105 centipawns, so
+    /// the seventh iteration escapes upward from a window centred on the sixth
+    /// and the eighth escapes downward from one centred on the seventh.
+    ///
+    /// Measured with no transposition table and no cutoff history, which is how
+    /// the tests here search. The same position under a warm table and the
+    /// session's own history table reports a different curve, so a fixture
+    /// picked by watching the engine play would not be the fixture these tests
+    /// get.
+    const WIDEN_FIXTURE: &str = "r1bqkbnr/pp2pppp/2n5/3p4/3NP3/8/PPP2PPP/RNBQKB1R w KQkq d6 0 5";
+
+    /// Searches to `depth` with aspiration windows on or off, and is the one
+    /// place the switch is wired: the comparison below is written against this
+    /// helper so that turning the windows on does not touch the test itself.
+    /// Both answers come from the same full-window search while no narrower one
+    /// exists.
+    fn aspirated_score(board: &Board, depth: u8, _aspiration: bool) -> Score {
+        Search::new(Vec::new()).search(board, depth).score
+    }
+
+    /// Guards the fixture rather than the search. A widening re-search is only
+    /// reachable from a position whose score actually escapes its window, and
+    /// that is a property of the position: an evaluation change could flatten
+    /// the curve and leave a passing test that no longer exercises the branch it
+    /// exists for.
+    ///
+    /// The two floors differ because the two swings do. The rise is 51
+    /// centipawns and is checked against 40, comfortably clear of any window
+    /// half-width worth opening. The fall is 30 and is checked against 20,
+    /// which is the looser of the two on purpose: it leaves the fall close to a
+    /// plausible half-width, so a fixture with more room on the fail-low side
+    /// is still worth finding. Neither floor is compared against the delta the
+    /// implementation uses, which would only assert that someone edited two
+    /// places at once.
+    #[test]
+    fn the_widen_fixture_still_moves_the_score_between_deep_iterations() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let mut scores: Vec<(u8, Score)> = Vec::new();
+        Search::new(Vec::new()).search_with_info(&board, 8, |r| scores.push((r.depth, r.score)));
+
+        let at = |d: u8| {
+            scores
+                .iter()
+                .find(|(depth, _)| *depth == d)
+                .map(|(_, s)| *s)
+                .expect("every iteration up to the requested depth completes here")
+        };
+        let rise = at(7) - at(6);
+        let fall = at(7) - at(8);
+        assert!(
+            rise > 40,
+            "the seventh iteration must rise far enough to escape upward: {scores:?}"
+        );
+        assert!(
+            fall > 20,
+            "the eighth iteration must fall far enough to escape downward: {scores:?}"
+        );
+    }
+
+    /// A narrower window may only change how much of the tree gets searched,
+    /// never the answer: a result that escapes the window is re-searched wider
+    /// until it does not, so the score that comes back is the one a full window
+    /// would have returned.
+    ///
+    /// No transposition table on either side. A table is the one thing that can
+    /// break this property for reasons of its own, by storing a bound derived
+    /// from a narrow window and handing it to a later probe, and whether it does
+    /// is a question with its own tests rather than this one's to answer.
+    ///
+    /// Stops at depth 7, which is two iterations past where a window would first
+    /// narrow. Every depth here costs a full search on both sides, so the range
+    /// is worth widening only once the two sides genuinely differ.
+    #[test]
+    fn a_narrow_window_changes_the_tree_and_not_the_score() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        for depth in 1..=7u8 {
+            assert_eq!(
+                aspirated_score(&board, depth, true),
+                aspirated_score(&board, depth, false),
+                "depth {depth}: a narrow window returned a different score than a full one"
+            );
+        }
+    }
+    /// Both escape directions, on one position, asserted against a window placed
+    /// deliberately on the wrong side of the true score.
+    ///
+    /// Worth a test of its own rather than trusting the comparison by reading
+    /// it: a floor and a ceiling crossed with a lower and an upper bound is the
+    /// shape that has produced scrambled results in this engine before, and a
+    /// swapped pair still typechecks, still terminates, and still returns a
+    /// number. What it does instead is widen away from the answer, which looks
+    /// like a slow search rather than a wrong one.
+    ///
+    /// Each window is placed relative to the score a full-window search
+    /// reports, so the test does not encode what the position is worth and
+    /// survives any evaluation change that keeps it a search rather than a
+    /// rewrite. Each is ten points wide rather than one: a one-point window
+    /// would escape just as reliably and is also a window no caller may open,
+    /// since nothing can be answered inside it, so the test would be resting on
+    /// a shape the search is entitled to reject.
+    #[test]
+    fn a_score_outside_its_window_is_reported_on_the_side_it_escaped() {
+        let board = capture_and_quiet_position();
+        let depth = 4;
+        let full = Search::new(Vec::new()).search_root(&board, depth, -MATE, MATE, &[]);
+        let RootOutcome::Completed(truth, _) = full else {
+            panic!("a full window cannot be escaped, got {full:?}");
+        };
+
+        // Ceiling below the answer: the search proves it can do better than the
+        // ceiling and stops there, so the bound it reports is a floor under the
+        // true score rather than the score itself.
+        let ceiling = truth - 50;
+        let high = Search::new(Vec::new()).search_root(&board, depth, ceiling - 10, ceiling, &[]);
+        let RootOutcome::FailedHigh(bound) = high else {
+            panic!(
+                "a ceiling of {ceiling} below the true score {truth} must fail high, got {high:?}"
+            );
+        };
+        assert!(
+            bound >= ceiling,
+            "a fail-high reports a lower bound, so it cannot sit under the ceiling it escaped: \
+             bound {bound}, ceiling {ceiling}"
+        );
+
+        // Floor above the answer: nothing reaches the floor, so the bound is a
+        // ceiling over the true score and no move earned a report.
+        let floor = truth + 50;
+        let low = Search::new(Vec::new()).search_root(&board, depth, floor, floor + 10, &[]);
+        let RootOutcome::FailedLow(bound) = low else {
+            panic!("a floor of {floor} above the true score {truth} must fail low, got {low:?}");
+        };
+        assert!(
+            bound <= floor,
+            "a fail-low reports an upper bound, so it cannot sit above the floor nothing \
+             reached: bound {bound}, floor {floor}"
+        );
+    }
+
+    /// A window wide enough to hold the answer is not escaped, which is the
+    /// control the two failures above are only meaningful against: a
+    /// classification that answered one of them unconditionally would satisfy
+    /// half of that test, and this one catches it.
+    #[test]
+    fn a_score_inside_its_window_completes() {
+        let board = capture_and_quiet_position();
+        let depth = 4;
+        let full = Search::new(Vec::new()).search_root(&board, depth, -MATE, MATE, &[]);
+        let RootOutcome::Completed(truth, _) = full else {
+            panic!("a full window cannot be escaped, got {full:?}");
+        };
+
+        let narrow =
+            Search::new(Vec::new()).search_root(&board, depth, truth - 30, truth + 30, &[]);
+        let RootOutcome::Completed(score, pv) = narrow else {
+            panic!("a window centred on the true score must complete, got {narrow:?}");
+        };
+        assert_eq!(
+            score, truth,
+            "a window the score sits inside returns the same score a full one does"
+        );
+        assert!(
+            pv[0].is_some(),
+            "a completed root iteration always reports a move"
+        );
+    }
+    /// Every iteration is one attempt unless its window was escaped, so the
+    /// attempts past the depth reached are exactly the escapes. Worth asserting
+    /// because the counter is the only thing that reports a re-search happened,
+    /// and a miscount there is invisible: the search still returns the right
+    /// move, and the number that would have said what it cost is simply wrong.
+    #[test]
+    fn attempts_past_the_depth_reached_are_exactly_the_escapes() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let depth = 9;
+        let result = Search::new(Vec::new()).search(&board, depth);
+        let stats = result.aspiration;
+        let escapes = stats.fail_low + stats.fail_high;
+
+        assert!(
+            escapes > 0,
+            "this fixture is chosen to escape its window, so a run that never does \
+             is measuring nothing: {stats:?}"
+        );
+        assert_eq!(
+            stats.attempts,
+            u32::from(depth) + escapes,
+            "one attempt per iteration, plus one per escape: {stats:?}"
+        );
+        assert!(
+            stats.wasted_nodes > 0,
+            "an escape throws away the attempt that caused it, so it cost nodes: {stats:?}"
+        );
+    }
+
+    /// The counters stay at rest when the technique never engages, which is the
+    /// control for the test above: an `attempts` that counted something other
+    /// than root calls would still satisfy the arithmetic there while being
+    /// wrong here.
+    #[test]
+    fn a_search_too_shallow_to_aspirate_reports_one_attempt_per_iteration() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let depth = aspiration::MIN_DEPTH - 1;
+        let stats = Search::new(Vec::new()).search(&board, depth).aspiration;
+
+        assert_eq!(
+            stats,
+            aspiration::Stats {
+                attempts: u32::from(depth),
+                fail_low: 0,
+                fail_high: 0,
+                wasted_nodes: 0,
+            },
+            "below the depth floor every window opens full and cannot be escaped"
         );
     }
 }

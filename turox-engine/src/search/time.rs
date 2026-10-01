@@ -117,6 +117,14 @@ const FALLBACK_SAFETY_MARGIN: u32 = 2;
 /// `nodes_before_last`), tracking whatever this search's move ordering is
 /// actually doing right now rather than a hand-picked constant that goes
 /// stale the moment ordering changes.
+///
+/// That measured ratio is floored at 1. One more ply is never cheaper than the
+/// last, so a ratio below 1 describes how the two iterations happened to be
+/// measured rather than how the tree grows, and believing it commits to an
+/// iteration there is no time to finish. A shrinking count is reachable
+/// whenever an iteration's cost is not fixed by its depth alone, the plain case
+/// being one that searched the same depth more than once and so cost more than
+/// the iteration after it.
 #[must_use]
 pub fn should_skip_next_iteration(
     elapsed_last: Duration,
@@ -131,7 +139,7 @@ pub fn should_skip_next_iteration(
                 clippy::cast_precision_loss,
                 reason = "node counts as a growth ratio: `f64` has no infallible `From<u64>` since a count past 2^52 would lose precision, but a real search is nowhere near that, and a ratio of two node counts is an estimate already, not a value this cast could meaningfully corrupt"
             )]
-            let ratio = nodes_last as f64 / before as f64;
+            let ratio = (nodes_last as f64 / before as f64).max(1.0);
             elapsed_last.mul_f64(ratio)
         }
         _ => elapsed_last.saturating_mul(FALLBACK_SAFETY_MARGIN),
@@ -344,5 +352,28 @@ mod tests {
             Some(1_000),
             Duration::ZERO
         ));
+    }
+
+    /// One more ply is never cheaper than the last, so a ratio below 1 is
+    /// measurement noise rather than a prediction, and acting on it commits to
+    /// an iteration that cannot finish.
+    ///
+    /// A shrinking node count is reachable as soon as an iteration can cost
+    /// more than its own depth implies: one that re-searched a widened window
+    /// is dearer than the iteration after it, which found its score first try.
+    /// The ratio then reads 0.2, the estimate comes out at a fifth of a cost
+    /// already paid, and the guard waves through an iteration five times too
+    /// expensive for the time left.
+    #[test]
+    fn a_shrinking_node_count_never_predicts_a_cheaper_next_iteration() {
+        // 5_000 -> 1_000 nodes is a 0.2x ratio, projecting 20ms against the
+        // 100ms the last iteration actually took. Floored at 1.0 the estimate
+        // is that same 100ms, which does not fit in the 50ms left.
+        let elapsed = Duration::from_millis(100);
+        let remaining = Duration::from_millis(50);
+        assert!(
+            should_skip_next_iteration(elapsed, 1_000, Some(5_000), remaining),
+            "a ratio below 1 must not project a next iteration cheaper than the last"
+        );
     }
 }

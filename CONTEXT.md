@@ -102,3 +102,21 @@ measured separately and is allowed to differ: "move-identical but slower" is a
 real and useful verdict.
 _Avoid_: Behavior-preserving (reads as covering timing too, which this
 deliberately excludes), equivalent, no-op.
+
+**Attempt** / **iteration**:
+An iteration is one depth of iterative deepening, the standard meaning. An
+attempt is one search of the root at that depth with one window. An iteration is
+usually exactly one attempt, and is more than one when the score came back
+outside the window it was given and the root was searched again with a wider
+one.
+The two come apart in three places, which is why they are named separately.
+What an iteration cost means every attempt it made, since that is the time the
+clock actually lost, and the growth estimate that decides whether to start the
+next iteration reads that total. What an iteration *found* comes only from the
+attempt that landed inside its window: the score, the principal variation, and
+the hint the next iteration orders by. And the move ordering tables are moved
+only by a landed attempt, because a result that escaped its window is a fact
+about the window rather than about any move.
+_Avoid_: Re-search (taken, and at a different level: principal variation search
+re-searches a single move whose null-window probe beat alpha, where this repeats
+the whole root), pass, retry.
