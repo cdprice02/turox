@@ -26,7 +26,7 @@ pub const fn bishop_pair_score(board: &Board, color: Color) -> Tapered {
 /// holding the pair, not a second bonus: this is a bonus for covering both
 /// square colours, not a per-bishop count.
 const fn bishop_pair_bonus(bishops: Bitboard) -> Tapered {
-    if bishops.count() >= 2 {
+    if bishops.has_multiple() {
         BISHOP_PAIR_BONUS
     } else {
         0

@@ -144,15 +144,20 @@ impl Bitboard {
         self.bits() == 0
     }
 
-    /// True iff exactly one square is set. Cheaper than `count() == 1`; on the hot
-    /// path of legal move generation ("in check from exactly one piece?").
+    /// True iff exactly one square is set.
+    ///
+    /// Cheaper than `count() == 1`: compares the borrow a decrement propagates
+    /// against the decrement itself, so nothing is ever counted.
     #[inline]
     #[must_use]
     pub const fn is_single(self) -> bool {
         ((self.bits() ^ self.bits().wrapping_sub(1)) >> 1) == self.bits().wrapping_sub(1)
     }
 
-    /// True iff two or more squares are set. Cheaper than `count() > 1`.
+    /// True iff two or more squares are set.
+    ///
+    /// Cheaper than `count() > 1`: clears the lowest set bit and asks whether
+    /// anything is left, so nothing is ever counted.
     #[inline]
     #[must_use]
     pub const fn has_multiple(self) -> bool {

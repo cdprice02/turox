@@ -138,7 +138,7 @@ pub fn checkers(board: &Board, king_sq: Square, by: Color) -> Bitboard {
 /// need.
 #[must_use]
 pub const fn check_response_squares(king_sq: Square, checkers: Bitboard) -> Bitboard {
-    if checkers.count() >= 2 {
+    if checkers.has_multiple() {
         return Bitboard::EMPTY;
     }
 
