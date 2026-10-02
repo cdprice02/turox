@@ -320,9 +320,16 @@ jobs:
       #
       # No `-p`: every crate in the workspace. Exclusions live in
       # `.cargo/mutants.toml`, which the tool reads from that path on its own.
+      #
+      # `--test-workspace` on the command line as well as in the config, where
+      # it is easy to think it has taken effect when it has not: narrowing a run
+      # to one package, which `--file` does implicitly, resolves the test scope
+      # to that package and the config key does not win. The flag does. Since
+      # the score means something different depending on which way this goes,
+      # it is stated where it cannot be overridden.
       - name: Run mutation testing
         run: >
-          cargo mutants -j 2
+          cargo mutants -j 2 --test-workspace=true
           --shard ${{ matrix.shard }}/12 --sharding round-robin
 
       # A surviving mutant is only useful if someone reads it, and twelve
