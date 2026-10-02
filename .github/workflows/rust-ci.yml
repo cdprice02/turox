@@ -379,7 +379,7 @@ jobs:
 
       - name: Aggregate
         run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY' > mutants-summary.md
           import collections, json, pathlib
 
           shards = sorted(pathlib.Path("shards").glob("mutants-report-shard-*"))
@@ -432,6 +432,18 @@ jobs:
           if len(shards) != 12:
               print(f"\n**Found {len(shards)} shard reports, expected 12.**")
           PY
+          cat mutants-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The step summary renders only in the web UI and has no API endpoint, so
+      # the same markdown goes out as an artifact. Without it, reading the one
+      # number this job exists to produce means downloading all twelve shard
+      # reports and adding them up again.
+      - name: Upload the aggregate
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-summary
+          path: mutants-summary.md
 
   # Which move-gen branches perft's six standard positions never actually
   # reach is a real question a line count alone can't answer. Informational
