@@ -80,3 +80,4 @@ docs, README prose, config comments, or commit messages.
 | `docs/agents/issue-tracker.md` | creating, reading, or updating an issue            |
 | `docs/agents/triage-labels.md` | applying a triage label                            |
 | `docs/agents/domain.md`        | exploring the codebase or naming a concept         |
+| `docs/agents/testing.md`       | writing a test, or reading a mutation result        |
