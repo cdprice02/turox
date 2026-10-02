@@ -333,9 +333,15 @@ jobs:
       # gets terminated partway through more often than the shard finishes. A
       # shard costs roughly an hour this way, which is the price of getting a
       # result at all rather than half of one.
+      #
+      # `-v` logs caught mutants as well as surviving ones. Without it the log
+      # records only survivors, and a shard whose runner dies partway through
+      # gives no way to tell which mutant it died on: the gaps in the log are
+      # indistinguishable from mutants that were simply caught. With it, the
+      # killer is the entry after the last one logged.
       - name: Run mutation testing
         run: >
-          cargo mutants -j 1 --test-workspace=true
+          cargo mutants -j 1 -v --test-workspace=true
           --shard ${{ matrix.shard }}/12 --sharding round-robin
 
       # A surviving mutant is only useful if someone reads it, and twelve
