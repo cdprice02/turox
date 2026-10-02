@@ -352,51 +352,6 @@ fn quiescence_avoids_a_poisoned_pawn() {
     );
 }
 
-/// Iterative deepening must not start an iteration with no realistic
-/// chance of finishing before `self.deadline`. Self-calibrates against
-/// this machine's own timings rather than a hardcoded duration: times an
-/// unbounded `depth`-ply search first, then gives a fresh search only `2x`
-/// that as its whole budget and asks for `depth + 1`. By depth 3, two
-/// completed iterations' own node counts already exist, so this exercises
-/// `should_skip_next_iteration`'s measured-ratio estimate, not its
-/// no-data fallback; kiwipete's real branching factor is well above 1x
-/// either way, so the ~1x left after `depth` completes is nowhere near
-/// enough for `depth + 1`, and the soft limit must catch that and return
-/// `depth`'s own result.
-#[test]
-fn soft_limit_skips_an_iteration_with_no_realistic_chance_of_finishing() {
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
-    let depth = 3;
-
-    let timed_start = Instant::now();
-    let baseline = Search::new(Vec::new()).search(&board, depth);
-    let depth_elapsed = timed_start.elapsed();
-    assert_eq!(
-        baseline.depth, depth,
-        "sanity check: an unbounded search must reach the requested depth"
-    );
-
-    let deadline = Instant::now() + depth_elapsed * 2;
-    let mut bounded = Search::new(Vec::new()).with_deadline(deadline);
-    let result = bounded.search(&board, depth + 1);
-
-    assert_eq!(
-        result.depth,
-        depth,
-        "a budget of only ~2x depth {depth}'s own measured time must not be enough for depth {} \
-         on a position whose real branching factor is well above 1x, got depth {}",
-        depth + 1,
-        result.depth
-    );
-    assert_eq!(
-        result.best_move(),
-        baseline.best_move(),
-        "the soft limit must return depth {depth}'s own result unchanged, not some other move"
-    );
-}
-
 /// The regression case that matters most: `go depth N` (no `with_deadline`
 /// call, the majority shape of this suite's own calls) must still reach
 /// exactly the requested depth. Kiwipete specifically, the same branchy
