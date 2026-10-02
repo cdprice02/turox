@@ -285,7 +285,7 @@ jobs:
   mutants:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     strategy:
       fail-fast: false
@@ -327,9 +327,15 @@ jobs:
       # to that package and the config key does not win. The flag does. Since
       # the score means something different depending on which way this goes,
       # it is stated where it cannot be overridden.
+      # `-j 1`, not 2: with `test_workspace` every mutant builds and tests the
+      # whole workspace, so two at once on one hosted runner means two
+      # concurrent workspace builds plus two full test suites, and the runner
+      # gets terminated partway through more often than the shard finishes. A
+      # shard costs roughly an hour this way, which is the price of getting a
+      # result at all rather than half of one.
       - name: Run mutation testing
         run: >
-          cargo mutants -j 2 --test-workspace=true
+          cargo mutants -j 1 --test-workspace=true
           --shard ${{ matrix.shard }}/12 --sharding round-robin
 
       # A surviving mutant is only useful if someone reads it, and twelve
