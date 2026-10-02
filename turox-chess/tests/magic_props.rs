@@ -80,3 +80,69 @@ proptest! {
         prop_assert!(!queen_attacks(sq, occupied).contains(sq));
     }
 }
+
+/// Every square a slider's attack set can depend on: those strictly between
+/// `sq` and the board edge along each direction. A blocker on the edge square
+/// itself changes nothing, which is the whole reason a magic index needs only
+/// `2^count` slots rather than one per occupancy.
+fn naive_relevant_mask(sq: Square, dirs: &[(i8, i8)]) -> Bitboard {
+    let mut mask = Bitboard::EMPTY;
+    for &(df, dr) in dirs {
+        let mut current = sq;
+        while let Some(next) = current.offset(df, dr) {
+            if next.offset(df, dr).is_some() {
+                mask = mask.with(next);
+            }
+            current = next;
+        }
+    }
+    mask
+}
+
+/// Checks the committed tables against the naive walk at every occupancy they
+/// can tell apart, returning how many that was.
+///
+/// The properties above sample `any_bitboard()`, whose dense arm carries around
+/// 32 bits, so a slider meets a blocker within a square or two of its origin
+/// almost every time and the long rays go unwalked. That leaves them a weak
+/// instrument for the one thing regenerating a table can break: a slot nothing
+/// happens to look at. Walking the subsets of the mask is exhaustive over
+/// exactly the domain the tables model, and cheap, because that domain is
+/// 102,400 rook slots and 5,248 bishop ones rather than 2^64 of anything.
+fn check_every_occupancy(dirs: &[(i8, i8)], attacks: fn(Square, Bitboard) -> Bitboard) -> u64 {
+    let mut cases = 0;
+    for sq in Square::ALL {
+        let mask = naive_relevant_mask(sq, dirs);
+        let bits = mask.bits();
+        // Carry-Rippler, so this visits each subset of `mask` once.
+        let mut sub = 0u64;
+        loop {
+            let occupied = Bitboard::from_bits(sub);
+            assert_eq!(
+                attacks(sq, occupied),
+                naive_slider_attacks(sq, occupied, dirs),
+                "{sq:?} with occupancy {sub:#018x}"
+            );
+            cases += 1;
+            if sub == bits {
+                break;
+            }
+            sub = sub.wrapping_sub(bits) & bits;
+        }
+    }
+    cases
+}
+
+/// The case count is asserted alongside the walk so that a mask computed too
+/// narrowly cannot quietly shrink the domain to a subset that still passes.
+#[test]
+fn rook_attacks_matches_naive_walk_at_every_relevant_occupancy() {
+    assert_eq!(check_every_occupancy(&ROOK_DIRS, rook_attacks), 102_400);
+}
+
+/// See `rook_attacks_matches_naive_walk_at_every_relevant_occupancy` for why
+/// the count is part of the assertion.
+#[test]
+fn bishop_attacks_matches_naive_walk_at_every_relevant_occupancy() {
+    assert_eq!(check_every_occupancy(&BISHOP_DIRS, bishop_attacks), 5_248);
+}
