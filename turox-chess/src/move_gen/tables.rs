@@ -28,6 +28,11 @@ use crate::types::square::Square;
 /// single step, but they have their own compound shift-with-masking formula, same
 /// technique family as `Bitboard::shift`'s diagonals, just wider file-edge masks since a
 /// knight can cross two files in one move.
+///
+/// The unions are all of terms that cannot overlap: a knight's eight targets are
+/// distinct squares, and each `|` here joins two groups the masks have already
+/// separated. So every `|` could equally be `^`, which is worth knowing before
+/// reading one as a deliberate choice between them.
 #[must_use]
 pub const fn knight_attacks(sq: Square) -> Bitboard {
     let x = sq.bitboard().bits();

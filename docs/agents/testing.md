@@ -117,15 +117,25 @@ unproven.
 
 ## Unkillable mutants
 
-Some mutants are semantically equivalent and no test can kill them.
-`knight_attacks`'s `|` and `^` agree because the input is always a single bit, so
-the terms being combined are disjoint.
+Some mutants are semantically equivalent and no test can kill them. A bitwise
+`|` and `^` agree whenever the terms they combine are disjoint, which is the
+ordinary state of affairs in masked bit-twiddling: the mask is there precisely to
+separate the groups being joined.
 
-Mark those with `#[mutants::skip]` at the smallest scope that works, and give the
-reason in a doc comment. The reason is the point: it is usually an invariant the
-code depends on without stating, which is worth writing down for its own sake.
-Structural exclusions, for code whose behaviour nothing should depend on, go in
-`.cargo/mutants.toml` instead.
+Write the reason on the function either way. It is usually an invariant the code
+depends on without stating, and it earns its place whether or not mutation
+testing exists.
+
+Whether to *suppress* the mutant is a separate question, and the answer is
+usually no. `#[mutants::skip]` applies to a whole function, and in dense
+bit-twiddling the equivalent operators sit interleaved with killable ones: a
+masked delta-swap, or a shift-and-mask attack formula, generates dozens of
+mutants of which only a handful are equivalent. Skipping the function hides far
+more real mutants than it recovers. Suppress only when the function's other
+mutants are uninteresting too. Otherwise let them survive with the reason
+recorded on the function, so the next reader of the report does not have to
+re-derive it. Structural exclusions, for code whose behaviour nothing should
+depend on, go in `.cargo/mutants.toml` instead.
 
 Do not skip a mutant that survives because nothing covers it. That is a test
 gap, and it belongs in the report.

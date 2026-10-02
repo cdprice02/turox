@@ -28,6 +28,11 @@
 # to reach whichever test notices, and most mutants are caught.
 test_workspace = true
 
+# `tools/` is deliberately not excluded. A generator's output is read by
+# production code rather than thrown away: the opening book `bookgen` writes is
+# committed and loaded at runtime, so a sign flip there ships as corrupt book
+# data and is invisible at the point it does damage. Holding the tools to the
+# engine's bar is the cheaper side of that trade.
 exclude_globs = [
     # Proptest generators, behind the `strategies` feature and documented as
     # test support rather than part of what `turox-chess` is for. Mutating a

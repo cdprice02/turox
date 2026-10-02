@@ -246,6 +246,13 @@ impl Bitboard {
     }
 
     /// Mirror across the a1-h8 diagonal: (file, rank) -> (rank, file).
+    ///
+    /// Each step selects bits with `t = K & ...` and then combines `t` with
+    /// `t >> n`. Every `K` here satisfies `K & (K >> n) == 0`, so those two
+    /// operands never share a bit. That disjointness is what makes the step
+    /// exchange exactly the intended pairs instead of corrupting bits it was
+    /// meant to leave alone, and it also means the inner `^` could equally be
+    /// `|`: the two agree on disjoint operands.
     #[inline]
     #[must_use]
     pub const fn flip_diagonal_a1h8(self) -> Self {
@@ -263,7 +270,8 @@ impl Bitboard {
         Self(x)
     }
 
-    /// Mirror across the a8-h1 anti-diagonal.
+    /// Mirror across the a8-h1 anti-diagonal. Same masked delta-swap as
+    /// `flip_diagonal_a1h8`, including the disjointness its steps rely on.
     #[inline]
     #[must_use]
     pub const fn flip_diagonal_a8h1(self) -> Self {
