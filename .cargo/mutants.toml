@@ -1,0 +1,30 @@
+# cargo-mutants configuration, which the tool reads from this path specifically.
+# See `.github/workflows/rust-ci.yml`, which runs the sharded weekly job this
+# scopes.
+#
+# Exclusions here are for code where "would a test notice this change" is not a
+# question worth asking. A mutant that survives because no test covers it is a
+# test gap and belongs in the report; only code whose behaviour nothing should
+# depend on belongs here.
+#
+# `move_gen/magic/regen.rs` is deliberately absent: the whole module is
+# `#[cfg(test)]`, so no mutant is generated for it in the first place.
+# Each mutant is tested against its own crate's tests, not the whole
+# workspace's. Stated rather than left to the default, because it decides what
+# the score means: `turox-engine`'s tests exercise `turox-chess` heavily, so
+# running them too would catch mutants that `turox-chess`'s own tests miss, and
+# the number would stop saying which crate owes a test.
+#
+# This is the pessimistic direction, which is the right one for a tool that
+# exists to find gaps: a survivor here means the crate that owns the code does
+# not cover it, whatever else in the repo might happen to.
+test_workspace = false
+
+exclude_globs = [
+    # Proptest generators, behind the `strategies` feature and documented as
+    # test support rather than part of what `turox-chess` is for. Mutating a
+    # generator asks whether the tests would notice being given different
+    # inputs, which is a question about the test suite's own scaffolding rather
+    # than about the engine.
+    "turox-chess/src/strategies.rs",
+]
