@@ -27,12 +27,17 @@ why each of these exists; this file is the lookup.
 | coverage          | `cargo llvm-cov --workspace`                                          |
 | opening book names | `cargo run -p bookgen --features fetch --bin name-book -- --input turox-chess/src/book/opening.bin` |
 | SPRT opening suite | `cargo run -p bookgen --features fetch --bin generate-openings`      |
+| regenerate magic tables | `cargo nextest run -p turox-chess --release --run-ignored all -E 'test(regenerate_committed_magic_data)'` |
 
 Both book commands reach the network, which is why they sit behind
 `--features fetch` rather than in a default build: five requests to a pinned
 `lichess-org/chess-openings` revision, each with a timeout and a bounded,
 spaced retry. They are run by hand when the checked-in artifact needs
 regenerating, never as part of a build or a test.
+
+The magic-table command is also run by hand. It rewrites the tracked magic
+parameters and attack tables from the fixed seed, so review its diff before
+committing the regenerated files.
 
 ## What lives in `tools/`
 

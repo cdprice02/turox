@@ -69,6 +69,9 @@ const BISHOP_TABLE_SIZE: usize = 5_248;
 /// Regen-test-only, same as `ROOK_DIRS`.
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 
+/// Maximum generated candidates for one square before the search gives up.
+const MAX_MAGIC_CANDIDATES: u32 = 16_000_000;
+
 /// The relevant occupancy mask for a slider on `sq` moving along `dirs`:
 /// squares whose occupancy can actually change the attack set. Generic over
 /// `dirs` rather than branching on piece: `relevant_mask(sq, ROOK_DIRS)` and
@@ -124,29 +127,33 @@ const fn attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
 /// required: rejecting those too would make minimal-size magics nearly
 /// unfindable. Retry with the next candidate only on a real collision.
 ///
-/// Returns the winning `Magic` alongside the PRNG's state after finding it, so
-/// `find_all_magics` can thread one continuously-advancing stream across all 64
-/// squares instead of restarting every square from the same `state`.
-fn find_magic(sq: Square, dirs: [Direction; 4], state: u64) -> (Magic, u64) {
+/// Returns `None` if the search generates too many candidates. Counting
+/// generated candidates also bounds time spent rejecting them in the prefilter.
+fn find_magic(
+    sq: Square,
+    dirs: [Direction; 4],
+    state: u64,
+    max_candidates: u32,
+) -> Option<(Magic, u64)> {
     let mask = relevant_mask(sq, dirs);
 
-    // cheap prefilter for magic
     let mut state = state;
-    let mut magic;
+    let mut generated = 0;
 
     'magic_search: loop {
-        loop {
-            let state1 = xorshift64star(state);
-            let state2 = xorshift64star(state1);
-            let state3 = xorshift64star(state2);
-            state = state3; // keep the rotating state for further iteration
-
-            magic = state1 & state2 & state3;
-            if (mask.bits().wrapping_mul(magic) & 0xFF00_0000_0000_0000).count_ones() < 6 {
-                break;
-            }
+        if generated == max_candidates {
+            return None;
         }
-        let magic = magic; // immut-ify magic
+        let state1 = xorshift64star(state);
+        let state2 = xorshift64star(state1);
+        let state3 = xorshift64star(state2);
+        state = state3;
+        generated += 1;
+
+        let magic = state1 & state2 & state3;
+        if (mask.bits().wrapping_mul(magic) & 0xFF00_0000_0000_0000).count_ones() < 6 {
+            continue;
+        }
 
         // Carry-Rippler: walk every subset of `mask`, checking that no two
         // subsets with genuinely different attack sets hash to the same slot.
@@ -175,7 +182,7 @@ fn find_magic(sq: Square, dirs: [Direction; 4], state: u64) -> (Magic, u64) {
                 }
             }
             if sub == bits {
-                return (m, state);
+                return Some((m, state));
             }
             sub = sub.wrapping_sub(bits) & bits;
         }
@@ -196,7 +203,10 @@ fn find_all_magics(dirs: [Direction; 4], seed: u64) -> [Magic; 64] {
     let mut offset = 0;
     let mut state = seed;
     for sq in Square::ALL {
-        let (mut magic, next_state) = find_magic(sq, dirs, state);
+        let Some((mut magic, next_state)) = find_magic(sq, dirs, state, MAX_MAGIC_CANDIDATES)
+        else {
+            panic!("magic search exhausted its budget at {sq:?} for {dirs:?}");
+        };
         state = next_state;
         magic.offset = offset;
         offset += 1 << magic.mask.count();
@@ -435,7 +445,8 @@ fn find_magic_produces_a_collision_free_hash_for_a_few_representative_squares() 
         (Square::D4, BISHOP_DIRS), // worst-case bishop mask (9 bits)
     ];
     for (sq, dirs) in cases {
-        let (m, _) = find_magic(sq, dirs, SEED);
+        let (m, _) = find_magic(sq, dirs, SEED, MAX_MAGIC_CANDIDATES)
+            .expect("magic search exhausted its candidate budget");
 
         // Carry-Rippler over every subset of mask.
         let mut slots: Vec<Option<Bitboard>> = vec![None; 1usize << m.mask.count()];
@@ -459,6 +470,30 @@ fn find_magic_produces_a_collision_free_hash_for_a_few_representative_squares() 
             sub = sub.wrapping_sub(mask_bits) & mask_bits;
         }
     }
+}
+
+#[test]
+fn the_chosen_magic_satisfies_the_sparse_prefilter() {
+    for (sq, dirs) in [
+        (Square::A1, ROOK_DIRS),
+        (Square::D4, ROOK_DIRS),
+        (Square::H8, BISHOP_DIRS),
+        (Square::D4, BISHOP_DIRS),
+    ] {
+        let (magic, _) = find_magic(sq, dirs, SEED, MAX_MAGIC_CANDIDATES)
+            .expect("magic search exhausted its candidate budget");
+        let high =
+            (magic.mask.bits().wrapping_mul(magic.magic) & 0xFF00_0000_0000_0000).count_ones();
+        assert!(
+            high >= 6,
+            "{sq:?} chose a candidate the prefilter should have rejected: {high} high bits"
+        );
+    }
+}
+
+#[test]
+fn find_magic_returns_none_when_its_candidate_budget_is_exhausted() {
+    assert!(find_magic(Square::A1, ROOK_DIRS, SEED, 10).is_none());
 }
 
 /// End-to-end: every real occupancy of every square, looked up through the
@@ -503,14 +538,77 @@ fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
     }
 }
 
-/// Keeps the committed data honest: re-runs the search from `SEED` and
-/// confirms it reproduces `ROOK_MAGICS`/`BISHOP_MAGICS` exactly, then
-/// rebuilds each table from scratch and confirms it matches
-/// `ROOK_ATTACKS`/`BISHOP_ATTACKS` (decoded from the committed `.bin`
-/// files) byte for byte: the real, full-scale round-trip through `decode`,
-/// not just the toy buffer in
-/// `decode_reinterprets_little_endian_bytes_as_bitboards`. If this ever
-/// fails, the committed data and the search/build code have drifted apart.
+fn magic_array_source(name: &str, dirs: &str, magics: &[Magic; 64]) -> String {
+    let entries = magics
+        .iter()
+        .map(|magic| {
+            let bits = magic.mask.bits();
+            format!(
+                "    Magic {{\n        mask: Bitboard::from_bits(0x{:04x}_{:04x}_{:04x}_{:04x}),\n        magic: 0x{:04x}_{:04x}_{:04x}_{:04x},\n        shift: {},\n        offset: {},\n    }}",
+                (bits >> 48) & 0xffff,
+                (bits >> 32) & 0xffff,
+                (bits >> 16) & 0xffff,
+                bits & 0xffff,
+                (magic.magic >> 48) & 0xffff,
+                (magic.magic >> 32) & 0xffff,
+                (magic.magic >> 16) & 0xffff,
+                magic.magic & 0xffff,
+                magic.shift,
+                magic.offset,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!(
+        "/// Found by `find_all_magics({dirs}, SEED)`, see\n/// `regen::regenerating_reproduces_the_committed_magic_data` for the check that\n/// keeps this data synchronized with the search.\npub(super) const {name}: [Magic; 64] = [\n{entries},\n];\n"
+    )
+}
+
+fn table_bytes<const N: usize>(table: &[Bitboard; N]) -> Vec<u8> {
+    table
+        .iter()
+        .flat_map(|bitboard| bitboard.bits().to_le_bytes())
+        .collect()
+}
+
+/// Regenerates the committed magic parameters and little-endian attack tables.
+#[test]
+#[ignore = "writes committed magic artifacts; run deliberately after changing the search"]
+fn regenerate_committed_magic_data() {
+    let rook_magics = find_all_magics(ROOK_DIRS, SEED);
+    let bishop_magics = find_all_magics(BISHOP_DIRS, SEED);
+    let rook_table: [Bitboard; ROOK_TABLE_SIZE] = build_table(ROOK_DIRS, &rook_magics);
+    let bishop_table: [Bitboard; BISHOP_TABLE_SIZE] = build_table(BISHOP_DIRS, &bishop_magics);
+
+    let mut source = String::from(
+        "//! The committed magic-hash parameters for every square, found by\n//! `regen::find_all_magics` and pinned here so the real lookup path\n//! (`super::rook_attacks`/`bishop_attacks`) never re-runs the search.\n//! The ignored regeneration check confirms these parameters and the attack\n//! tables still match the fixed seed.\n\nuse super::Magic;\nuse crate::types::bitboard::Bitboard;\n\n",
+    );
+    source.push_str(&magic_array_source(
+        "ROOK_MAGICS",
+        "ROOK_DIRS",
+        &rook_magics,
+    ));
+    source.push('\n');
+    source.push_str(&magic_array_source(
+        "BISHOP_MAGICS",
+        "BISHOP_DIRS",
+        &bishop_magics,
+    ));
+
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/move_gen/magic");
+    std::fs::write(directory.join("magics.rs"), source)
+        .expect("write regenerated magic parameters");
+    std::fs::write(directory.join("rook_attacks.bin"), table_bytes(&rook_table))
+        .expect("write regenerated rook attack table");
+    std::fs::write(
+        directory.join("bishop_attacks.bin"),
+        table_bytes(&bishop_table),
+    )
+    .expect("write regenerated bishop attack table");
+}
+
+/// Keeps the committed data honest by comparing a fresh search and table build
+/// with the parameters and attack tables included by the crate.
 #[test]
 #[ignore = "same full magic search and table build as the other ignored \
             tests here, for both piece types; run with --release via \
