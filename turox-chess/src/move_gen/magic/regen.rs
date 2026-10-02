@@ -146,13 +146,13 @@ const fn attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
 /// squares instead of restarting every square from the same `state`.
 ///
 /// Gives up and returns `None` after generating `max_candidates` of them. A
-/// search that cannot succeed has no other way to end: a wrong `relevant_mask`
-/// or `magic_index` leaves every candidate genuinely colliding, and without a
-/// budget the loop runs until something outside kills it, which reaches the
-/// developer as a test that never finishes rather than one that fails. The
-/// PRNG state advances across a failed search just as it does across a
-/// successful one, so a caller threading one stream does not retry the same
-/// candidates on the next square.
+/// search that cannot succeed has no other way to end: a wrong `magic_index`
+/// leaves every candidate genuinely colliding, and without a budget the loop
+/// runs until something outside kills it, which reaches the developer as a
+/// test that never finishes rather than one that fails. The PRNG state
+/// advances across a failed search just as it does across a successful one, so
+/// a caller threading one stream does not retry the same candidates on the
+/// next square.
 fn find_magic(
     sq: Square,
     dirs: [Direction; 4],
@@ -160,13 +160,23 @@ fn find_magic(
     max_candidates: u32,
 ) -> Option<(Magic, u64)> {
     let mask = relevant_mask(sq, dirs);
+    // A bishop mask has 5 to 9 bits and a rook mask 10 to 12, which is what
+    // holds the subset walk below to at most 4096 steps. The candidate budget
+    // cannot stand in for that bound: the walk runs inside the verification of
+    // a single candidate, so the budget is never reached. A mask that a broken
+    // `Bitboard` or `Square` has widened escapes in two directions at once,
+    // since `1 << count` is both the walk's length and the size of the
+    // allocation tracking its slots.
+    assert!(
+        (5..=12).contains(&mask.count()),
+        "relevant_mask on {sq:?} along {dirs:?} has {} bits, outside the 5 to 12 a slider mask can have: a Bitboard or Square primitive is broken",
+        mask.count()
+    );
 
     let mut state = state;
-    // Candidates *generated*, not candidates verified, so that the budget also
-    // bounds the generation loop below. That loop's exit depends on the
-    // prefilter accepting something, which a degenerate mask can make
-    // impossible: the product is then constant, and the comparison either
-    // always holds or never does.
+    // Candidates *generated*, not candidates verified, so the budget also
+    // bounds the generation loop below, whose exit depends on the prefilter
+    // accepting a candidate rather than on a fixed trip count.
     let mut generated: u32 = 0;
 
     'magic_search: loop {
@@ -460,11 +470,10 @@ fn find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts() {
 }
 
 /// A search that cannot succeed must give up and say so, rather than run
-/// forever. Without a budget, a wrong `relevant_mask` or `magic_index`
-/// means no candidate ever verifies, and every caller of `find_magic`
-/// hangs instead of failing: a real bug in `Bitboard`, `Square` or `Move`
-/// reaches the developer as a test gate that never finishes, carrying no
-/// indication of which assertion was wrong.
+/// forever. Without a budget, a wrong `magic_index` means no candidate ever
+/// verifies, and every caller of `find_magic` hangs instead of failing: a real
+/// bug in `Bitboard`, `Square` or `Move` reaches the developer as a test gate
+/// that never finishes, carrying no indication of which assertion was wrong.
 ///
 /// A budget of ten is far below what any square needs (the cheapest mask
 /// in the set measures in the hundreds of candidates, the worst in the
@@ -477,6 +486,22 @@ fn find_magic_gives_up_when_its_candidate_budget_runs_out() {
         None,
         "a budget far below what any square's search needs must return None, not keep searching"
     );
+}
+
+/// The budget cannot catch a mask that is too wide, because the walk it would
+/// have to bound runs inside a single candidate's verification. A direction set
+/// no real slider has is the only way to reach that condition from outside, and
+/// it stands in for the primitive bug that would otherwise produce it.
+#[test]
+#[should_panic(expected = "outside the 5 to 12 a slider mask can have")]
+fn find_magic_rejects_a_mask_wider_than_any_slider() {
+    let dirs = [
+        Direction::North,
+        Direction::East,
+        Direction::NorthEast,
+        Direction::North,
+    ];
+    let _ = find_magic(Square::A1, dirs, SEED, MAX_MAGIC_CANDIDATES);
 }
 
 /// The property that actually matters for correctness: `find_magic`'s
