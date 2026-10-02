@@ -45,12 +45,30 @@ nothing for formatting.
 
 ## Two rules the mutation data produced
 
-**A property is only as good as its generator.** `is_pseudo_legal` holds the
-right property, in both directions, and leaked 19 mutants anyway. Its candidate
-move was drawn as three independent uniform values (`any_square`, `any_square`,
-`any_move_flags`), which is 57,344 combinations sampled 256 times, so a
-near-miss essentially never appeared and flipping `||` to `&&` deep in the
-branch logic still rejected the obviously-absurd move.
+**A property is only as good as its generator.** The clearest case:
+
+```rust
+prop_assert_eq!(a.is_single(), a.count() == 1);
+prop_assert_eq!(a.has_multiple(), a.count() > 1);
+```
+
+That is exactly the right property, and `is_single` stuck at `false` survives
+it, as does `has_multiple` stuck at `true`. `any_bitboard()` is
+`any::<u64>().prop_map(...)`, so a draw has about 32 bits set and the chance of
+exactly one is 64 in 2^64. Every case agrees with a constant, because the
+generator never produces the input the assertion is about.
+
+`is_pseudo_legal` leaks 19 mutants to the same cause with a correct
+two-directional property: its candidate move is drawn as three independent
+uniform values, which is 57,344 combinations sampled 256 times, so a near-miss
+essentially never appears and flipping `||` to `&&` deep in the branch logic
+still rejects the obviously-absurd move.
+
+The shape to watch for is a property whose interesting inputs are a vanishing
+fraction of the space it samples. Boundary values (empty, one bit, two bits) and
+near-misses have to be generated deliberately; uniform sampling will not find
+them. Draw from a `prop_oneof!` that mixes the uniform case with the sparse and
+perturbed ones.
 
 When the input has a grammar, generate by **perturbing a valid value**, not by
 sampling the space: take a real pseudo-legal move and change one square, or one
@@ -84,10 +102,14 @@ Mutation results are read from the `mutants-summary` job's own output, not by
 downloading artifacts. It reports a score and which files owe a test.
 
 Two things it says that are easy to misread. A **timeout** is neither a pass nor
-a fail, so it is counted beside survivors: both mean the file owes a test. And
-the score is **per crate**, since each mutant is tested against only its own
-crate's tests: a `turox-chess` survivor means `turox-chess`'s tests miss it,
-whatever `turox-engine`'s tests might happen to catch.
+a fail, so it is counted beside survivors: both mean the file owes a test. And a
+survivor means **nothing in the workspace** caught it, not just that its own
+crate's tests did not, because every mutant is tested against the whole suite.
+So a `turox-chess` survivor is a real gap rather than a question of which crate
+should have covered it, and the test that closes it may well belong to
+`turox-engine`: a `make_move` sign flip is reachable through a perft count, a
+mate puzzle, or a search that has to return a legal move, and those are
+different kinds of evidence.
 
 Coverage is close to saturated and has little left to say on its own. Treat a
 line it reports as uncovered as a real gap, and treat a covered line as

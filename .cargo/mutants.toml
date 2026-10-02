@@ -9,16 +9,24 @@
 #
 # `move_gen/magic/regen.rs` is deliberately absent: the whole module is
 # `#[cfg(test)]`, so no mutant is generated for it in the first place.
-# Each mutant is tested against its own crate's tests, not the whole
-# workspace's. Stated rather than left to the default, because it decides what
-# the score means: `turox-engine`'s tests exercise `turox-chess` heavily, so
-# running them too would catch mutants that `turox-chess`'s own tests miss, and
-# the number would stop saying which crate owes a test.
+# Every mutant is tested against the whole workspace's tests, not only those of
+# the crate it lives in. Stated rather than left to the default, which is the
+# opposite, because it decides what the score means.
 #
-# This is the pessimistic direction, which is the right one for a tool that
-# exists to find gaps: a survivor here means the crate that owns the code does
-# not cover it, whatever else in the repo might happen to.
-test_workspace = false
+# A survivor is worth acting on when *nothing* in the repository catches it. A
+# crate-scoped score answers a narrower question, "do this crate's own tests
+# catch it", and reports a gap wherever the real safety net happens to live
+# somewhere else. `turox-engine`'s tests reach `turox-chess` constantly, since
+# every search generates moves and makes them, and they reach it through
+# different positions than `turox-chess`'s own tests choose: a sign flip in
+# `make_move` is exercised by a perft count, by a mate puzzle, and by a search
+# that has to come back with a legal move, which are three different kinds of
+# evidence.
+#
+# The cost is smaller than the extra test count suggests, because a run stops at
+# its first failure: a caught mutant pays only as much of the suite as it takes
+# to reach whichever test notices, and most mutants are caught.
+test_workspace = true
 
 exclude_globs = [
     # Proptest generators, behind the `strategies` feature and documented as
