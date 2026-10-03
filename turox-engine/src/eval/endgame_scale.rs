@@ -222,8 +222,8 @@ fn soft_draw_factor(
 ) -> ScaleFactor {
     let is_ocb = white_knights.is_empty()
         && black_knights.is_empty()
-        && white_bishops.count() == 1
-        && black_bishops.count() == 1
+        && white_bishops.is_single()
+        && black_bishops.is_single()
         && !same_colored_bishops(white_bishops.or(black_bishops));
     if is_ocb {
         ScaleFactor::from_numerator(soft_draw_numerator(pawn_diff))

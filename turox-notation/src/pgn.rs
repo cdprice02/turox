@@ -62,8 +62,20 @@ pub fn parse_pgn(text: &str) -> Vec<PgnGame> {
     let mut games = Vec::new();
     let mut rest = text.chars().collect::<VecDeque<_>>();
 
-    while let Some(game) = parse_one_game(&mut rest) {
+    // `parse_one_game` signals the end only by emptying `rest`, so this loop
+    // terminates on its assumption that every `Some` consumed something. A game
+    // parsed without consuming would be re-parsed and re-pushed forever, which
+    // exhausts memory instead of returning a wrong answer. Stopping on no
+    // progress keeps that finite and leaves it visible in the game count.
+    loop {
+        let remaining_before = rest.len();
+        let Some(game) = parse_one_game(&mut rest) else {
+            break;
+        };
         games.push(game);
+        if rest.len() == remaining_before {
+            break;
+        }
     }
 
     games
@@ -252,8 +264,19 @@ pub fn tokenize_movetext(text: &str) -> Vec<String> {
 /// token itself.
 fn parse_movetext(rest: &mut VecDeque<char>) -> Vec<String> {
     let mut moves = Vec::new();
+    // Every pass must consume at least one character. Each one decides what to
+    // do from `rest.front()`, so a pass that consumes nothing takes the same
+    // branch forever and pushes a token every time, which exhausts memory
+    // rather than returning a wrong move list. Comparing against the previous
+    // pass also covers the arms that `continue`, which never reach the bottom
+    // of the body.
+    let mut len_at_last_pass = usize::MAX;
 
     loop {
+        if rest.len() == len_at_last_pass {
+            break;
+        }
+        len_at_last_pass = rest.len();
         while matches!(rest.front(), Some(c) if c.is_whitespace()) {
             chop_one(rest);
         }
@@ -288,7 +311,10 @@ fn parse_movetext(rest: &mut VecDeque<char>) -> Vec<String> {
         if is_result_token(&word) {
             break;
         }
-        if !is_move_number(&word) {
+        // An empty token is never a move. The whitespace skip above leaves the
+        // word loop on a non-whitespace character, so a real parse always
+        // builds at least one.
+        if !word.is_empty() && !is_move_number(&word) {
             moves.push(word);
         }
     }

@@ -173,7 +173,13 @@ jobs:
   deep-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 360, the most a hosted runner will give: GitHub terminates any job at six
+    # hours of execution regardless of what this says, so a larger number would
+    # only be a larger lie. Taking all of it on purpose, because the tests this
+    # job runs are `#[ignore]`d precisely for costing too much to run on every
+    # push, and a ceiling sized to what they cost today is a ceiling that turns
+    # the gate off the next time a perft depth or a mate puzzle is added.
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
@@ -259,12 +265,24 @@ jobs:
   # made during the audit pass (`cp/test-audit`). Informational only, not a
   # PR gate: a surviving mutant is a prompt to add a test, not a build
   # failure to fix under time pressure.
+  #
+  # Covers every crate. Line coverage sits above 90% and the mutation score
+  # below it, so mutation is the measure with something left to say, and a
+  # measure that reaches half the workspace cannot say it about the other half:
+  # the bit-manipulation core is both the least exercised by the engine's own
+  # tests and the place a crossed colour-direction mapping keeps appearing.
+  #
   # Sharded because one job cannot finish: each mutant costs a rebuild and a
   # test run, and the mutant count grows with the crate, so a single job's
   # runtime is measured in hours and it hit its timeout partway through the
   # alphabet. That is worse than slow. It meant every mutation result this
   # project had covered `board` and `eval` and silently none of the rest, which
   # is exactly the wrong thing for a job whose output is read as coverage.
+  #
+  # Twelve shards for roughly 1900 mutants. If shards start hitting the
+  # timeout, raise the shard count rather than the timeout: a wider matrix
+  # costs nothing in wall clock, while a longer per-shard budget delays the
+  # whole run's result.
   #
   # `round-robin`, not `slice`: sharding by consecutive ranges gives one shard
   # a whole module, so a shard that times out takes that module's entire result
@@ -273,16 +291,21 @@ jobs:
   mutants:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # A shard running one mutant at a time costs about an hour, so 90 minutes is
+    # half again as much headroom as the slowest healthy shard has needed. The
+    # ceiling is what caps a pathological shard rather than what a normal one
+    # needs: set to 180 it let one burn three hours before anyone found out.
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
       matrix:
-        # Zero-indexed: `--shard` takes an index, so eight shards are 0 through
-        # 7 and `8/8` selects nothing. Verified by listing each shard and
-        # checking the eight sum to the full mutant count with no overlap,
-        # because a silently empty shard in a coverage job is invisible.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # Zero-indexed: `--shard` takes an index, so twelve shards are 0
+        # through 11 and `12/12` selects nothing. Verified by listing each
+        # shard and checking the twelve sum to the full mutant count with no
+        # overlap, because a silently empty shard in a coverage job is
+        # invisible.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     steps:
       - name: Checkout repo
@@ -304,10 +327,58 @@ jobs:
       # -j 2, not 4: ubuntu-latest has 4 vCPUs, but each mutant's own build
       # already uses cargo's own parallelism, so running 4 mutants at once
       # would oversubscribe rather than actually parallelize.
+      #
+      # No `-p`: every crate in the workspace. Exclusions live in
+      # `.cargo/mutants.toml`, which the tool reads from that path on its own.
+      #
+      # `--test-workspace` on the command line as well as in the config, where
+      # it is easy to think it has taken effect when it has not: narrowing a run
+      # to one package, which `--file` does implicitly, resolves the test scope
+      # to that package and the config key does not win. The flag does. Since
+      # the score means something different depending on which way this goes,
+      # it is stated where it cannot be overridden.
+      # `-j 1`, not 2: with `test_workspace` every mutant builds and tests the
+      # whole workspace, so two at once on one hosted runner means two
+      # concurrent workspace builds plus two full test suites, and the runner
+      # gets terminated partway through more often than the shard finishes. A
+      # shard costs roughly an hour this way, which is the price of getting a
+      # result at all rather than half of one.
+      #
+      # `-v` logs caught mutants as well as surviving ones. Without it the log
+      # records only survivors, and a shard whose runner dies partway through
+      # gives no way to tell which mutant it died on: the gaps in the log are
+      # indistinguishable from mutants that were simply caught. With it, the
+      # killer is the entry after the last one logged.
+      # `--build-timeout-multiplier`, because only the test phase is bounded by
+      # default and a build can stall indefinitely: one shard spent two hours in
+      # `rustc` on a single mutant and lost its whole report to the job ceiling,
+      # having tested 25 of 159. Five times the baseline build is far more than
+      # any healthy mutant needs, and it turns that stall into one unviable
+      # mutant instead of a lost shard.
       - name: Run mutation testing
         run: >
-          cargo mutants -p turox-engine -j 2
-          --shard ${{ matrix.shard }}/8 --sharding round-robin
+          cargo mutants -j 1 -v --test-workspace=true
+          --build-timeout-multiplier 5
+          --shard ${{ matrix.shard }}/12 --sharding round-robin
+
+      # A surviving mutant is only useful if someone reads it, and twelve
+      # artifacts nobody downloads is the same as no result at all. Each shard
+      # states its own counts here; `mutants-summary` adds them up.
+      - name: Summarize this shard
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          out = pathlib.Path("mutants.out/outcomes.json")
+          if not out.exists():
+              print("### Shard ${{ matrix.shard }}\n\nNo outcomes written: the run did not reach a result.")
+              raise SystemExit
+          d = json.loads(out.read_text())
+          print("### Shard ${{ matrix.shard }}\n")
+          print("| caught | missed | timeout | unviable |")
+          print("| -----: | -----: | ------: | -------: |")
+          print(f"| {d['caught']} | {d['missed']} | {d['timeout']} | {d['unviable']} |")
+          PY
 
       - name: Upload mutants report
         if: always()
@@ -315,6 +386,93 @@ jobs:
         with:
           name: mutants-report-shard-${{ matrix.shard }}
           path: mutants.out
+
+  # One score for the whole workspace, which no single shard can report.
+  #
+  # `always()`, because `cargo mutants` exits nonzero whenever anything
+  # survived and so every shard that found something is a "failed" job. Waiting
+  # for success here would mean the summary only ever appeared on the runs that
+  # had nothing to say.
+  mutants-summary:
+    needs: mutants
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download every shard's report
+        uses: actions/download-artifact@v7
+        with:
+          pattern: mutants-report-shard-*
+          path: shards
+
+      - name: Aggregate
+        run: |
+          python3 - <<'PY' > mutants-summary.md
+          import collections, json, pathlib
+
+          shards = sorted(pathlib.Path("shards").glob("mutants-report-shard-*"))
+          total = collections.Counter()
+          missing = []
+          survivors = collections.Counter()
+          for shard in shards:
+              outcomes = shard / "outcomes.json"
+              if not outcomes.exists():
+                  missing.append(shard.name)
+                  continue
+              d = json.loads(outcomes.read_text())
+              for key in ("caught", "missed", "timeout", "unviable"):
+                  total[key] += d[key]
+              for name in ("missed.txt", "timeout.txt"):
+                  path = shard / name
+                  if path.exists():
+                      for line in path.read_text().splitlines():
+                          survivors[line.split(":")[0]] += 1
+
+          caught, missed, timeout = total["caught"], total["missed"], total["timeout"]
+          viable = caught + missed
+          print("## Mutation score\n")
+          if viable:
+              print(f"**{caught}/{viable} = {100 * caught / viable:.1f}%** caught, "
+                    f"excluding {timeout} timeouts. "
+                    f"Counting timeouts as uncaught: "
+                    f"{100 * caught / (viable + timeout):.1f}%.\n")
+          print("| caught | missed | timeout | unviable |")
+          print("| -----: | -----: | ------: | -------: |")
+          print(f"| {caught} | {missed} | {timeout} | {total['unviable']} |")
+
+          # A timeout is neither a pass nor a fail, so it is counted beside the
+          # survivors rather than folded into them: both mean "this file owes a
+          # test", and which of the two it is depends on how the mutant happened
+          # to break.
+          if survivors:
+              print("\n## Files owing a test\n")
+              print("| file | missed + timeout |")
+              print("| ---- | ---------------: |")
+              for path, count in survivors.most_common(25):
+                  print(f"| `{path}` | {count} |")
+
+          # Loud, because a shard that vanished takes its slice of every module
+          # with it (sharding is round-robin) and the score above would quietly
+          # be a score of whatever survived.
+          if missing:
+              print(f"\n**{len(missing)} shard(s) reported no outcomes:** "
+                    f"{', '.join(missing)}. The score above is partial.")
+          if len(shards) != 12:
+              print(f"\n**Found {len(shards)} shard reports, expected 12.**")
+          PY
+          cat mutants-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The step summary renders only in the web UI and has no API endpoint, so
+      # the same markdown goes out as an artifact. Without it, reading the one
+      # number this job exists to produce means downloading all twelve shard
+      # reports and adding them up again.
+      - name: Upload the aggregate
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-summary
+          path: mutants-summary.md
 
   # Which move-gen branches perft's six standard positions never actually
   # reach is a real question a line count alone can't answer. Informational

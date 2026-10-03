@@ -144,15 +144,20 @@ impl Bitboard {
         self.bits() == 0
     }
 
-    /// True iff exactly one square is set. Cheaper than `count() == 1`; on the hot
-    /// path of legal move generation ("in check from exactly one piece?").
+    /// True iff exactly one square is set.
+    ///
+    /// Cheaper than `count() == 1`: compares the borrow a decrement propagates
+    /// against the decrement itself, so nothing is ever counted.
     #[inline]
     #[must_use]
     pub const fn is_single(self) -> bool {
         ((self.bits() ^ self.bits().wrapping_sub(1)) >> 1) == self.bits().wrapping_sub(1)
     }
 
-    /// True iff two or more squares are set. Cheaper than `count() > 1`.
+    /// True iff two or more squares are set.
+    ///
+    /// Cheaper than `count() > 1`: clears the lowest set bit and asks whether
+    /// anything is left, so nothing is ever counted.
     #[inline]
     #[must_use]
     pub const fn has_multiple(self) -> bool {
@@ -241,6 +246,13 @@ impl Bitboard {
     }
 
     /// Mirror across the a1-h8 diagonal: (file, rank) -> (rank, file).
+    ///
+    /// Each step selects bits with `t = K & ...` and then combines `t` with
+    /// `t >> n`. Every `K` here satisfies `K & (K >> n) == 0`, so those two
+    /// operands never share a bit. That disjointness is what makes the step
+    /// exchange exactly the intended pairs instead of corrupting bits it was
+    /// meant to leave alone, and it also means the inner `^` could equally be
+    /// `|`: the two agree on disjoint operands.
     #[inline]
     #[must_use]
     pub const fn flip_diagonal_a1h8(self) -> Self {
@@ -258,7 +270,8 @@ impl Bitboard {
         Self(x)
     }
 
-    /// Mirror across the a8-h1 anti-diagonal.
+    /// Mirror across the a8-h1 anti-diagonal. Same masked delta-swap as
+    /// `flip_diagonal_a1h8`, including the disjointness its steps rely on.
     #[inline]
     #[must_use]
     pub const fn flip_diagonal_a8h1(self) -> Self {

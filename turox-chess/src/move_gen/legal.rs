@@ -66,11 +66,11 @@ pub fn legal_moves(board: &Board) -> MoveList {
             // Capturing the checking pawn en passant resolves the check even though
             // `to` is the empty square behind that pawn, not the checker's own
             // square, so `check_response_squares` alone says this destination is
-            // illegal. `checkers.count() == 1` matters: with two checkers, capturing
+            // illegal. `checkers.is_single()` matters: with two checkers, capturing
             // one en passant still leaves the other unaddressed.
             if m.flags().is_en_passant() {
                 let captured_sq = Square::new(to.file(), from.rank());
-                if checkers.count() == 1 && checkers.contains(captured_sq) {
+                if checkers.is_single() && checkers.contains(captured_sq) {
                     return true;
                 }
             }

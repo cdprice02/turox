@@ -295,6 +295,16 @@ fn pv_child(line: PvLine<'_>, m: Move) -> PvLine<'_> {
     }
 }
 
+/// A substitute source of the current time.
+///
+/// `Arc<dyn Fn>` rather than a plain `fn` pointer because a useful substitute
+/// carries state (a time a caller moves forward by hand), and `Send + Sync`
+/// because `Search` is moved onto its own thread while UCI's reader thread
+/// keeps running. The indirection is paid once per iteration and on every
+/// 2048th node, which is where the periodic abort check already samples the
+/// clock, so it costs nothing measurable.
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 /// Mutable search state threaded through one [`Search::search`] call: the node counter
 /// and abort conditions the periodic check reads, and the repetition hash stack.
 ///
@@ -328,6 +338,16 @@ pub struct Search<'a> {
     /// without a flaky sleep; a node budget makes it exact and repeatable
     /// (see `tests/search_props.rs`).
     max_nodes: Option<u64>,
+    /// Where [`Search::now`] reads the current time, `None` meaning the real
+    /// clock.
+    ///
+    /// A node budget cannot stand in for a deadline everywhere: the soft limit
+    /// compares an estimated duration against the time left, so it only engages
+    /// when `deadline` is set and there is no node-shaped equivalent of "two
+    /// seconds from now". Substituting the clock is the only way to put that
+    /// decision at an exact point, rather than inferring it from two wall-clock
+    /// measurements taken under whatever load the machine happened to be under.
+    clock: Option<Clock>,
     /// `Arc`, not a plain `bool`: UCI's `stop` command arrives on a
     /// different thread than the one running `search` (the reader thread
     /// parsing stdin, while the main thread blocks inside `search`), so
@@ -381,6 +401,7 @@ impl<'a> Search<'a> {
             aspiration: aspiration::Stats::default(),
             deadline: None,
             max_nodes: None,
+            clock: None,
             stop: Arc::new(AtomicBool::new(false)),
             ordering: MoveOrdering::new(),
             tt: None,
@@ -429,6 +450,26 @@ impl<'a> Search<'a> {
     pub const fn with_max_nodes(mut self, max_nodes: u64) -> Self {
         self.max_nodes = Some(max_nodes);
         self
+    }
+
+    /// Reads the current time from `clock` instead of the real one.
+    ///
+    /// Test-only, and deliberately not part of the public API: a caller that
+    /// wants the search to stop at a particular point already has
+    /// [`Search::with_deadline`] and [`Search::with_max_nodes`], and neither
+    /// needs to lie about what time it is.
+    #[cfg(test)]
+    #[must_use]
+    fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    /// The current time, from `clock` if one was substituted.
+    fn now(&self) -> Instant {
+        self.clock
+            .as_ref()
+            .map_or_else(Instant::now, |clock| clock())
     }
 
     /// Aborts the search once `Instant::now()` passes `deadline`, checked
@@ -510,7 +551,7 @@ impl<'a> Search<'a> {
     fn should_abort(&self) -> bool {
         self.nodes & 2047 == 0
             && (self.stop.load(Ordering::Relaxed)
-                || self.deadline.is_some_and(|d| Instant::now() >= d)
+                || self.deadline.is_some_and(|d| self.now() >= d)
                 || self.max_nodes.is_some_and(|max| self.nodes >= max))
     }
 
@@ -557,7 +598,7 @@ impl<'a> Search<'a> {
         max_depth: u8,
         mut on_iteration_complete: F,
     ) -> SearchResult {
-        let started = Instant::now();
+        let started = self.now();
         let mut result = SearchResult {
             pv: [None; MAX_PV_PLY],
             score: 0,
@@ -597,7 +638,7 @@ impl<'a> Search<'a> {
                 previous_iteration_elapsed,
                 previous_iteration_nodes,
             ) {
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline.saturating_duration_since(self.now());
                 if should_skip_next_iteration(
                     elapsed,
                     nodes_last,
@@ -608,7 +649,7 @@ impl<'a> Search<'a> {
                 }
             }
 
-            let iteration_started = self.deadline.is_some().then(Instant::now);
+            let iteration_started = self.deadline.is_some().then(|| self.now());
 
             let mut window = aspiration::Window::new(previous_score, depth);
             loop {
@@ -627,7 +668,7 @@ impl<'a> Search<'a> {
                             score,
                             depth,
                             nodes: self.nodes(),
-                            time: started.elapsed(),
+                            time: self.now().saturating_duration_since(started),
                             hashfull: self.tt.as_deref().map(Tt::hashfull),
                             negamax_cutoffs: self.negamax_cutoffs,
                             quiescence_cutoffs: self.quiescence_cutoffs,
@@ -668,7 +709,7 @@ impl<'a> Search<'a> {
                                     score,
                                     depth: 0,
                                     nodes: self.nodes(),
-                                    time: started.elapsed(),
+                                    time: self.now().saturating_duration_since(started),
                                     hashfull: self.tt.as_deref().map(Tt::hashfull),
                                     negamax_cutoffs: self.negamax_cutoffs,
                                     quiescence_cutoffs: self.quiescence_cutoffs,
@@ -681,7 +722,7 @@ impl<'a> Search<'a> {
                 }
             }
             if let Some(started) = iteration_started {
-                previous_iteration_elapsed = Some(started.elapsed());
+                previous_iteration_elapsed = Some(self.now().saturating_duration_since(started));
                 nodes_before_previous_iteration = previous_iteration_nodes;
                 previous_iteration_nodes = Some(self.nodes() - nodes_before_this_iteration);
             }
@@ -1499,6 +1540,7 @@ impl<'a> Search<'a> {
 mod tests {
     use super::*;
     use crate::search::fixtures::{capture_and_quiet_position, find_move};
+    use std::sync::Mutex;
     use turox_chess::types::{Color, Piece, Square};
 
     /// A move list of `n` distinct legal moves, for driving `alpha_beta_loop`
@@ -2284,6 +2326,103 @@ mod tests {
         assert!(
             stats.wasted_nodes > 0,
             "an escape throws away the attempt that caused it, so it cost nodes: {stats:?}"
+        );
+    }
+
+    /// A clock the test moves by hand.
+    ///
+    /// The soft limit compares an estimated duration against the time left
+    /// before the deadline, so driving it from a real clock means asserting
+    /// against two wall-clock measurements taken at different moments on a
+    /// shared machine. That is a comparison of load conditions rather than of
+    /// behaviour, and it fails in both directions: an inflated measurement
+    /// makes the budget generous enough for the iteration under test, and a
+    /// run that meets heavier load than the measurement cannot finish the
+    /// iteration before it either.
+    #[derive(Clone)]
+    struct ManualClock(Arc<Mutex<Instant>>);
+
+    impl ManualClock {
+        fn new(at: Instant) -> Self {
+            Self(Arc::new(Mutex::new(at)))
+        }
+
+        /// Moves the clock forward, charging the time to whatever the search is
+        /// in the middle of. Called from `search_with_info`'s callback, which
+        /// fires after an iteration completes and before its elapsed time is
+        /// read, so an advance there is exactly "this iteration cost that long".
+        fn advance(&self, by: Duration) {
+            *self
+                .0
+                .lock()
+                .expect("a test holding this lock never panics") += by;
+        }
+
+        fn source(&self) -> Arc<dyn Fn() -> Instant + Send + Sync> {
+            let inner = Arc::clone(&self.0);
+            Arc::new(move || *inner.lock().expect("a test holding this lock never panics"))
+        }
+    }
+
+    /// Iterative deepening must not start an iteration it cannot finish before
+    /// the deadline.
+    ///
+    /// Two iterations are allowed to complete, so the decision runs against
+    /// `should_skip_next_iteration`'s measured-ratio estimate rather than its
+    /// no-data fallback, and the second one is charged almost the entire
+    /// budget. The estimate is floored at a ratio of one, so a 58-second
+    /// iteration cannot be believed to fit in the second that remains no matter
+    /// what the node counts did, which is what keeps the assertion exact rather
+    /// than dependent on this position's growth.
+    #[test]
+    fn the_soft_limit_skips_an_iteration_that_cannot_finish_in_the_time_left() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let start = Instant::now();
+        let clock = ManualClock::new(start);
+        let mut search = Search::new(Vec::new())
+            .with_deadline(start + Duration::from_secs(60))
+            .with_clock(clock.source());
+
+        let mut completed = Vec::new();
+        let result = search.search_with_info(&board, 6, |r| {
+            completed.push(r.depth);
+            clock.advance(if r.depth == 2 {
+                Duration::from_secs(58)
+            } else {
+                Duration::from_secs(1)
+            });
+        });
+
+        assert_eq!(
+            completed,
+            vec![1, 2],
+            "depth 3 must never be started: 58 seconds of measured cost does not fit in the 1 second left"
+        );
+        assert_eq!(
+            result.depth, 2,
+            "the skipped iteration must leave depth 2's own result in place"
+        );
+    }
+
+    /// The control for the test above: a budget nothing can exhaust must not
+    /// stop the loop early. Without this, a soft limit that always fired would
+    /// pass that test and be caught by nothing in it.
+    #[test]
+    fn the_soft_limit_leaves_a_search_with_time_to_spare_alone() {
+        let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
+        let start = Instant::now();
+        let clock = ManualClock::new(start);
+        let mut search = Search::new(Vec::new())
+            .with_deadline(start + Duration::from_secs(3600))
+            .with_clock(clock.source());
+
+        let result = search.search_with_info(&board, 4, |_| {
+            clock.advance(Duration::from_secs(1));
+        });
+
+        assert_eq!(
+            result.depth, 4,
+            "four iterations costing a second each cannot exhaust an hour, so every one must run"
         );
     }
 

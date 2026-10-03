@@ -1,0 +1,43 @@
+# cargo-mutants configuration, which the tool reads from this path specifically.
+# See `.github/workflows/rust-ci.yml`, which runs the sharded weekly job this
+# scopes.
+#
+# Exclusions here are for code where "would a test notice this change" is not a
+# question worth asking. A mutant that survives because no test covers it is a
+# test gap and belongs in the report; only code whose behaviour nothing should
+# depend on belongs here.
+#
+# `move_gen/magic/regen.rs` is deliberately absent: the whole module is
+# `#[cfg(test)]`, so no mutant is generated for it in the first place.
+# Every mutant is tested against the whole workspace's tests, not only those of
+# the crate it lives in. Stated rather than left to the default, which is the
+# opposite, because it decides what the score means.
+#
+# A survivor is worth acting on when *nothing* in the repository catches it. A
+# crate-scoped score answers a narrower question, "do this crate's own tests
+# catch it", and reports a gap wherever the real safety net happens to live
+# somewhere else. `turox-engine`'s tests reach `turox-chess` constantly, since
+# every search generates moves and makes them, and they reach it through
+# different positions than `turox-chess`'s own tests choose: a sign flip in
+# `make_move` is exercised by a perft count, by a mate puzzle, and by a search
+# that has to come back with a legal move, which are three different kinds of
+# evidence.
+#
+# The cost is smaller than the extra test count suggests, because a run stops at
+# its first failure: a caught mutant pays only as much of the suite as it takes
+# to reach whichever test notices, and most mutants are caught.
+test_workspace = true
+
+# `tools/` is deliberately not excluded. A generator's output is read by
+# production code rather than thrown away: the opening book `bookgen` writes is
+# committed and loaded at runtime, so a sign flip there ships as corrupt book
+# data and is invisible at the point it does damage. Holding the tools to the
+# engine's bar is the cheaper side of that trade.
+exclude_globs = [
+    # Proptest generators, behind the `strategies` feature and documented as
+    # test support rather than part of what `turox-chess` is for. Mutating a
+    # generator asks whether the tests would notice being given different
+    # inputs, which is a question about the test suite's own scaffolding rather
+    # than about the engine.
+    "turox-chess/src/strategies.rs",
+]

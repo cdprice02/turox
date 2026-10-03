@@ -32,9 +32,27 @@ pub fn any_square() -> impl Strategy<Value = Square> {
     (0u8..64).prop_map(|i| Square::from_u8(i).expect("i in 0..64"))
 }
 
-/// See `any_square`'s doc.
+/// Any bitboard, mixing a uniform draw with a deliberately sparse one. See
+/// `any_square`'s doc for why these are hand-written.
+///
+/// A uniform `u64` has around 32 bits set, so on its own this strategy never
+/// produces an empty board, a single square, or a pair, and the chance of
+/// exactly one bit is 64 in 2^64. Any property whose interesting case is a
+/// boundary like that is then vacuous: `is_single` replaced by a constant
+/// `false` passed `is_single_and_has_multiple_agree_with_count` precisely
+/// because both sides of the assertion were `false` on every case.
+///
+/// Both arms earn their place, in opposite directions. Boundary counts need the
+/// sparse arm. The bit-twiddling transforms need the dense one, because the
+/// difference between `^` and `|` shows up only where both operands carry a
+/// bit, which is rare on a board with three squares on it.
 pub fn any_bitboard() -> impl Strategy<Value = Bitboard> {
-    any::<u64>().prop_map(Bitboard::from_bits)
+    prop_oneof![
+        2 => any::<u64>().prop_map(Bitboard::from_bits),
+        1 => proptest::collection::vec(any_square(), 0..=3).prop_map(|squares| squares
+            .into_iter()
+            .fold(Bitboard::EMPTY, |board, sq| board.or(sq.bitboard()))),
+    ]
 }
 
 /// Either colour, uniformly. See `any_square`'s doc for why these are
