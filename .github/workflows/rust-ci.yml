@@ -343,9 +343,16 @@ jobs:
       # gives no way to tell which mutant it died on: the gaps in the log are
       # indistinguishable from mutants that were simply caught. With it, the
       # killer is the entry after the last one logged.
+      # `--build-timeout-multiplier`, because only the test phase is bounded by
+      # default and a build can stall indefinitely: one shard spent two hours in
+      # `rustc` on a single mutant and lost its whole report to the job ceiling,
+      # having tested 25 of 159. Five times the baseline build is far more than
+      # any healthy mutant needs, and it turns that stall into one unviable
+      # mutant instead of a lost shard.
       - name: Run mutation testing
         run: >
           cargo mutants -j 1 -v --test-workspace=true
+          --build-timeout-multiplier 5
           --shard ${{ matrix.shard }}/12 --sharding round-robin
 
       # A surviving mutant is only useful if someone reads it, and twelve
