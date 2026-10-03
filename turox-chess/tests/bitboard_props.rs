@@ -402,8 +402,15 @@ proptest! {
 
     #[test]
     fn subsets_yields_exactly_two_to_the_count_distinct_subsets(a in small_bitboard()) {
-        let subsets: Vec<Bitboard> = a.subsets().collect();
-        prop_assert_eq!(u32::try_from(subsets.len()).expect("fits u32"), 1u32 << a.count());
+        // Taken, not collected outright. `subsets` ends by comparing each item
+        // against the mask, so a wrong comparison yields forever, and on an
+        // empty mask it yields `EMPTY` forever. A bare `collect` turns that
+        // into an allocation that takes the machine down rather than a test
+        // that fails, and the extra element is what makes "too many" visible
+        // instead of silently truncated.
+        let expected = 1usize << a.count();
+        let subsets: Vec<Bitboard> = a.subsets().take(expected + 1).collect();
+        prop_assert_eq!(subsets.len(), expected, "subsets must yield exactly 2^count items");
         for &s in &subsets {
             prop_assert_eq!(s.and(!a), Bitboard::EMPTY, "subset must be a subset of the mask");
         }
