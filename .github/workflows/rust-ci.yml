@@ -173,7 +173,13 @@ jobs:
   deep-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 360, the most a hosted runner will give: GitHub terminates any job at six
+    # hours of execution regardless of what this says, so a larger number would
+    # only be a larger lie. Taking all of it on purpose, because the tests this
+    # job runs are `#[ignore]`d precisely for costing too much to run on every
+    # push, and a ceiling sized to what they cost today is a ceiling that turns
+    # the gate off the next time a perft depth or a mate puzzle is added.
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
