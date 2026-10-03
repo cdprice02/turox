@@ -199,7 +199,13 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run ignored tests in release mode
-        run: cargo nextest run --workspace --release --run-ignored all --locked
+        # `--no-fail-fast`, because this job's whole purpose is the report. One
+        # failure otherwise cancels every test still running and every test
+        # after it, so a single known failure hides the rest and the run's true
+        # cost stays unmeasured.
+        run: >
+          cargo nextest run --workspace --release --run-ignored all --locked
+          --no-fail-fast
 
   # The accepted-gap tests, which are expected to fail: each one asserts the
   # behaviour the engine owes a position rather than the behaviour it has,
