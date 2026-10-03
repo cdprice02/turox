@@ -62,8 +62,20 @@ pub fn parse_pgn(text: &str) -> Vec<PgnGame> {
     let mut games = Vec::new();
     let mut rest = text.chars().collect::<VecDeque<_>>();
 
-    while let Some(game) = parse_one_game(&mut rest) {
+    // `parse_one_game` signals the end only by emptying `rest`, so this loop
+    // terminates on its assumption that every `Some` consumed something. A game
+    // parsed without consuming would be re-parsed and re-pushed forever, which
+    // exhausts memory instead of returning a wrong answer. Stopping on no
+    // progress keeps that finite and leaves it visible in the game count.
+    loop {
+        let remaining_before = rest.len();
+        let Some(game) = parse_one_game(&mut rest) else {
+            break;
+        };
         games.push(game);
+        if rest.len() == remaining_before {
+            break;
+        }
     }
 
     games
