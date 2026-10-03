@@ -264,8 +264,19 @@ pub fn tokenize_movetext(text: &str) -> Vec<String> {
 /// token itself.
 fn parse_movetext(rest: &mut VecDeque<char>) -> Vec<String> {
     let mut moves = Vec::new();
+    // Every pass must consume at least one character. Each one decides what to
+    // do from `rest.front()`, so a pass that consumes nothing takes the same
+    // branch forever and pushes a token every time, which exhausts memory
+    // rather than returning a wrong move list. Comparing against the previous
+    // pass also covers the arms that `continue`, which never reach the bottom
+    // of the body.
+    let mut len_at_last_pass = usize::MAX;
 
     loop {
+        if rest.len() == len_at_last_pass {
+            break;
+        }
+        len_at_last_pass = rest.len();
         while matches!(rest.front(), Some(c) if c.is_whitespace()) {
             chop_one(rest);
         }
@@ -300,7 +311,10 @@ fn parse_movetext(rest: &mut VecDeque<char>) -> Vec<String> {
         if is_result_token(&word) {
             break;
         }
-        if !is_move_number(&word) {
+        // An empty token is never a move. The whitespace skip above leaves the
+        // word loop on a non-whitespace character, so a real parse always
+        // builds at least one.
+        if !word.is_empty() && !is_move_number(&word) {
             moves.push(word);
         }
     }
