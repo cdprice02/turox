@@ -285,7 +285,11 @@ jobs:
   mutants:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # A shard running one mutant at a time costs about an hour, so 90 minutes is
+    # half again as much headroom as the slowest healthy shard has needed. The
+    # ceiling is what caps a pathological shard rather than what a normal one
+    # needs: set to 180 it let one burn three hours before anyone found out.
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
