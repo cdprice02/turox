@@ -56,6 +56,18 @@ struct MatePuzzle {
     /// `Search::search` iterates from depth 1: a puzzle searched at 5, 6 and 7
     /// re-searches the shallow plies three times over for the same coverage.
     deep_depth: u8,
+    /// A node budget for both of this puzzle's searches, roughly four times
+    /// what the deeper of the two costs.
+    ///
+    /// Recorded per puzzle for the same reason `found_at` is: it is the cost of
+    /// the deep search, so a technique that gives up cutoffs shows up here as a
+    /// figure that has to be raised, rather than as a test that quietly got
+    /// slower. The bound is worth having because losing a mate and losing
+    /// pruning are different failures with the same symptom at these depths.
+    /// Unbounded, a search that no longer cuts anything off keeps looking for
+    /// the mate until something outside the test gives up, and a test that
+    /// never finishes says less than one coming back with the wrong score.
+    node_budget: u64,
 }
 
 /// Whether the mating side is the one to move is not incidental: a mate
@@ -68,6 +80,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 1,
         found_at: 1,
         deep_depth: 7,
+        node_budget: 120_000,
     },
     MatePuzzle {
         name: "back-rank mate, Black mating",
@@ -75,6 +88,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 1,
         found_at: 1,
         deep_depth: 7,
+        node_budget: 120_000,
     },
     MatePuzzle {
         name: "Philidor's Legacy, the smothered mate finish",
@@ -82,6 +96,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 3,
         found_at: 3,
         deep_depth: 7,
+        node_budget: 520_000,
     },
     MatePuzzle {
         name: "rook ladder, White mating",
@@ -89,6 +104,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 3,
         found_at: 3,
         deep_depth: 7,
+        node_budget: 420_000,
     },
     MatePuzzle {
         name: "rook ladder, Black mating",
@@ -96,6 +112,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 3,
         found_at: 3,
         deep_depth: 7,
+        node_budget: 420_000,
     },
     MatePuzzle {
         name: "crowded board, forced mate in five plies",
@@ -107,6 +124,7 @@ const PUZZLES: &[MatePuzzle] = &[
         // it at the true distance rather than a wrong one.
         found_at: 6,
         deep_depth: 7,
+        node_budget: 740_000,
     },
     // The three rook ladders below are the deep half of this set, and they are
     // here for the shape of their mating lines rather than their length. Each
@@ -128,6 +146,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 7,
         found_at: 7,
         deep_depth: 10,
+        node_budget: 5_600_000,
     },
     MatePuzzle {
         name: "rook ladder against a king on e7, Black mating",
@@ -135,6 +154,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 7,
         found_at: 7,
         deep_depth: 10,
+        node_budget: 6_000_000,
     },
     // Two plies longer than the sevens above for one file of king travel, and
     // the only one of the three whose mirror does not belong here: mated from
@@ -150,6 +170,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 9,
         found_at: 9,
         deep_depth: 11,
+        node_budget: 14_500_000,
     },
 ];
 
@@ -173,8 +194,13 @@ fn every_forced_mate_is_found_at_and_beyond_its_own_depth() {
             puzzle.found_at
         );
         for depth in [puzzle.found_at, puzzle.deep_depth] {
-            let mut search = Search::new(Vec::new());
+            let mut search = Search::new(Vec::new()).with_max_nodes(puzzle.node_budget);
             let result = search.search(&board, depth);
+            assert_eq!(
+                result.depth, depth,
+                "{}: the search stopped at depth {} of {depth}, so it reached this puzzle's node_budget of {}: the tree has outgrown the budget",
+                puzzle.name, result.depth, puzzle.node_budget
+            );
             assert_eq!(
                 result.score, expected,
                 "{} at depth {depth}: expected mate in {} plies",

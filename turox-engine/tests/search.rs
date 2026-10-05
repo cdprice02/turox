@@ -23,6 +23,52 @@ use turox_chess::move_gen::legal::legal_moves;
 use turox_chess::{Move, Square};
 use turox_engine::search::{is_mate_score, CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
 
+// ---- Shared fixture ----
+
+/// Kiwipete, the wide-open middlegame position from the perft suite that
+/// `benches/perft.rs` and `benches/search.rs` also use, and what the tests
+/// below reach for when they need a real tree rather than a constructed
+/// position. It is dense enough that an affordable depth still costs orders of
+/// magnitude more than any stop bound allows, so "it stopped" and "it ran to
+/// completion" cannot be mistaken for each other here.
+const OPEN_MIDDLEGAME: &str =
+    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+
+fn open_middlegame() -> Board {
+    Board::try_from_fen(OPEN_MIDDLEGAME).expect("valid FEN")
+}
+
+/// More depth than a stopped search reaches, and no more than that.
+///
+/// A test of a stop mechanism has to ask for a depth the search cannot reach
+/// while the mechanism works, or it is not testing the mechanism. What it must
+/// not do is ask for a depth the search cannot reach at all. Depth 50 reads as
+/// "effectively infinite" and behaves that way: with the bound's own check
+/// mutated away, the search never comes back, so the test hangs rather than
+/// fails and the mutant can only be reported as a timeout, which is what a
+/// merely slow machine also looks like. Depth 7 here costs 3.1M nodes, seconds
+/// rather than forever, so a search that ignores its bound finishes and fails
+/// an assertion instead.
+const DEPTH_NO_BOUNDED_SEARCH_REACHES: u8 = 7;
+
+/// The same bound for the start position, which is cheaper per ply: 1.2M nodes
+/// at depth 9 against 3.1M at depth 7 of `open_middlegame`.
+const START_POS_DEPTH_NO_BOUNDED_SEARCH_REACHES: u8 = 9;
+
+/// A node budget for a depth-6 search of `open_middlegame`, roughly four times
+/// the 858k nodes one actually costs.
+///
+/// Node counts here are deterministic, so the figure this is calibrated against
+/// moves with the search itself and not with the machine or the load: the
+/// multiple is headroom for retuning, not for noise. What it buys is a failure
+/// mode. A mutant that flattens the evaluation or scrambles move ordering does
+/// not break termination, it inflates the tree by an order of magnitude or two,
+/// and an unbounded test answers that with the right result eventually, which
+/// `cargo mutants` can only report as a timeout. Under a budget the same mutant
+/// comes back shallow and immediate and the assertions fail, which is evidence
+/// rather than the absence of it.
+const OPEN_MIDDLEGAME_DEPTH_6_BUDGET: u64 = 3_500_000;
+
 // ---- Concrete mate puzzles ----
 //
 // Two named, famous mating patterns rather than arbitrary constructions:
@@ -286,10 +332,10 @@ fn stop_flag_set_from_another_thread_is_honored() {
     .join()
     .expect("stop-setting thread must not panic");
 
-    let result = search.search(&board, 50);
+    let result = search.search(&board, START_POS_DEPTH_NO_BOUNDED_SEARCH_REACHES);
     assert!(
-        result.depth < 50,
-        "the flag was already set before search started, so it must abort well short of depth 50, got {}",
+        result.depth < START_POS_DEPTH_NO_BOUNDED_SEARCH_REACHES,
+        "the flag was already set before search started, so it must abort well short of depth {START_POS_DEPTH_NO_BOUNDED_SEARCH_REACHES}, got {}",
         result.depth
     );
 }
@@ -306,15 +352,13 @@ fn stop_flag_set_from_another_thread_is_honored() {
 /// proving the wall-clock path specifically isn't ignored.
 #[test]
 fn movetime_deadline_returns_within_a_generous_tolerance() {
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
+    let board = open_middlegame();
 
     let deadline = Instant::now() + Duration::from_millis(100);
     let mut search = Search::new(Vec::new()).with_deadline(deadline);
 
     let started = Instant::now();
-    let result = search.search(&board, 50);
+    let result = search.search(&board, DEPTH_NO_BOUNDED_SEARCH_REACHES);
     let elapsed = started.elapsed();
 
     assert!(
@@ -358,9 +402,7 @@ fn quiescence_avoids_a_poisoned_pawn() {
 /// position the soft limit test above deliberately trips the limit on.
 #[test]
 fn no_deadline_still_reaches_the_exact_requested_depth() {
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
+    let board = open_middlegame();
     let result = Search::new(Vec::new()).search(&board, 4);
     assert_eq!(
         result.depth, 4,
@@ -372,9 +414,7 @@ fn no_deadline_still_reaches_the_exact_requested_depth() {
 /// limit only ever reasons about `self.deadline`.
 #[test]
 fn max_nodes_only_search_unaffected_by_soft_limit() {
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
+    let board = open_middlegame();
 
     let unbounded = Search::new(Vec::new()).search(&board, 4);
     assert_eq!(unbounded.depth, 4, "sanity check on the unbounded baseline");
@@ -623,10 +663,10 @@ fn quiescence_finds_a_mate_inside_its_own_recursion() {
 /// lowering it; this documents where it starts.
 #[test]
 fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
-    let result = Search::new(Vec::new()).search(&board, 6);
+    let board = open_middlegame();
+    let result = Search::new(Vec::new())
+        .with_max_nodes(OPEN_MIDDLEGAME_DEPTH_6_BUDGET)
+        .search(&board, 6);
 
     let stats = result.negamax_cutoffs;
     assert!(
@@ -669,10 +709,10 @@ fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
 /// proving the feature engages at all in a real tree.
 #[test]
 fn killer_table_is_consulted_during_a_real_search() {
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
-    let result = Search::new(Vec::new()).search(&board, 6);
+    let board = open_middlegame();
+    let result = Search::new(Vec::new())
+        .with_max_nodes(OPEN_MIDDLEGAME_DEPTH_6_BUDGET)
+        .search(&board, 6);
 
     assert!(
         result.negamax_cutoffs.by_cause[CutoffCause::Killer.index()] > 0,
@@ -728,12 +768,11 @@ fn search_with_cutoff_history_actually_updates_it() {
     use turox_chess::types::{Color, Piece, Square};
     use turox_engine::search::CutoffHistory;
 
-    let board =
-        Board::try_from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
-            .expect("valid FEN");
+    let board = open_middlegame();
     let mut history = CutoffHistory::new();
     Search::new(Vec::new())
         .with_cutoff_history(&mut history)
+        .with_max_nodes(OPEN_MIDDLEGAME_DEPTH_6_BUDGET)
         .search(&board, 6);
 
     let any_cell_touched = Color::ALL.into_iter().any(|side| {
@@ -774,5 +813,77 @@ fn philidors_legacy_reports_the_full_mating_line_not_just_the_first_move() {
         line,
         vec![queen_sac, forced_recapture, knight_mate],
         "the reported pv must be the full three-ply mating combination, not just move 1"
+    );
+}
+
+// ---- The three ways to stop a search ----
+//
+// One test per mechanism, each asserting that a search asked to stop actually
+// stops. Each is worth a test of its own because a broken mechanism has no
+// other symptom to offer: the tests that would notice are the ones that depend
+// on stopping in order to finish at all, so they report it by hanging rather
+// than by failing, and a hang cannot be told apart from a slow machine.
+
+/// Far below what the first few iterations below cost, so the margin survives
+/// the search getting faster. Asserting on the depth reached rather than on a
+/// node count keeps that true: node counts move every time pruning improves,
+/// and a threshold calibrated against today's tree is one that silently stops
+/// testing anything.
+const STOPPING_NODE_CAP: u64 = 5_000;
+
+/// `max_nodes` has to actually end the search. Checked through the depth
+/// reached, because `Search` reports the last iteration that *completed*: an
+/// honoured cap means an iteration got cut off, so the result is shallower than
+/// what was asked for.
+#[test]
+fn a_node_cap_stops_the_search_before_the_asked_for_depth() {
+    let result = Search::new(Vec::new())
+        .with_max_nodes(STOPPING_NODE_CAP)
+        .search(&open_middlegame(), DEPTH_NO_BOUNDED_SEARCH_REACHES);
+
+    assert!(
+        result.depth < DEPTH_NO_BOUNDED_SEARCH_REACHES,
+        "a search capped at {STOPPING_NODE_CAP} nodes reported depth {} of a requested {DEPTH_NO_BOUNDED_SEARCH_REACHES}, so the cap did not stop it",
+        result.depth
+    );
+    assert!(
+        result.nodes < STOPPING_NODE_CAP * 10,
+        "a search capped at {STOPPING_NODE_CAP} nodes spent {}, which is too far past the cap to be the 2048-node check schedule",
+        result.nodes
+    );
+}
+
+/// The handle from `stop_flag` has to be the one the search reads. This is the
+/// path UCI's `stop` uses from the reader thread while the search runs on its
+/// own, so a `stop_flag` that hands back a fresh flag would leave the engine
+/// unable to be interrupted at all, which on a real time control means losing
+/// on time with a move already in hand.
+#[test]
+fn a_stop_flag_set_before_the_search_stops_it_before_the_asked_for_depth() {
+    let mut search = Search::new(Vec::new());
+    search.stop_flag().store(true, Ordering::Relaxed);
+    let result = search.search(&open_middlegame(), DEPTH_NO_BOUNDED_SEARCH_REACHES);
+
+    assert!(
+        result.depth < DEPTH_NO_BOUNDED_SEARCH_REACHES,
+        "a search whose stop flag was already set reported depth {} of a requested {DEPTH_NO_BOUNDED_SEARCH_REACHES}, so the flag from `stop_flag` is not the one it reads",
+        result.depth
+    );
+}
+
+/// `request_stop` is the same contract for a caller on the search's own thread.
+/// It is a separate test rather than an alias because it is a separate entry
+/// point, and a no-op version of it would leave that caller with no way to stop
+/// a search at all.
+#[test]
+fn request_stop_before_the_search_stops_it_before_the_asked_for_depth() {
+    let mut search = Search::new(Vec::new());
+    search.request_stop();
+    let result = search.search(&open_middlegame(), DEPTH_NO_BOUNDED_SEARCH_REACHES);
+
+    assert!(
+        result.depth < DEPTH_NO_BOUNDED_SEARCH_REACHES,
+        "a search asked to stop before it began reported depth {} of a requested {DEPTH_NO_BOUNDED_SEARCH_REACHES}, so `request_stop` did not reach `should_abort`",
+        result.depth
     );
 }

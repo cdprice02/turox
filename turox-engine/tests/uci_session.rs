@@ -12,7 +12,7 @@
 use std::io::{BufReader, Cursor, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use turox_chess::board::Board;
 use turox_chess::book::{Book, BookMove};
 use turox_chess::move_gen::legal::legal_moves;
@@ -147,11 +147,18 @@ fn drawn_root_position_still_returns_a_real_bestmove() {
 /// is short of the 2376 nodes depth 1 actually costs here (confirmed via
 /// `go nodes 3000` returning a real move), so the first iteration always
 /// aborts partway through.
+///
+/// `depth 1` is given explicitly rather than left to the 64-ply default
+/// ceiling, even though the node budget is what ends this search. That the
+/// budget is the only thing ending it is exactly the problem: a search which
+/// does not honour it then runs for 64 plies, and the test hangs rather than
+/// fails. Pinned at 1, an unhonoured budget completes one cheap iteration and
+/// comes back with something to assert against.
 #[test]
 fn interrupted_first_iteration_still_returns_a_real_bestmove() {
     let output = run_session(concat!(
         "position fen r1bqk2r/ppp2ppp/2n5/3np1N1/1bBP4/2P5/PP3PPP/RNBQK2R b KQkq - 0 1\n",
-        "go nodes 1000\n",
+        "go depth 1 nodes 1000\n",
         "quit\n",
     ));
     let bestmove_line = output
@@ -315,12 +322,23 @@ fn go_infinite_ignores_the_clock_and_waits_for_stop() {
         .expect("writing to the pipe should not fail");
     drop(writer);
 
-    handle.join().expect("session thread should not panic");
+    // A bounded wait for the `bestmove` rather than a join followed by a read
+    // of the finished output. `go infinite` has no depth budget to run out of,
+    // so a search that does not honour `stop` never returns and the join never
+    // comes back: the assertion below would then be reported as a hung test
+    // rather than a failed one, and a hang cannot be told apart from a slow
+    // machine. Five seconds is far past the 2048-node granularity `stop` is
+    // checked on.
+    let give_up_at = Instant::now() + Duration::from_secs(5);
+    while !contains_bestmove(&output) && Instant::now() < give_up_at {
+        thread::sleep(Duration::from_millis(10));
+    }
     assert!(
         contains_bestmove(&output),
         "go infinite must return a bestmove once `stop` is sent, output: {:?}",
         String::from_utf8_lossy(&output.lock().expect("mutex not poisoned"))
     );
+    handle.join().expect("session thread should not panic");
 }
 
 fn contains_bestmove(output: &Arc<Mutex<Vec<u8>>>) -> bool {
