@@ -361,10 +361,22 @@ jobs:
       # having tested 25 of 159. Five times the baseline build is far more than
       # any healthy mutant needs, and it turns that stall into one unviable
       # mutant instead of a lost shard.
+      #
+      # `--timeout 180` rather than the auto-set value, which is five times the
+      # baseline test phase and comes out at 48 seconds: `cargo test` runs this
+      # whole workspace in under ten, so the multiplier has very little to
+      # multiply. The suite's heaviest searches carry node budgets of roughly
+      # four times what they cost, so that a mutant destroying pruning burns a
+      # budget instead of running forever, and four times the heaviest tests is
+      # already past 48 seconds. Left auto-set, the ceiling terminates runs that
+      # had reached a verdict and files them as timeouts, which is the one
+      # outcome carrying no information about the mutant. An absolute figure
+      # rather than a larger multiplier, because a multiplier keeps drifting
+      # with a baseline this small.
       - name: Run mutation testing
         run: >
           cargo mutants -j 1 -v --test-workspace=true
-          --build-timeout-multiplier 5
+          --build-timeout-multiplier 5 --timeout 180
           --shard ${{ matrix.shard }}/12 --sharding round-robin
 
       # A surviving mutant is only useful if someone reads it, and twelve
