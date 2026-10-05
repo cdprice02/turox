@@ -2145,13 +2145,39 @@ mod tests {
     /// get.
     const WIDEN_FIXTURE: &str = "r1bqkbnr/pp2pppp/2n5/3p4/3NP3/8/PPP2PPP/RNBQKB1R w KQkq d6 0 5";
 
+    // Node budgets for the fixed-depth searches of `WIDEN_FIXTURE` below. Each
+    // is roughly four times what its own depth costs, which leaves the tree
+    // room to grow as the evaluation is retuned while still bounding a search
+    // that has lost its cutoffs entirely and inflates the tree by an order of
+    // magnitude or more. The counts are deterministic, so that margin is
+    // headroom for retuning rather than for a loaded machine.
+    //
+    // A budget rather than no bound at all because what these searches cost is
+    // a function of how well pruning works, and pruning that stops working
+    // makes a search slow rather than wrong. Unbounded, that failure arrives as
+    // a test that never finishes, which is the one result carrying no
+    // information about what broke.
+
+    /// Four times the 2.0M nodes depth 8 costs.
+    const WIDEN_DEPTH_8_BUDGET: u64 = 8_000_000;
+
+    /// Four times the 3.6M nodes depth 9 costs.
+    const WIDEN_DEPTH_9_BUDGET: u64 = 14_500_000;
+
+    /// Four times the 650k nodes depth 7 costs, the deepest the window sweep
+    /// below reaches.
+    const WIDEN_WINDOW_SWEEP_BUDGET: u64 = 2_600_000;
+
     /// Searches to `depth` with aspiration windows on or off, and is the one
     /// place the switch is wired: the comparison below is written against this
     /// helper so that turning the windows on does not touch the test itself.
     /// Both answers come from the same full-window search while no narrower one
     /// exists.
     fn aspirated_score(board: &Board, depth: u8, _aspiration: bool) -> Score {
-        Search::new(Vec::new()).search(board, depth).score
+        Search::new(Vec::new())
+            .with_max_nodes(WIDEN_WINDOW_SWEEP_BUDGET)
+            .search(board, depth)
+            .score
     }
 
     /// Guards the fixture rather than the search. A widening re-search is only
@@ -2172,7 +2198,15 @@ mod tests {
     fn the_widen_fixture_still_moves_the_score_between_deep_iterations() {
         let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
         let mut scores: Vec<(u8, Score)> = Vec::new();
-        Search::new(Vec::new()).search_with_info(&board, 8, |r| scores.push((r.depth, r.score)));
+        Search::new(Vec::new())
+            .with_max_nodes(WIDEN_DEPTH_8_BUDGET)
+            .search_with_info(&board, 8, |r| scores.push((r.depth, r.score)));
+
+        assert_eq!(
+            scores.last().map(|(depth, _)| *depth),
+            Some(8),
+            "the search stopped short of depth 8, so it reached WIDEN_DEPTH_8_BUDGET: the tree at this depth has outgrown the budget, {scores:?}"
+        );
 
         let at = |d: u8| {
             scores
@@ -2309,7 +2343,15 @@ mod tests {
     fn attempts_past_the_depth_reached_are_exactly_the_escapes() {
         let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
         let depth = 9;
-        let result = Search::new(Vec::new()).search(&board, depth);
+        let result = Search::new(Vec::new())
+            .with_max_nodes(WIDEN_DEPTH_9_BUDGET)
+            .search(&board, depth);
+        assert_eq!(
+            result.depth, depth,
+            "the search stopped at depth {} of {depth}, so it reached WIDEN_DEPTH_9_BUDGET: the tree at this depth has outgrown the budget",
+            result.depth
+        );
+
         let stats = result.aspiration;
         let escapes = stats.fail_low + stats.fail_high;
 
