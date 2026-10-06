@@ -55,19 +55,25 @@ const DEPTH_NO_BOUNDED_SEARCH_REACHES: u8 = 7;
 /// at depth 9 against 3.1M at depth 7 of `open_middlegame`.
 const START_POS_DEPTH_NO_BOUNDED_SEARCH_REACHES: u8 = 9;
 
-/// A node budget for a depth-6 search of `open_middlegame`, roughly four times
-/// the 858k nodes one actually costs.
+/// A node budget for a depth-6 search of `open_middlegame`, roughly twice the
+/// 858k nodes one actually costs.
 ///
-/// Node counts here are deterministic, so the figure this is calibrated against
-/// moves with the search itself and not with the machine or the load: the
-/// multiple is headroom for retuning, not for noise. What it buys is a failure
-/// mode. A mutant that flattens the evaluation or scrambles move ordering does
-/// not break termination, it inflates the tree by an order of magnitude or two,
-/// and an unbounded test answers that with the right result eventually, which
-/// `cargo mutants` can only report as a timeout. Under a budget the same mutant
-/// comes back shallow and immediate and the assertions fail, which is evidence
-/// rather than the absence of it.
-const OPEN_MIDDLEGAME_DEPTH_6_BUDGET: u64 = 3_500_000;
+/// What it buys is a failure mode. A mutant that flattens the evaluation or
+/// scrambles move ordering does not break termination, it inflates the tree by
+/// an order of magnitude or two, and an unbounded test answers that with the
+/// right result eventually, which `cargo mutants` can only report as a timeout.
+/// Under a budget the same mutant comes back shallow and the assertions fail,
+/// which is evidence rather than the absence of it.
+///
+/// Twice, not more. Node counts here are deterministic, so the multiple is
+/// headroom for retuning rather than for a loaded machine, and retuning moves a
+/// count by tens of percent rather than by multiples. The other half is that a
+/// budget costs what it allows whenever it is reached: these tests run once per
+/// mutant on a two-core runner, and a margin wide enough to absorb a doubled
+/// tree is wide enough to push a bounded test past what the harness will wait
+/// for, turning a caught mutant back into the timeout the budget exists to
+/// prevent.
+const OPEN_MIDDLEGAME_DEPTH_6_BUDGET: u64 = 1_800_000;
 
 // ---- Concrete mate puzzles ----
 //

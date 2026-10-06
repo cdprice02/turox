@@ -2145,28 +2145,53 @@ mod tests {
     /// get.
     const WIDEN_FIXTURE: &str = "r1bqkbnr/pp2pppp/2n5/3p4/3NP3/8/PPP2PPP/RNBQKB1R w KQkq d6 0 5";
 
-    // Node budgets for the fixed-depth searches of `WIDEN_FIXTURE` below. Each
-    // is roughly four times what its own depth costs, which leaves the tree
-    // room to grow as the evaluation is retuned while still bounding a search
-    // that has lost its cutoffs entirely and inflates the tree by an order of
-    // magnitude or more. The counts are deterministic, so that margin is
-    // headroom for retuning rather than for a loaded machine.
+    // Node budgets for the fixed-depth searches of `WIDEN_FIXTURE` below, each
+    // roughly twice what its own depth costs.
     //
     // A budget rather than no bound at all because what these searches cost is
     // a function of how well pruning works, and pruning that stops working
     // makes a search slow rather than wrong. Unbounded, that failure arrives as
     // a test that never finishes, which is the one result carrying no
     // information about what broke.
+    //
+    // Twice, not more: the counts are deterministic, so the margin is headroom
+    // for retuning rather than for a loaded machine, and retuning moves a node
+    // count by tens of percent rather than by multiples. A budget is also a
+    // cost whenever it is reached, since the search runs until it gets there,
+    // and these tests run once per mutant under `cargo mutants` on a two-core
+    // runner. A margin wide enough to absorb a doubled tree is wide enough to
+    // make a bounded test slower than the harness will wait for, which turns a
+    // caught mutant back into the timeout the budget existed to prevent.
 
-    /// Four times the 2.0M nodes depth 8 costs.
-    const WIDEN_DEPTH_8_BUDGET: u64 = 8_000_000;
+    /// Twice the 2.0M nodes depth 8 costs, which is the depth both the score
+    /// curve and the attempt count below are measured at.
+    const WIDEN_DEPTH_8_BUDGET: u64 = 4_100_000;
 
-    /// Four times the 3.6M nodes depth 9 costs.
-    const WIDEN_DEPTH_9_BUDGET: u64 = 14_500_000;
+    /// Twice the 33k nodes depth 4 costs.
+    const WIDEN_DEPTH_4_BUDGET: u64 = 70_000;
 
-    /// Four times the 650k nodes depth 7 costs, the deepest the window sweep
-    /// below reaches.
-    const WIDEN_WINDOW_SWEEP_BUDGET: u64 = 2_600_000;
+    /// Twice the 177k nodes depth 6 costs.
+    const WIDEN_DEPTH_6_BUDGET: u64 = 360_000;
+
+    /// Twice what a search of `WIDEN_FIXTURE` to `depth` costs, for the window
+    /// sweep below.
+    ///
+    /// Per depth rather than one flat figure, because that sweep runs fourteen
+    /// searches and a flat budget is spent fourteen times over. Sized for its
+    /// deepest, a budget is forty times what depth 1 needs, so a mutant that
+    /// inflates the tree makes every one of the fourteen spend the deepest
+    /// search's allowance: around 18M nodes against the 1.9M the sweep actually
+    /// costs. Scaled, the same worst case is under 4M.
+    const fn widen_sweep_budget(depth: u8) -> u64 {
+        match depth {
+            0..=2 => 10_000,
+            3 => 20_000,
+            4 => WIDEN_DEPTH_4_BUDGET,
+            5 => 150_000,
+            6 => WIDEN_DEPTH_6_BUDGET,
+            _ => 1_300_000,
+        }
+    }
 
     /// Searches to `depth` with aspiration windows on or off, and is the one
     /// place the switch is wired: the comparison below is written against this
@@ -2175,7 +2200,7 @@ mod tests {
     /// exists.
     fn aspirated_score(board: &Board, depth: u8, _aspiration: bool) -> Score {
         Search::new(Vec::new())
-            .with_max_nodes(WIDEN_WINDOW_SWEEP_BUDGET)
+            .with_max_nodes(widen_sweep_budget(depth))
             .search(board, depth)
             .score
     }
@@ -2342,13 +2367,17 @@ mod tests {
     #[test]
     fn attempts_past_the_depth_reached_are_exactly_the_escapes() {
         let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
-        let depth = 9;
+        // Depth 8 rather than deeper: it is the shallowest depth at which this
+        // fixture escapes its window in both directions, so it exercises the
+        // whole counter for 2.0M nodes where depth 9 wants 3.6M for one more
+        // escape of a direction already covered.
+        let depth = 8;
         let result = Search::new(Vec::new())
-            .with_max_nodes(WIDEN_DEPTH_9_BUDGET)
+            .with_max_nodes(WIDEN_DEPTH_8_BUDGET)
             .search(&board, depth);
         assert_eq!(
             result.depth, depth,
-            "the search stopped at depth {} of {depth}, so it reached WIDEN_DEPTH_9_BUDGET: the tree at this depth has outgrown the budget",
+            "the search stopped at depth {} of {depth}, so it reached WIDEN_DEPTH_8_BUDGET: the tree at this depth has outgrown the budget",
             result.depth
         );
 
@@ -2423,6 +2452,7 @@ mod tests {
         let clock = ManualClock::new(start);
         let mut search = Search::new(Vec::new())
             .with_deadline(start + Duration::from_secs(60))
+            .with_max_nodes(WIDEN_DEPTH_6_BUDGET)
             .with_clock(clock.source());
 
         let mut completed = Vec::new();
@@ -2456,6 +2486,7 @@ mod tests {
         let clock = ManualClock::new(start);
         let mut search = Search::new(Vec::new())
             .with_deadline(start + Duration::from_secs(3600))
+            .with_max_nodes(WIDEN_DEPTH_4_BUDGET)
             .with_clock(clock.source());
 
         let result = search.search_with_info(&board, 4, |_| {
@@ -2476,7 +2507,10 @@ mod tests {
     fn a_search_too_shallow_to_aspirate_reports_one_attempt_per_iteration() {
         let board = Board::try_from_fen(WIDEN_FIXTURE).expect("fixture FEN is valid");
         let depth = aspiration::MIN_DEPTH - 1;
-        let stats = Search::new(Vec::new()).search(&board, depth).aspiration;
+        let stats = Search::new(Vec::new())
+            .with_max_nodes(WIDEN_DEPTH_4_BUDGET)
+            .search(&board, depth)
+            .aspiration;
 
         assert_eq!(
             stats,

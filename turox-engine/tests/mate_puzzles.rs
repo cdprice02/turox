@@ -56,8 +56,8 @@ struct MatePuzzle {
     /// `Search::search` iterates from depth 1: a puzzle searched at 5, 6 and 7
     /// re-searches the shallow plies three times over for the same coverage.
     deep_depth: u8,
-    /// A node budget for both of this puzzle's searches, roughly four times
-    /// what the deeper of the two costs.
+    /// A node budget for both of this puzzle's searches, roughly twice what the
+    /// deeper of the two costs.
     ///
     /// Recorded per puzzle for the same reason `found_at` is: it is the cost of
     /// the deep search, so a technique that gives up cutoffs shows up here as a
@@ -67,6 +67,11 @@ struct MatePuzzle {
     /// Unbounded, a search that no longer cuts anything off keeps looking for
     /// the mate until something outside the test gives up, and a test that
     /// never finishes says less than one coming back with the wrong score.
+    ///
+    /// Twice rather than a wider margin, because a budget also costs what it
+    /// allows: every mutant that trips one pays for the search up to it, and
+    /// these puzzles run once per mutant. The counts are deterministic, so
+    /// twice is headroom for retuning and not for a loaded machine.
     node_budget: u64,
 }
 
@@ -80,7 +85,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 1,
         found_at: 1,
         deep_depth: 7,
-        node_budget: 120_000,
+        node_budget: 60_000,
     },
     MatePuzzle {
         name: "back-rank mate, Black mating",
@@ -88,7 +93,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 1,
         found_at: 1,
         deep_depth: 7,
-        node_budget: 120_000,
+        node_budget: 60_000,
     },
     MatePuzzle {
         name: "Philidor's Legacy, the smothered mate finish",
@@ -96,7 +101,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 3,
         found_at: 3,
         deep_depth: 7,
-        node_budget: 520_000,
+        node_budget: 260_000,
     },
     MatePuzzle {
         name: "rook ladder, White mating",
@@ -104,7 +109,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 3,
         found_at: 3,
         deep_depth: 7,
-        node_budget: 420_000,
+        node_budget: 210_000,
     },
     MatePuzzle {
         name: "rook ladder, Black mating",
@@ -112,7 +117,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 3,
         found_at: 3,
         deep_depth: 7,
-        node_budget: 420_000,
+        node_budget: 210_000,
     },
     MatePuzzle {
         name: "crowded board, forced mate in five plies",
@@ -124,7 +129,7 @@ const PUZZLES: &[MatePuzzle] = &[
         // it at the true distance rather than a wrong one.
         found_at: 6,
         deep_depth: 7,
-        node_budget: 740_000,
+        node_budget: 370_000,
     },
     // The three rook ladders below are the deep half of this set, and they are
     // here for the shape of their mating lines rather than their length. Each
@@ -146,7 +151,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 7,
         found_at: 7,
         deep_depth: 10,
-        node_budget: 5_600_000,
+        node_budget: 2_800_000,
     },
     MatePuzzle {
         name: "rook ladder against a king on e7, Black mating",
@@ -154,7 +159,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 7,
         found_at: 7,
         deep_depth: 10,
-        node_budget: 6_000_000,
+        node_budget: 3_000_000,
     },
     // Two plies longer than the sevens above for one file of king travel, and
     // the only one of the three whose mirror does not belong here: mated from
@@ -170,7 +175,7 @@ const PUZZLES: &[MatePuzzle] = &[
         mate_in_plies: 9,
         found_at: 9,
         deep_depth: 11,
-        node_budget: 14_500_000,
+        node_budget: 7_100_000,
     },
 ];
 
