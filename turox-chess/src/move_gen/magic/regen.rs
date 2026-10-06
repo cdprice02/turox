@@ -132,7 +132,9 @@ const fn attacks_for_occupancy(sq: Square, occupied: Bitboard, dirs: [Direction;
 /// the PRNG from `state`: generate a sparse candidate (AND a few successive
 /// `xorshift64star` outputs together, biasing toward sparse, better-hashing
 /// multipliers), reject early if `(mask.bits() * magic) & 0xFF00_0000_0000_0000`
-/// has fewer than 6 set bits (cheap prefilter before the expensive check), then
+/// has fewer than 6 set bits (cheap prefilter before the expensive check: the
+/// index is taken from the top of that product, so a sparse top byte means the
+/// mask's bits are spread poorly across it), then
 /// verify by hand-walking every subset of `mask` (Carry-Rippler, since
 /// `Bitboard::subsets()` isn't `const fn`) and confirming `magic_index` never
 /// collides two subsets whose `attacks_for_occupancy` results genuinely
@@ -192,7 +194,7 @@ fn find_magic(
             generated += 1;
 
             let candidate = state1 & state2 & state3;
-            if (mask.bits().wrapping_mul(candidate) & 0xFF00_0000_0000_0000).count_ones() < 6 {
+            if (mask.bits().wrapping_mul(candidate) & 0xFF00_0000_0000_0000).count_ones() >= 6 {
                 break candidate;
             }
         };
@@ -475,10 +477,9 @@ fn find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts() {
 /// bug in `Bitboard`, `Square` or `Move` reaches the developer as a test gate
 /// that never finishes, carrying no indication of which assertion was wrong.
 ///
-/// A budget of ten is far below what any square needs (the cheapest mask
-/// in the set measures in the hundreds of candidates, the worst in the
-/// tens of thousands), so this asserts the budget is honored without
-/// depending on which square happens to be cheapest.
+/// A budget of ten is far below what rook `a1` needs from `SEED` (about half a
+/// million candidates). Not every square would do: the cheapest bishop squares
+/// find a magic within a handful.
 #[test]
 fn find_magic_gives_up_when_its_candidate_budget_runs_out() {
     assert_eq!(
@@ -508,22 +509,38 @@ fn find_magic_rejects_a_mask_wider_than_any_slider() {
 /// result must hash every occupancy subset of the mask to a slot, such that
 /// two subsets sharing a slot always have the *same* real attack set
 /// (constructive collisions, per `find_magic`'s doc, are fine; anything
-/// else is a broken magic). Checked on a few squares chosen to cover both the
-/// worst-case (12-bit rook, 9-bit bishop) and a typical interior mask, not
-/// exhaustively over all 64: `find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts`
-/// plus `build_table_matches_attacks_for_occupancy_at_every_real_occupancy`
-/// below cover the full 64-square, every-occupancy case together.
+/// else is a broken magic). Checked on a few squares covering the widest and
+/// narrowest mask of each piece, not exhaustively over all 64:
+/// `find_all_magics_offsets_are_a_correct_prefix_sum_of_popcounts` plus
+/// `build_table_matches_attacks_for_occupancy_at_every_real_occupancy` below
+/// cover the full 64-square, every-occupancy case together.
+///
+/// Within each width, the square is the one whose search from `SEED` is
+/// cheapest, because this test runs on every push and a fresh search's cost
+/// varies by over a hundredfold between squares of the same width (rook `a1`
+/// generates about 526,000 candidates, rook `h8` about 142,000). A reseed
+/// reshuffles which squares are cheap, so it is worth rechecking these then.
+///
+/// Also pins the prefilter's direction: the chosen multiplier must have at
+/// least six bits in the top byte of `mask * magic`. The prefilter only affects
+/// which collision-free candidate wins, so nothing else can see it invert.
 #[test]
 fn find_magic_produces_a_collision_free_hash_for_a_few_representative_squares() {
     let cases = [
-        (Square::A1, ROOK_DIRS),   // worst-case rook mask (12 bits)
-        (Square::D4, ROOK_DIRS),   // typical interior rook mask (10 bits)
-        (Square::H8, BISHOP_DIRS), // corner bishop (5 bits)
-        (Square::D4, BISHOP_DIRS), // worst-case bishop mask (9 bits)
+        (Square::H8, ROOK_DIRS),   // widest rook mask (12 bits)
+        (Square::B2, ROOK_DIRS),   // narrowest rook mask (10 bits)
+        (Square::E4, BISHOP_DIRS), // widest bishop mask (9 bits)
+        (Square::A5, BISHOP_DIRS), // narrowest bishop mask (5 bits)
     ];
     for (sq, dirs) in cases {
         let (m, _) = find_magic(sq, dirs, SEED, MAX_MAGIC_CANDIDATES)
             .expect("every square has a magic findable inside the budget");
+
+        let high_bits = (m.mask.bits().wrapping_mul(m.magic) & 0xFF00_0000_0000_0000).count_ones();
+        assert!(
+            high_bits >= 6,
+            "{sq:?} chose a candidate the prefilter should have rejected: {high_bits} high bits"
+        );
 
         // Carry-Rippler over every subset of mask.
         let mut slots: Vec<Option<Bitboard>> = vec![None; 1usize << m.mask.count()];
@@ -591,38 +608,141 @@ fn build_table_matches_attacks_for_occupancy_at_every_real_occupancy() {
     }
 }
 
-/// Keeps the committed data honest: re-runs the search from `SEED` and
-/// confirms it reproduces `ROOK_MAGICS`/`BISHOP_MAGICS` exactly, then
-/// rebuilds each table from scratch and confirms it matches
-/// `ROOK_ATTACKS`/`BISHOP_ATTACKS` (decoded from the committed `.bin`
-/// files) byte for byte: the real, full-scale round-trip through `decode`,
-/// not just the toy buffer in
-/// `decode_reinterprets_little_endian_bytes_as_bitboards`. If this ever
-/// fails, the committed data and the search/build code have drifted apart.
+/// Setting this makes `regenerating_reproduces_the_committed_magic_data` write
+/// the three artifacts instead of comparing against them.
+const REGENERATE_ENV: &str = "TUROX_REGENERATE_MAGICS";
+
+/// `magics.rs` exactly as committed, including the hex grouping `rustfmt` and
+/// the `unreadable_literal` lint expect, so a regeneration that changes no
+/// multiplier changes no byte.
+fn render_magics_source(rook: &[Magic; 64], bishop: &[Magic; 64]) -> String {
+    fn grouped_hex(v: u64) -> String {
+        format!(
+            "0x{:04x}_{:04x}_{:04x}_{:04x}",
+            v >> 48,
+            (v >> 32) & 0xffff,
+            (v >> 16) & 0xffff,
+            v & 0xffff
+        )
+    }
+    fn array(name: &str, header: &str, magics: &[Magic; 64]) -> String {
+        use std::fmt::Write;
+        let mut out = format!("{header}pub(super) const {name}: [Magic; 64] = [\n");
+        for m in magics {
+            write!(
+                out,
+                "    Magic {{\n        mask: Bitboard::from_bits({}),\n        magic: {},\n        shift: {},\n        offset: {},\n    }},\n",
+                grouped_hex(m.mask.bits()),
+                grouped_hex(m.magic),
+                m.shift,
+                m.offset
+            )
+            .expect("writing to a String cannot fail");
+        }
+        out.push_str("];\n");
+        out
+    }
+
+    let mut out = String::from(
+        "//! The committed magic-hash parameters for every square, found by\n\
+         //! `regen::find_all_magics` and pinned here so the real lookup path\n\
+         //! (`super::rook_attacks`/`bishop_attacks`) never re-runs the search.\n\
+         //! `regen::regenerating_reproduces_the_committed_magic_data` re-derives these\n\
+         //! from `SEED` and asserts they still match, so this data can't silently\n\
+         //! drift from the search that's supposed to produce it. That test also\n\
+         //! writes this file, so edit the generator rather than this file.\n\
+         \n\
+         use super::Magic;\n\
+         use crate::types::bitboard::Bitboard;\n\
+         \n",
+    );
+    out.push_str(&array(
+        "ROOK_MAGICS",
+        "/// Found by `find_all_magics(ROOK_DIRS, SEED)`, see\n\
+         /// `regen::regenerating_reproduces_the_committed_magic_data` for the check that\n\
+         /// keeps this honest.\n",
+        rook,
+    ));
+    out.push('\n');
+    out.push_str(&array(
+        "BISHOP_MAGICS",
+        "/// Found by `find_all_magics(BISHOP_DIRS, SEED)`, same reproducibility check\n\
+         /// as `ROOK_MAGICS`.\n",
+        bishop,
+    ));
+    out
+}
+
+/// Little-endian, one `u64` per slot: the layout `decode` reads back.
+fn table_bytes(table: &[Bitboard]) -> Vec<u8> {
+    table.iter().flat_map(|b| b.bits().to_le_bytes()).collect()
+}
+
+/// Keeps the committed data honest, and is also the only thing that writes it.
+///
+/// Re-runs the search from `SEED`, rebuilds both tables, and renders all three
+/// artifacts (`magics.rs` and the two `.bin` tables) exactly as committed. By
+/// default it asserts each one matches the committed file byte for byte, which
+/// is the full-scale round-trip through `decode` that
+/// `decode_reinterprets_little_endian_bytes_as_bitboards` only checks on a toy
+/// buffer. With `TUROX_REGENERATE_MAGICS` set it writes them instead.
+///
+/// One test rather than a separate writer, because an `#[ignore]`d writer would
+/// run under `--run-ignored all` and rewrite source files from inside the deep
+/// job. Here the deep job only ever compares, and the writer is held to
+/// reproducing the existing bytes before it is trusted with new ones.
 #[test]
 #[ignore = "same full magic search and table build as the other ignored \
             tests here, for both piece types; run with --release via \
             --run-ignored all"]
 fn regenerating_reproduces_the_committed_magic_data() {
+    let rook_magics = find_all_magics(ROOK_DIRS, SEED);
+    let bishop_magics = find_all_magics(BISHOP_DIRS, SEED);
+    let rook_table: [Bitboard; ROOK_TABLE_SIZE] = build_table(ROOK_DIRS, &rook_magics);
+    let bishop_table: [Bitboard; BISHOP_TABLE_SIZE] = build_table(BISHOP_DIRS, &bishop_magics);
+
+    let artifacts: [(&str, Vec<u8>, &[u8]); 3] = [
+        (
+            "magics.rs",
+            render_magics_source(&rook_magics, &bishop_magics).into_bytes(),
+            include_bytes!("magics.rs"),
+        ),
+        (
+            "rook_attacks.bin",
+            table_bytes(&rook_table),
+            include_bytes!("rook_attacks.bin"),
+        ),
+        (
+            "bishop_attacks.bin",
+            table_bytes(&bishop_table),
+            include_bytes!("bishop_attacks.bin"),
+        ),
+    ];
+
+    if std::env::var_os(REGENERATE_ENV).is_some() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/move_gen/magic");
+        for (name, rendered, _) in artifacts {
+            std::fs::write(dir.join(name), rendered)
+                .unwrap_or_else(|e| panic!("writing {name}: {e}"));
+        }
+        return;
+    }
+
+    // The parsed comparison first: on a mismatch it names the square, where
+    // the byte comparison below could only say which file.
     assert_eq!(
-        find_all_magics(ROOK_DIRS, SEED),
-        ROOK_MAGICS,
+        rook_magics, ROOK_MAGICS,
         "rook magics no longer reproduce from SEED"
     );
     assert_eq!(
-        find_all_magics(BISHOP_DIRS, SEED),
-        BISHOP_MAGICS,
+        bishop_magics, BISHOP_MAGICS,
         "bishop magics no longer reproduce from SEED"
     );
-
-    let rebuilt_rook: [Bitboard; ROOK_TABLE_SIZE] = build_table(ROOK_DIRS, &ROOK_MAGICS);
-    let rebuilt_bishop: [Bitboard; BISHOP_TABLE_SIZE] = build_table(BISHOP_DIRS, &BISHOP_MAGICS);
-    assert_eq!(
-        rebuilt_rook, ROOK_ATTACKS,
-        "rook_attacks.bin no longer matches a fresh build"
-    );
-    assert_eq!(
-        rebuilt_bishop, BISHOP_ATTACKS,
-        "bishop_attacks.bin no longer matches a fresh build"
-    );
+    for (name, rendered, committed) in artifacts {
+        assert!(
+            rendered == committed,
+            "{name} no longer matches a fresh regeneration; rerun this test with \
+             {REGENERATE_ENV}=1 to rewrite it"
+        );
+    }
 }
