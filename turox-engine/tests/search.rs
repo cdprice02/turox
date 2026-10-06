@@ -542,10 +542,11 @@ fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() 
 
 // ---- Quiescence in check ----
 //
-// In check, `quiescence` generates evasions and recurses without a depth cap
-// rather than standing pat on a capture list, which is an unbounded check
-// extension. Out of check it is the capture-only, depth-capped stand-pat
-// search.
+// In check, `quiescence` generates evasions rather than standing pat on a
+// capture list, and keeps doing so however deep the checks go, which is an
+// unbounded check extension. Each evasion still spends a unit of `qdepth`,
+// floored at zero, so captures after a run of evasions get fewer plies. Out
+// of check it is the capture-only, depth-capped stand-pat search.
 //
 // `expected_quiescence` is an independent reference for both halves, not a
 // copy of the real one: it has no alpha/beta window and no transposition
@@ -576,7 +577,12 @@ fn expected_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64
             .iter()
             .map(|&m| {
                 history.push(board.hash());
-                let score = -expected_quiescence(&board.make_move(m), ply + 1, qdepth, history);
+                let score = -expected_quiescence(
+                    &board.make_move(m),
+                    ply + 1,
+                    qdepth.saturating_sub(1),
+                    history,
+                );
                 history.pop();
                 score
             })

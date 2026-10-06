@@ -6,10 +6,12 @@
 //! (including the deep, `#[ignore]`d depths) is the point at which move
 //! generation is actually done.
 //!
-//! Depths that push total node counts past ~1M are `#[ignore]`d; CI runs the
-//! `dev` profile (`opt-level = 1`; see the workspace `Cargo.toml`), so a
-//! multi-million-node perft there is minutes, not seconds. Run them
-//! deliberately with `cargo nextest run --workspace --run-ignored all --release`.
+//! `perft` counts the last ply's moves rather than making them, so it runs at
+//! tens of millions of nodes a second even in the `dev` profile CI uses
+//! (`opt-level = 1`; see the workspace `Cargo.toml`). Depths up to about 16M
+//! nodes take under half a second there and run on every push. The depths of
+//! 90M nodes and more are `#[ignore]`d: a few seconds each in `--release`, run
+//! with `cargo nextest run --workspace --run-ignored all --release`.
 
 #![expect(
     clippy::expect_used,
@@ -53,9 +55,14 @@ fn startpos_perft_4() {
 }
 
 #[test]
-#[ignore = "~4.9M nodes; run with --release via --run-ignored all"]
 fn startpos_perft_5() {
     assert_eq!(perft(&board(STARTPOS), 5), 4_865_609);
+}
+
+#[test]
+#[ignore = "~119M nodes, about 2.5s in --release; run with --run-ignored all"]
+fn startpos_perft_6() {
+    assert_eq!(perft(&board(STARTPOS), 6), 119_060_324);
 }
 
 // ---- Kiwipete ----
@@ -76,9 +83,14 @@ fn kiwipete_perft_3() {
 }
 
 #[test]
-#[ignore = "~4.1M nodes; run with --release via --run-ignored all"]
 fn kiwipete_perft_4() {
     assert_eq!(perft(&board(KIWIPETE), 4), 4_085_603);
+}
+
+#[test]
+#[ignore = "~194M nodes, about 2.5s in --release; run with --run-ignored all"]
+fn kiwipete_perft_5() {
+    assert_eq!(perft(&board(KIWIPETE), 5), 193_690_690);
 }
 
 // ---- Position 3 ----
@@ -108,6 +120,17 @@ fn position_3_perft_5() {
     assert_eq!(perft(&board(POSITION_3), 5), 674_624);
 }
 
+#[test]
+fn position_3_perft_6() {
+    assert_eq!(perft(&board(POSITION_3), 6), 11_030_083);
+}
+
+#[test]
+#[ignore = "~179M nodes, about 3.5s in --release; run with --run-ignored all"]
+fn position_3_perft_7() {
+    assert_eq!(perft(&board(POSITION_3), 7), 178_633_661);
+}
+
 // ---- Position 4 ----
 
 #[test]
@@ -130,6 +153,11 @@ fn position_4_perft_4() {
     assert_eq!(perft(&board(POSITION_4), 4), 422_333);
 }
 
+#[test]
+fn position_4_perft_5() {
+    assert_eq!(perft(&board(POSITION_4), 5), 15_833_292);
+}
+
 // ---- Position 5 ----
 
 #[test]
@@ -148,9 +176,14 @@ fn position_5_perft_3() {
 }
 
 #[test]
-#[ignore = "~2.1M nodes; run with --release via --run-ignored all"]
 fn position_5_perft_4() {
     assert_eq!(perft(&board(POSITION_5), 4), 2_103_487);
+}
+
+#[test]
+#[ignore = "~90M nodes, about 1.5s in --release; run with --run-ignored all"]
+fn position_5_perft_5() {
+    assert_eq!(perft(&board(POSITION_5), 5), 89_941_194);
 }
 
 // ---- Position 6 ----
@@ -171,9 +204,14 @@ fn position_6_perft_3() {
 }
 
 #[test]
-#[ignore = "~3.9M nodes; run with --release via --run-ignored all"]
 fn position_6_perft_4() {
     assert_eq!(perft(&board(POSITION_6), 4), 3_894_594);
+}
+
+#[test]
+#[ignore = "~164M nodes, about 2.5s in --release; run with --run-ignored all"]
+fn position_6_perft_5() {
+    assert_eq!(perft(&board(POSITION_6), 5), 164_075_551);
 }
 
 // ---- perft(0) ----
