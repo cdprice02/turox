@@ -39,8 +39,9 @@ turox-rng  ─┐
             ├─→  turox-chess  ─┬─→  turox-notation  ─┐
 turox-macros┘   types, board,  │    pgn, san         ├─→  tools/bookgen
                 move_gen, book │                     │
-                               └─→  turox-engine  ───┘  (optional)
-                                    search, eval, uci ──→  turox-cli
+                               ├─→  turox-engine  ───┘  (optional)
+                               │    search, eval, uci ──→  turox-cli
+                               └─→  tools/magicgen
 ```
 
 The dependency runs one way and the compiler keeps it that way. `docs/adr/0008`
@@ -60,7 +61,10 @@ FEN stays with the positions it encodes rather than moving to `turox-notation`.
     what this crate is; PGN and SAN encode a *game*, which is why they don't
     live here.
   - **`move_gen`**: attack tables, magic bitboards, pseudolegal and legal move
-    generation, and `perft`.
+    generation, and `perft`. The magic multipliers and the tables they index
+    are found by search, so `tools/magicgen` writes them and the crate
+    includes them as data, checked on every push by an exhaustive comparison
+    with a naive ray walk.
   - **`book`**: the opening book's file format and lookup. Here rather than in
     `turox-engine` because the generator writing it has to agree with the
     engine reading it.
@@ -306,7 +310,7 @@ CI (`.github/workflows/rust-ci.yml`) runs on every push: build, `cargo
 nextest run --workspace --profile ci`, doctests, `cargo fmt --check`, `cargo
 clippy -D warnings`, and a rustdoc build with warnings denied. A weekly
 schedule (also runnable on demand via `workflow_dispatch`) additionally runs
-what's too slow to gate every PR, informationally: the deep perft depths and
-the full magic-bitboard re-search (`--release --run-ignored all`), `cargo
+what's too slow to gate every PR, informationally: the deep perft depths
+(`--release --run-ignored all`), `cargo
 mutants -p turox-engine`, `cargo llvm-cov --workspace`, and a real `cargo
 bench` run.

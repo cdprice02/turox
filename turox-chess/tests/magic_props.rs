@@ -1,5 +1,5 @@
 //! Property tests for `move_gen::magic`: the executable version of the
-//! contracts documented on each function in `src/move_gen/magic.rs`.
+//! contracts documented on each function in `src/move_gen/magic/mod.rs`.
 //!
 //! Every function gets a reference-equivalence check against an independent
 //! implementation built directly from `Square::offset` stepped one square at a
@@ -15,7 +15,9 @@
 //! functions, not a cross-module integration property.
 
 use proptest::prelude::*;
-use turox_chess::move_gen::magic::{bishop_attacks, queen_attacks, rook_attacks};
+use turox_chess::move_gen::magic::{
+    bishop_attacks, bishop_mask, queen_attacks, rook_attacks, rook_mask,
+};
 use turox_chess::strategies::{any_bitboard, any_square};
 use turox_chess::{Bitboard, Square};
 
@@ -97,6 +99,24 @@ fn naive_relevant_mask(sq: Square, dirs: &[(i8, i8)]) -> Bitboard {
         }
     }
     mask
+}
+
+/// The masks decide the table layout the generator writes and the lookup
+/// reads, so each must be exactly the squares between `sq` and the edge.
+#[test]
+fn masks_match_the_naive_walk_on_every_square() {
+    for sq in Square::ALL {
+        assert_eq!(
+            rook_mask(sq),
+            naive_relevant_mask(sq, &ROOK_DIRS),
+            "rook on {sq:?}"
+        );
+        assert_eq!(
+            bishop_mask(sq),
+            naive_relevant_mask(sq, &BISHOP_DIRS),
+            "bishop on {sq:?}"
+        );
+    }
 }
 
 /// Checks the committed tables against the naive walk at every occupancy they

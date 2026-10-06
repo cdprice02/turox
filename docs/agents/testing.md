@@ -9,8 +9,7 @@ coverage jobs are for.
 chosen: `tests/*.rs` compiles as a separate crate and sees only `pub` items, so
 a private helper has nowhere else to be tested. `eval::king_safety`'s
 `zone_files`, `shelter_penalty` and `storm_penalty` are private `const fn`s;
-`move_gen::magic`'s `Magic`, `magic_index` and the whole search in `regen.rs`
-are private too.
+`move_gen::magic`'s `Magic` and `magic_index` are private too.
 
 **`tests/<source_file>.rs` for public items.** The file is named after the
 source file it covers, so finding the test for a given line of code is a
@@ -88,8 +87,7 @@ constructed `TooManyFilesInRank` or `NotEnoughFilesInRank`.
 `docs/agents/toolchain.md` has the commands. The division:
 
 - **The pull-request gate** runs the whole suite. A test belongs here unless it
-  cannot be made to finish quickly, which in practice means deep perft and the
-  full magic search.
+  cannot be made to finish quickly, which in practice means deep perft.
 - **The weekly job** runs what the gate cannot afford, plus the informational
   measures: mutation, coverage, benchmarks. None of it gates a merge. A
   surviving mutant is a prompt to add a test.
