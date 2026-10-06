@@ -1,28 +1,20 @@
-//! Property test for `search::Search`, against an unpruned-negamax oracle.
+//! Property test for `search::Search`, against a minimax reference.
 //!
 //! No perft equivalent exists here (there's no published ground truth for
 //! search, same situation `eval` and `draw` are in), so correctness rests on
-//! `naive_negamax`/`naive_quiescence` below: a plain, fully unpruned negamax
-//! over the same leaf logic (quiescence, mate/draw scoring) the real `Search`
-//! uses. Alpha-beta pruning (correctly implemented) always returns the
-//! *identical* score to an unpruned search exploring the same move set at
-//! the same depth; it only visits fewer nodes. This doesn't (and can't)
-//! validate quiescence's own move selection against anything independent,
-//! since both sides call the same one; `tests/search.rs`'s concrete
-//! horizon test is for that, along with mate puzzles and the rest of this
-//! module's concrete scenario tests. This file is proptest only.
+//! `Reference` below: a plain negamax over the same leaf logic (quiescence,
+//! mate/draw scoring) the real `Search` uses, written from the definition
+//! rather than from `Search`'s code. This doesn't (and can't) validate
+//! quiescence's own move selection against anything independent, since both
+//! sides call the same one; `tests/search.rs`'s concrete horizon test is for
+//! that, along with mate puzzles and the rest of this module's concrete
+//! scenario tests. This file is proptest only.
 //!
-//! Both sides cap capture resolution at `MAX_QUIESCENCE_DEPTH` (the same
-//! constant `quiescence` itself uses, not a hand-copied literal): without
-//! it, a sufficiently tangled `any_board()` position can make the
-//! capture tree's *breadth* blow up long before it naturally bottoms out
-//! on material, which is exactly what turned this property test into a
-//! multi-minute-per-case runaway before the cap existed. The default-gate
-//! version of the property below further restricts itself to sparse
-//! boards for the same reason, on top of the cap; the `#[ignore]`d
-//! variant restores full `any_board()` density for occasional thorough
-//! verification, the same cheap-default/thorough-ignored split
-//! `zobrist_props.rs` uses for its own perft-tree walk.
+//! The reference agrees with `Search` only while `Search` is pure alpha-beta,
+//! which is why every property here stops at depth 2: late move reductions
+//! begin at depth 3, and from there a reduced move that fails low is never
+//! re-searched, so `Search` may legitimately miss what minimax finds. What
+//! a selective search does is checked by the tree-shape tests instead.
 
 #![expect(
     clippy::expect_used,
@@ -30,9 +22,11 @@
 )]
 
 use proptest::prelude::*;
+use proptest::test_runner::TestCaseError;
 use turox_chess::board::Board;
 use turox_chess::move_gen::attacks::in_check;
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::move_gen::move_list::MoveList;
 use turox_chess::strategies::any_board_with_legal_move;
 use turox_engine::eval::{evaluate, Score};
 use turox_engine::search::draw;
@@ -41,120 +35,269 @@ use turox_engine::search::{CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
 
 // ---- Independent reference ----
 
-/// Unpruned negamax: always explores every legal move and takes the best,
-/// never narrowing an alpha/beta window. Shares `draw`/`in_check`/
-/// `legal_moves`/`evaluate` with the real implementation (those are
-/// themselves already independently tested elsewhere), but not `Search`'s
-/// own pruning, ordering, or abort logic.
-fn naive_negamax(board: &Board, depth: u8, ply: u8, history: &mut Vec<u64>) -> Score {
-    if draw::is_draw(board, history, board.hash()) {
-        return 0;
-    }
-    let moves = legal_moves(board);
-    if moves.is_empty() {
-        return if in_check(board, board.side_to_move()) {
-            Score::from(ply) - MATE
-        } else {
-            0
-        };
-    }
-    if depth == 0 {
-        return naive_quiescence(board, ply, MAX_QUIESCENCE_DEPTH, history);
-    }
-    history.push(board.hash());
-    let mut best = Score::MIN;
-    for &m in moves.as_slice() {
-        let score = -naive_negamax(&board.make_move(m), depth - 1, ply + 1, history);
-        best = best.max(score);
-    }
-    history.pop();
-    best
+/// Wider than any score a search can return, so a full window never cuts off.
+const INFINITE: Score = MATE + 1;
+
+/// Minimax over the tree `Search` explores at depths 1 and 2, with a node
+/// budget so that a board too expensive to check is skipped rather than
+/// hanging the run.
+///
+/// Shares `draw`/`in_check`/`legal_moves`/`evaluate` with the real
+/// implementation (those are themselves already independently tested
+/// elsewhere), but not `Search`'s own ordering, windowing, table or abort
+/// logic. It searches moves in generation order and stores nothing.
+///
+/// `prune` picks between two ways of computing the same number. Unpruned, it
+/// is the definition itself: every move searched, the best one taken. With
+/// pruning, it is textbook fail-soft alpha-beta, which returns the identical
+/// score at the root by construction. That is the reference the dense boards
+/// need: unpruned, a sixth of `any_board()` positions cost more than a
+/// million nodes and one in fifteen more than twenty million, because in check
+/// quiescence searches every evasion and a board with several queens can
+/// keep checking for twenty plies. Alpha-beta in generation order brings the
+/// worst case down to a couple of million, and it is still a dozen lines
+/// with no ordering to get wrong.
+struct Reference {
+    prune: bool,
+    nodes: u64,
+    budget: u64,
 }
 
-/// Unpruned quiescence: stand-pat, then every legal capture or promotion, no
-/// alpha/beta window. `qdepth` mirrors the real `quiescence`'s own cap
-/// (seeded from the same [`MAX_QUIESCENCE_DEPTH`] constant, not a
-/// hand-copied literal): without it, this reference has no bound at all on
-/// how many captures deep it'll chase, and a sufficiently tangled
-/// `any_board()` position can make that blow up long before comparing
-/// against the real (now-capped) implementation ever gets a chance to.
-///
-/// In check, this generates evasions instead of captures and does not stand
-/// pat, with no `qdepth` cap on how far that goes: `ply` (distance from the
-/// true search root, not from this function's own entry) is what an empty
-/// evasion list scores against, the same formula `naive_negamax` uses for
-/// its own terminal case. Checks `history` for a draw on the evasion path
-/// only, the same scope the real `quiescence` checks it in: captures and
-/// promotions can never repeat a position (both are irreversible), so
-/// there's nothing for the capture path to ever find.
-fn naive_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64>) -> Score {
-    if in_check(board, board.side_to_move()) {
-        if draw::is_draw(board, history, board.hash()) {
-            return 0;
+impl Reference {
+    const fn unpruned(budget: u64) -> Self {
+        Self {
+            prune: false,
+            nodes: 0,
+            budget,
         }
-        let evasions = legal_moves(board);
-        if evasions.is_empty() {
-            return Score::from(ply) - MATE;
-        }
-        return evasions
-            .as_slice()
-            .iter()
-            .map(|&m| {
-                history.push(board.hash());
-                let score = -naive_quiescence(&board.make_move(m), ply + 1, qdepth, history);
-                history.pop();
-                score
-            })
-            .max()
-            .expect("evasions is non-empty");
     }
 
-    let mut best = evaluate(board);
-    if qdepth > 0 {
-        let mut captures = legal_moves(board);
-        captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
-        for &m in captures.as_slice() {
-            history.push(board.hash());
-            let score = -naive_quiescence(&board.make_move(m), ply + 1, qdepth - 1, history);
-            history.pop();
-            best = best.max(score);
+    const fn alpha_beta(budget: u64) -> Self {
+        Self {
+            prune: true,
+            nodes: 0,
+            budget,
         }
     }
-    best
+
+    /// `None` once the budget is spent, which aborts the whole search.
+    fn visit(&mut self) -> Option<()> {
+        self.nodes += 1;
+        (self.nodes <= self.budget).then_some(())
+    }
+
+    fn negamax(
+        &mut self,
+        board: &Board,
+        depth: u8,
+        ply: u8,
+        alpha: Score,
+        beta: Score,
+        history: &mut Vec<u64>,
+    ) -> Option<Score> {
+        self.visit()?;
+        if draw::is_draw(board, history, board.hash()) {
+            return Some(0);
+        }
+        let moves = legal_moves(board);
+        if moves.is_empty() {
+            return Some(if in_check(board, board.side_to_move()) {
+                Score::from(ply) - MATE
+            } else {
+                0
+            });
+        }
+        if depth == 0 {
+            return self.quiescence(board, ply, MAX_QUIESCENCE_DEPTH, alpha, beta, history);
+        }
+        self.best_child(
+            board,
+            &moves,
+            -INFINITE,
+            alpha,
+            beta,
+            history,
+            |r, child, a, b, h| r.negamax(child, depth - 1, ply + 1, a, b, h),
+        )
+    }
+
+    /// Stand-pat, then every legal capture or promotion, `qdepth` of them
+    /// deep at most (seeded from the same [`MAX_QUIESCENCE_DEPTH`] constant
+    /// the real `quiescence` uses, not a hand-copied literal).
+    ///
+    /// In check, this generates evasions instead of captures and does not
+    /// stand pat. An evasion spends one unit of `qdepth` like a capture does,
+    /// floored at zero rather than stopping there: evasions continue however
+    /// deep the checks go, and a capture after them is only searched while
+    /// some `qdepth` is left. `ply` (distance from the true search root, not
+    /// from this function's own entry) is what an empty evasion list scores
+    /// against, the same formula `negamax` uses for its own terminal case.
+    /// Checks `history` for a draw on the evasion path only, the same scope
+    /// the real `quiescence` checks it in: captures and promotions can never
+    /// repeat a position (both are irreversible), so there's nothing for the
+    /// capture path to ever find.
+    fn quiescence(
+        &mut self,
+        board: &Board,
+        ply: u8,
+        qdepth: u8,
+        alpha: Score,
+        beta: Score,
+        history: &mut Vec<u64>,
+    ) -> Option<Score> {
+        self.visit()?;
+        if in_check(board, board.side_to_move()) {
+            if draw::is_draw(board, history, board.hash()) {
+                return Some(0);
+            }
+            let evasions = legal_moves(board);
+            if evasions.is_empty() {
+                return Some(Score::from(ply) - MATE);
+            }
+            return self.best_child(
+                board,
+                &evasions,
+                -INFINITE,
+                alpha,
+                beta,
+                history,
+                |r, child, a, b, h| r.quiescence(child, ply + 1, qdepth.saturating_sub(1), a, b, h),
+            );
+        }
+
+        let stand_pat = evaluate(board);
+        if qdepth == 0 {
+            return Some(stand_pat);
+        }
+        let mut captures = legal_moves(board);
+        captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
+        self.best_child(
+            board,
+            &captures,
+            stand_pat,
+            alpha,
+            beta,
+            history,
+            |r, child, a, b, h| r.quiescence(child, ply + 1, qdepth - 1, a, b, h),
+        )
+    }
+
+    /// The best of `floor` and every move's negated child score, with `board`
+    /// on the repetition stack while its children are searched.
+    ///
+    /// Pruned, `floor` raises alpha before any move is tried, which is where
+    /// quiescence's stand-pat cutoff comes from; unpruned, the window is
+    /// passed down untouched and never consulted.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one search node's full state, passed straight through from both callers"
+    )]
+    fn best_child(
+        &mut self,
+        board: &Board,
+        moves: &MoveList,
+        floor: Score,
+        mut alpha: Score,
+        beta: Score,
+        history: &mut Vec<u64>,
+        mut child: impl FnMut(&mut Self, &Board, Score, Score, &mut Vec<u64>) -> Option<Score>,
+    ) -> Option<Score> {
+        let mut best = floor;
+        history.push(board.hash());
+        for &m in moves.as_slice() {
+            if self.prune {
+                alpha = alpha.max(best);
+                if alpha >= beta {
+                    break;
+                }
+            }
+            let score = child(self, &board.make_move(m), -beta, -alpha, history);
+            let Some(score) = score else {
+                history.pop();
+                return None;
+            };
+            best = best.max(-score);
+        }
+        history.pop();
+        Some(best)
+    }
+}
+
+/// Fails, naming the position, if `Search` runs out of budget or disagrees
+/// with the reference.
+///
+/// The reference runs first, against a fixed budget, and a board that would
+/// cost more is skipped rather than failed: its cost is a property of the
+/// board, not a defect in anything under test, and a handful in 20,000 dense
+/// cases need more.
+///
+/// `Search`'s budget is derived from what the reference spent on the same
+/// board rather than fixed. On random boards the most expensive case keeps
+/// growing with the number drawn (55k nodes over 2,000 dense cases, 425k
+/// over 40,000), so any fixed budget is eventually flaky. Relative to the
+/// reference it is stable: over 40,000 cases `Search` never spent more than
+/// five times what the reference did once the reference needed a thousand
+/// nodes, nor more than about 5,000 nodes past twice it on any board. The
+/// budget only has to turn a search that hangs into a failure that names its
+/// board, which a pruning bug does by running for minutes, not by doubling.
+fn assert_search_matches_reference(
+    board: &Board,
+    depth: u8,
+    mut reference: Reference,
+) -> Result<(), TestCaseError> {
+    let expected = reference.negamax(board, depth, 0, -INFINITE, INFINITE, &mut Vec::new());
+    prop_assume!(expected.is_some(), "the reference's own budget ran out");
+    let expected = expected.expect("assumed above");
+
+    let fen = board.to_fen();
+    let search_budget = 4 * reference.nodes + 10_000;
+    let result = Search::new(Vec::new())
+        .with_max_nodes(search_budget)
+        .search(board, depth);
+    prop_assert_eq!(
+        result.depth,
+        depth,
+        "Search spent its {}-node budget on {} at depth {}",
+        search_budget,
+        fen,
+        depth
+    );
+    prop_assert_eq!(result.score, expected, "{} at depth {}", fen, depth);
+    Ok(())
 }
 
 /// `any_board_with_legal_move`, further restricted to at most 8 total
 /// pieces (both kings plus up to 6 extra, versus `any_board()`'s own
-/// 2-to-22 range). Only used by the default-gate half of
-/// `alpha_beta_agrees_with_unpruned_negamax`: a sparse board keeps the
-/// unpruned `naive_negamax`/`naive_quiescence` reference's capture-tree
-/// breadth small, on top of `MAX_QUIESCENCE_DEPTH`'s own cap on its depth.
-/// The `#[ignore]`d thorough variant of that same test restores full
-/// density instead.
+/// 2-to-22 range), which is what lets the default gate afford the unpruned
+/// reference. The `#[ignore]`d thorough variant restores full density
+/// instead.
 fn sparse_board_with_legal_move() -> impl Strategy<Value = Board> {
     any_board_with_legal_move().prop_filter(
-        "keep the capture tree small enough for the default test gate",
+        "keep the unpruned reference cheap enough for the default test gate",
         |board| board.occupied().count() <= 8,
     )
 }
 
+/// About twice the most the unpruned reference spent over 2,000 sparse
+/// cases, 335,155 nodes.
+const SPARSE_REFERENCE_BUDGET: u64 = 700_000;
+
+/// About twice the most the alpha-beta reference spent over 2,000 dense
+/// cases, 2,176,292 nodes.
+const DENSE_REFERENCE_BUDGET: u64 = 4_400_000;
+
+/// 20,000 full-density cases took about two minutes in `--release`, nearly all
+/// of it the reference, so this is around six seconds.
+const DENSE_CASES: u32 = 1024;
+
 // ---- Properties ----
 
 proptest! {
-    // A reduced case count on top of the sparse-board restriction above:
-    // even bounded, `naive_negamax`/`naive_quiescence`'s cost still grows
-    // with depth and density, and this still exercises real alpha-beta
-    // pruning against real quiescence on dozens of varied positions, which
-    // is the load-bearing check; it doesn't need to also be deep or dense.
     #![proptest_config(ProptestConfig::with_cases(48))]
 
     #[test]
     fn alpha_beta_agrees_with_unpruned_negamax(board in sparse_board_with_legal_move(), depth in 1u8..=2) {
-        let expected = naive_negamax(&board, depth, 0, &mut Vec::new());
-        let mut search = Search::new(Vec::new());
-        let result = search.search(&board, depth);
-        prop_assert_eq!(result.depth, depth, "no deadline/node budget set, so every iteration up to depth should complete");
-        prop_assert_eq!(result.score, expected);
+        assert_search_matches_reference(&board, depth, Reference::unpruned(SPARSE_REFERENCE_BUDGET))?;
     }
 
     #[test]
@@ -251,24 +394,19 @@ proptest! {
     }
 }
 
-// A separate `proptest!` block: this one needs its own (larger) case count
-// and runs `#[ignore]`d, so it can't share the default-gate block's config
-// above.
+// A separate `proptest!` block: this one needs its own case count and runs
+// `#[ignore]`d, so it can't share the default-gate block's config above.
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    #![proptest_config(ProptestConfig::with_cases(DENSE_CASES))]
 
     /// Same check as `alpha_beta_agrees_with_unpruned_negamax`, but over
     /// full-density `any_board()` positions rather than the default gate's
-    /// sparse restriction, for occasional deeper verification that the
-    /// sparse restriction isn't hiding anything density-dependent.
+    /// sparse restriction, against the alpha-beta reference that density
+    /// makes necessary.
     #[test]
-    #[ignore = "dense-board sweep, several minutes; run with --run-ignored all"]
-    fn alpha_beta_agrees_with_unpruned_negamax_at_full_density(board in any_board_with_legal_move(), depth in 1u8..=2) {
-        let expected = naive_negamax(&board, depth, 0, &mut Vec::new());
-        let mut search = Search::new(Vec::new());
-        let result = search.search(&board, depth);
-        prop_assert_eq!(result.depth, depth);
-        prop_assert_eq!(result.score, expected);
+    #[ignore = "full-density sweep, about 6s in --release; run with --run-ignored all"]
+    fn alpha_beta_agrees_with_minimax_at_full_density(board in any_board_with_legal_move(), depth in 1u8..=2) {
+        assert_search_matches_reference(&board, depth, Reference::alpha_beta(DENSE_REFERENCE_BUDGET))?;
     }
 }
 
@@ -406,7 +544,8 @@ fn a_warm_transposition_table_never_changes_a_score() {
 /// between the storing ply and the probing ply, so it is shallow depths that
 /// are least likely to catch it; this is the run that would.
 #[test]
-#[ignore = "searches without a table at depth, minutes; run with --run-ignored all"]
+#[ignore = "searches without a table at depth, under a second in --release; run with \
+            --run-ignored all"]
 fn a_warm_transposition_table_never_changes_a_score_at_depth() {
     assert_table_never_changes_scores(&[
         ("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53", 10),
