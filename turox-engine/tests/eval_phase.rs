@@ -80,12 +80,12 @@ fn full_phase_material_total_matches_pure_midgame_sum() {
     assert_eq!(eval_white_pov(&board), expected);
 }
 
-// Concrete anchor for `game_phase`'s clamp: a hand-built position with far
-// more non-pawn material than any real game reaches (seven White queens),
-// so the raw phase count would go well negative before clamping. Paired
-// with the property tests in `tests/eval.rs` (which exercise this
-// only as often as `any_board()` happens to roll enough extra material)
-// rather than relying on randomness alone to hit this exact shape.
+// Concrete anchor for `game_phase`'s clamp: a hand-built position with far more
+// non-pawn material than any real game reaches (seven White queens), so the raw
+// phase count would go well negative before clamping. Paired with the eval
+// properties (which exercise this only as often as `any_board()` happens to
+// roll enough extra material) rather than relying on randomness alone to hit
+// this exact shape.
 #[test]
 fn heavily_overloaded_material_does_not_panic_or_invert_the_score() {
     let board = Board::try_from_fen("4k3/8/8/8/8/8/8/QQQQQQQK w - - 0 1").expect("valid FEN");

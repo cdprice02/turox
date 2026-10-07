@@ -1,15 +1,10 @@
-//! Tests for `move_gen::attacks`'s public API.
+//! Tests for `move_gen::attacks`: properties against a naive reference built
+//! from `Square::offset` stepping, and concrete positions for the cases easiest
+//! to get backwards.
 //!
-//! Two techniques. Property tests check each function against an independent
-//! naive reference built from `Square::offset` stepping, not from `tables` or
-//! `magic`. `attackers_of` is checked against the *forward* definition rather
-//! than a second reverse one: a forward implementation never inverts anything,
-//! so it cannot get the pawn-colour flip wrong, which is what makes it
-//! trustworthy as a check on the real reverse, superpiece-trick implementation.
-//!
-//! Concrete positions pin the easy-to-get-backwards cases (kingless boards,
-//! pawn attack direction, occupancy edge effects) and read as documentation in
-//! their own right.
+//! `attackers_of` is checked against the forward definition rather than a
+//! second reverse one: a forward walk never inverts a pawn's direction, so it
+//! cannot share the colour-flip mistake a reverse implementation can make.
 
 use proptest::prelude::*;
 use turox_chess::board::Board;
@@ -35,15 +30,12 @@ fn in_check_is_false_on_a_kingless_board() {
     assert!(!in_check(&board, Color::Black));
 }
 
-// ---- Pawn direction asymmetry ----
-//
 // The one place a Color-flip bug in `attackers_of` is invisible on a
 // vertically symmetric board: knight/king/slider attack relations are
 // symmetric ("a attacks b" iff "b attacks a"), pawn relations are not. A white
 // pawn on d3 attacks c4/e4, not c2/e2; these pin that down concretely rather
 // than trusting the proptest oracle (built with the same offset-stepping
 // technique) to be independently immune to the same mistake.
-
 #[test]
 fn white_pawn_attackers_are_found_diagonally_ahead_not_behind() {
     let board = Board::try_from_fen("8/8/8/8/8/3P4/8/8 w - - 0 1").expect("valid FEN");
@@ -62,8 +54,6 @@ fn black_pawn_attackers_are_found_diagonally_ahead_not_behind() {
     assert!(attackers_of(&board, Square::E6, Color::Black).is_empty());
 }
 
-// ---- in_check ----
-
 #[test]
 fn king_in_check_from_a_rook_down_an_open_file() {
     let board = Board::try_from_fen("4r3/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
@@ -75,8 +65,6 @@ fn king_not_in_check_when_the_file_is_blocked() {
     let board = Board::try_from_fen("4r3/8/8/8/4P3/8/8/4K3 w - - 0 1").expect("valid FEN");
     assert!(!in_check(&board, Color::White));
 }
-
-// ---- attacked_by / explicit occupancy ----
 
 #[test]
 fn attacked_by_with_the_kings_own_square_removed_reveals_the_square_behind_it() {
@@ -93,14 +81,12 @@ fn attacked_by_with_the_kings_own_square_removed_reveals_the_square_behind_it() 
     assert!(attacked_by(&board, Color::Black, occupied_without_king).contains(Square::E1));
 }
 
-// ---- pinned ----
-
 #[test]
 fn a_piece_pinned_along_a_file_by_a_rook_is_reported() {
     // White king e1, White bishop e2, Black rook e8: the bishop is the only
-    // piece between king and rook, so it's pinned. Same position
-    // `tests/move_gen_legal.rs`'s `pinned_bishop_cannot_move_off_the_pin_line` uses to
-    // check the *consuming* legality rule; this checks the fact underneath it.
+    // piece between king and rook, so it's pinned. Same position as
+    // `pinned_bishop_cannot_move_off_the_pin_line`, which checks the legality
+    // rule built on this fact.
     let board = Board::try_from_fen("4r3/8/8/8/8/8/4B3/4K3 w - - 0 1").expect("valid FEN");
     let expected = Bitboard::EMPTY.with(Square::E2);
     assert_eq!(pinned(&board, Color::White, Square::E1), expected);

@@ -141,7 +141,7 @@ const VISUAL_KING_PST_EG: [Score; 64] = [
 /// flipping at all) doesn't panic or fail to compile: it produces an
 /// engine that plays measurably worse (develops backwards, centralizes the
 /// wrong king) while looking entirely reasonable on a read-through.
-/// `tests/eval.rs`'s orientation-anchor tests exist specifically to
+/// The orientation-anchor tests exist specifically to
 /// catch this.
 #[must_use]
 pub const fn pst_value(color: Color, piece: Piece, sq: Square) -> Score {

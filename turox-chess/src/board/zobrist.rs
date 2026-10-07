@@ -224,11 +224,10 @@ pub(crate) const FINGERPRINT: u64 = fingerprint();
 /// An independent, from-scratch fold over `board`'s full state.
 ///
 /// Every occupied square via `piece_at` (not the bitboards `place`/`remove` maintain),
-/// plus side to move, castling rights, and en passant. Used only as
-/// `tests/board_zobrist.rs`'s test oracle, checked against the incrementally-maintained
-/// `Board::hash()`; production code should always read `Board::hash()` instead;
-/// recomputing this on a hot path defeats the entire point of maintaining the hash
-/// incrementally.
+/// plus side to move, castling rights, and en passant. Used only as a test oracle for
+/// the incrementally maintained `Board::hash()`; production code should always read
+/// `Board::hash()` instead; recomputing this on a hot path defeats the entire point of
+/// maintaining the hash incrementally.
 #[must_use]
 pub fn compute_hash(board: &Board) -> u64 {
     let mut hash = 0u64;

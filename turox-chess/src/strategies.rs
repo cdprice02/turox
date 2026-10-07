@@ -4,12 +4,6 @@
 //! part of what the crate is for. Both `turox-chess`'s own property tests and
 //! `turox-engine`'s need the same generators, and two copies of them is the
 //! duplication this repo keeps getting bitten by.
-//!
-//! `board_fen.rs` has its own `any_board()`, deliberately not reused here:
-//! that one exists to prove FEN round-tripping doesn't care whether a board is
-//! chess-legal, so it *shouldn't* constrain placement. Move generation cares a
-//! great deal, so this is a separate, stricter strategy.
-//!
 #![expect(
     clippy::expect_used,
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
@@ -109,10 +103,9 @@ fn pawn_rank() -> impl Strategy<Value = Rank> {
 /// random with pawns kept off the back ranks, castling rights only ever set
 /// when the king and the matching rook actually sit on their home squares.
 ///
-/// En passant is always `None`; no
-/// test in this crate needs a proptest-random ep state; the concrete FEN tests
-/// in `move_gen_pseudo_legal.rs` cover that rule directly, and legal move
-/// generation produces real ep states from real move sequences, which is a
+/// En passant is always `None`; no test in this crate needs a proptest-random
+/// ep state; concrete en passant positions cover that rule directly, and legal
+/// move generation produces real ep states from real move sequences, which is a
 /// better source of them than manufacturing one here.
 ///
 /// # Panics

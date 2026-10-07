@@ -1,17 +1,11 @@
-//! Tests for `board::zobrist`: does the incrementally maintained
-//! `Board::hash()` agree with `compute_hash`'s from-scratch fold.
+//! Tests for `board::zobrist`: properties that the incrementally maintained
+//! `Board::hash()` matches `compute_hash`'s from-scratch fold, and concrete
+//! tests for each hashed field.
 //!
-//! `any_board()` builds positions through `place` and `from_parts`, never
-//! through `make_move`, so most of the properties exercise the non-incremental
-//! construction paths. `hash_stays_correct_after_a_legal_move` is the one
-//! property that calls `make_move`, and is not `#[ignore]`d, so the default
-//! gate covers incremental maintenance directly.
-//!
-//! Concrete tests pin facts worth not trusting by inspection (side to move,
-//! each castling right alone, the en passant file), plus a perft-grade tree
-//! walk that compares the two hashes at every node reachable from perft's six
-//! positions. That walk is `#[ignore]`d and release-only, for the same reason
-//! as the deep perft depths: it is a full tree walk, not a single check.
+//! `any_board()` builds positions without `make_move`, so
+//! `hash_stays_correct_after_a_legal_move` is the property that covers
+//! incremental maintenance. The perft-grade tree walk is `#[ignore]`d and
+//! release-only, being a full tree walk rather than a single check.
 
 use proptest::prelude::*;
 use turox_chess::board::zobrist::compute_hash;
@@ -63,8 +57,6 @@ fn hash_differs_by_en_passant_file_alone() {
     assert_ne!(board.hash(), no_ep.hash());
 }
 
-// ---- Perft-tree walk ----
-
 const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const KIWIPETE: &str = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
 const POSITION_3: &str = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1";
@@ -111,9 +103,7 @@ proptest! {
 
     // Expected to fail until board::zobrist's documented make_move gap
     // (side to move, castling rights, en passant) is closed: this is the
-    // first point in the file that actually calls `make_move`, the same
-    // role `tests/move_gen_legal.rs`'s own
-    // `any_board_and_legal_move`-based test plays for move generation.
+    // first point in the file that actually calls `make_move`.
     #[test]
     fn hash_stays_correct_after_a_legal_move((board, m) in any_board_and_legal_move()) {
         let next = board.make_move(m);

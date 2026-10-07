@@ -1,22 +1,11 @@
 //! Concrete positions for `eval::rook_files`, each isolating the file bonus as
 //! an exact delta.
 //!
-//! Rook PST has no separate endgame half either (same
-//! `only_the_king_has_a_distinct_endgame_table` guarantee
-//! `tests/eval_bishop_pair.rs` relies on), so every delta below only needs to
-//! account for material, PST, and the file bonus: no phase arithmetic required.
-//! Every position in this file keeps its pawns and king squares byte-for-byte
-//! identical across the positions it's compared against, moving only the rook
-//! under test, so pawn-structure and king-safety (and, since piece counts never
-//! change, the phase itself) are identical on both sides of every delta and
-//! cancel out regardless of what they individually equal.
-//!
-//! The fixed background is one White pawn on a2 and one Black pawn on g7:
-//! together they give every file under test a different state depending on
-//! which file the tested rook sits on. h-file: no pawn of either colour
-//! (open). g-file: only Black's pawn (semi-open for White, since White has
-//! no pawn there). a-file: White's own pawn (closed for White, regardless
-//! of what's on it for Black).
+//! Only the rook under test moves between compared positions, so pawn
+//! structure, king safety and phase cancel, and rook PST has no endgame half,
+//! so no phase arithmetic is needed. The fixed pawns (White a2, Black g7) give
+//! each tested file a different state: h open, g semi-open for White, a closed
+//! for White.
 
 use turox_chess::board::Board;
 use turox_chess::{Color, Piece, Square};

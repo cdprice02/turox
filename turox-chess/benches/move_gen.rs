@@ -33,7 +33,7 @@ use turox_chess::move_gen::pseudo_legal::{
     castling_moves, king_moves, knight_moves, pawn_moves, pseudo_legal_moves, slider_moves,
 };
 
-// The same six standard perft positions as `tests/perft.rs`, chosen there for
+// The six standard perft positions, chosen for
 // covering structurally distinct move shapes (quiet opening, a busy
 // middlegame with both-side castling rights, an open endgame with no
 // castling, heavy promotion pressure, ...); duplicated here rather than

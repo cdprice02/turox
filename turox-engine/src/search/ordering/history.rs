@@ -231,12 +231,9 @@ mod tests {
         );
     }
 
-    // ---- History gravity ----
-    //
     // `update`'s gravity term, exercised directly rather than only through
     // the saturation tests below (which pin the eventual ceiling, not how
     // a single bonus behaves on the way there).
-
     #[test]
     fn a_bonus_moves_a_near_ceiling_cell_less_than_a_near_zero_cell() {
         let mut near_ceiling = CutoffHistory::new();

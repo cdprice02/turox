@@ -1,18 +1,10 @@
-//! Tests for `move_gen::pseudo_legal`.
+//! Tests for `move_gen::pseudo_legal`: each generator's property against a
+//! naive reference built from `Square::offset` stepping and `Board` accessors,
+//! `is_pseudo_legal`'s property against `pseudo_legal_moves` itself, and
+//! concrete positions for double pushes, en passant, promotion and castling.
 //!
-//! `pawn_moves`, `knight_moves`, `king_moves` and `slider_moves` each get a
-//! property against an independent naive reference built only from
-//! `Square::offset` stepping and `Board` accessors, never from `Bitboard`'s
-//! shift primitives, `tables` or `magic`. Move lists are compared as sorted
-//! `(from, to, flags)` triples, since `Move` has no `Ord` and generation order
-//! is not part of the contract. `is_pseudo_legal`'s contract is membership in
-//! `pseudo_legal_moves`'s output, so its property checks it against that
-//! generator rather than against another naive reference.
-//!
-//! Concrete positions cover what a naive reference built with the same stepping
-//! technique would not independently catch: double-push blocking, en passant,
-//! promotion, and `castling_moves`'s per-corner mapping, which hinges on
-//! `move_gen::attacks` rather than on move stepping at all.
+//! Move lists compare as sorted `(from, to, flags)` triples, because `Move` has
+//! no `Ord` and generation order is not part of the contract.
 
 use proptest::prelude::*;
 use turox_chess::board::Board;
@@ -43,8 +35,6 @@ const PROMO_CAPTURE: [MoveFlags; 4] = [
     MoveFlags::PromoteCaptureRook,
     MoveFlags::PromoteCaptureQueen,
 ];
-
-// ---- pawn: double push blocking ----
 
 #[test]
 fn white_double_push_blocked_by_piece_on_intermediate_square() {
@@ -107,8 +97,6 @@ fn black_double_push_blocked_by_piece_on_far_square_only() {
     ));
 }
 
-// ---- pawn: en passant ----
-
 #[test]
 fn white_en_passant_capture_is_generated() {
     let board = Board::try_from_fen("8/8/8/3pP3/8/8/8/8 w - d6 0 1").expect("valid FEN");
@@ -144,8 +132,6 @@ fn en_passant_target_set_but_no_pawn_can_reach_it_generates_nothing() {
     pawn_moves(&board, &mut list);
     assert!(!list.iter().any(|m| m.flags() == MoveFlags::EnPassant));
 }
-
-// ---- pawn: promotion ----
 
 #[test]
 fn white_quiet_promotion_generates_all_four_pieces() {
@@ -211,12 +197,9 @@ fn black_capturing_promotion_generates_all_four_pieces_alongside_quiet() {
     assert_eq!(list.len(), 8);
 }
 
-// ---- castling ----
-//
 // Concrete FEN tests, not a proptest: legality here hinges on
 // `move_gen::attacks` (already independently tested), so what's worth pinning
 // down is the per-corner rook mapping specifically.
-
 const CASTLE_BASE_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const CASTLE_BASE_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";
 
@@ -420,8 +403,6 @@ fn no_castling_moves_when_rights_are_absent() {
     assert!(list.is_empty());
 }
 
-// ---- pseudo_legal_moves: the full aggregate ----
-
 #[test]
 fn start_pos_has_exactly_twenty_pseudo_legal_moves() {
     let board = Board::start_pos();
@@ -475,12 +456,8 @@ fn sorted_naive_keys(moves: Vec<Move>) -> Vec<(u8, u8, MoveFlags)> {
     keys
 }
 
-// ---- Naive reference generators ----
-//
 // Deliberately independent of `Bitboard`'s pawn/knight/slider primitives:
-// built from `Square::offset` stepping only, same discipline as
-// `tests/move_gen_magic.rs`/`tests/move_gen_attacks.rs`.
-
+// built from `Square::offset` stepping only.
 const KNIGHT_DELTAS: [(i8, i8); 8] = [
     (1, 2),
     (2, 1),
@@ -627,15 +604,12 @@ fn naive_pawn_moves(board: &Board) -> Vec<Move> {
     moves
 }
 
-// ---- `is_pseudo_legal` ----
-//
 // Its contract is membership in `pseudo_legal_moves`'s own output, checked from both
 // directions: every move that generator actually produces must be accepted, and an
 // arbitrary `(from, to, flags)` triple must be rejected unless it happens to coincide
 // with a real one. The second direction is the one a shortcut implementation (e.g.
 // "is there a piece of the right color on `from`") would fail silently on: a stale or
 // hash-collided TT move has to be caught here, not waved through.
-
 const ALL_MOVE_FLAGS: [MoveFlags; 14] = [
     MoveFlags::Quiet,
     MoveFlags::DoublePawnPush,

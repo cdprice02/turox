@@ -1,25 +1,14 @@
-//! Tests for `search::Search` as a whole. A test aimed at one search module's
-//! own public item lives in the file named after that module instead, as
-//! `search::tt`'s do.
+//! Tests for `search::Search` as a whole: properties against `Reference`, a
+//! plain negamax over the same leaf logic, and concrete tests for mate puzzles,
+//! score conventions, time and node budgets, root randomization, and the
+//! transposition table.
 //!
-//! There is no published ground truth for search, so the properties rest on
-//! `Reference`: a plain negamax over the same leaf logic (quiescence, mate and
-//! draw scoring) the real `Search` uses, written from the definition rather
-//! than from `Search`'s code. It cannot validate quiescence's own move
-//! selection, since both sides call the same one; the concrete horizon tests
-//! cover that. The reference agrees with `Search` only while `Search` is pure
-//! alpha-beta, which is why every property stops at depth 2: late move
-//! reductions begin at depth 3, and from there a reduced move that fails low is
-//! never re-searched, so `Search` may legitimately miss what minimax finds.
-//! What a selective search does is checked by the tree-shape tests instead.
-//!
-//! Concrete tests cover what a property over arbitrary boards would not
-//! exercise: mate puzzles, score conventions, time and node budgets, root
-//! randomization, and a transposition table never changing a score. Every FEN
-//! and named move was checked against this crate's own `legal_moves` and
-//! `make_move` before being written down, not hand-analyzed or taken from a
-//! source: hand-authored FENs have been wrong here before, and a published
-//! Philidor's Legacy FEN turned out not to be a forced mate as given.
+//! The reference agrees with `Search` only while `Search` is pure alpha-beta,
+//! so every property stops at depth 2: late move reductions begin at depth 3,
+//! where a reduced move that fails low is never re-searched. It shares
+//! quiescence's move selection with `Search`, which the concrete horizon tests
+//! cover instead. Every FEN and named move was checked against `legal_moves`
+//! and `make_move` rather than analyzed by hand.
 
 #![expect(
     clippy::expect_used,
@@ -41,10 +30,7 @@ use turox_engine::eval::{evaluate, Score};
 use turox_engine::search::tt::Tt;
 use turox_engine::search::{draw, is_mate_score, CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
 
-// ---- Shared fixture ----
-
-/// Kiwipete, the wide-open middlegame position from the perft suite that
-/// `benches/perft.rs` and `benches/search.rs` also use, and what the tests
+/// Kiwipete, the wide-open middlegame position from the perft suite, and what the tests
 /// below reach for when they need a real tree rather than a constructed
 /// position. It is dense enough that an affordable depth still costs orders of
 /// magnitude more than any stop bound allows, so "it stopped" and "it ran to
@@ -93,8 +79,6 @@ const START_POS_DEPTH_NO_BOUNDED_SEARCH_REACHES: u8 = 9;
 /// prevent.
 const OPEN_MIDDLEGAME_DEPTH_6_BUDGET: u64 = 1_800_000;
 
-// ---- Concrete mate puzzles ----
-//
 // Two named, famous mating patterns rather than arbitrary constructions:
 // the back-rank mate (below, in both colors) and Philidor's Legacy, the
 // classic smothered mate (further down).
@@ -102,7 +86,6 @@ const OPEN_MIDDLEGAME_DEPTH_6_BUDGET: u64 = 1_800_000;
 // Side to move on the back-rank puzzles is deliberately pinned down
 // concretely: one puzzle for each color delivering mate, not just trusting
 // the formula symmetric by inspection.
-
 /// The back-rank mate: one of the most famous elementary mating patterns in
 /// chess, a king boxed in by its own pawns with nowhere to run from a rook
 /// or queen check along the back rank. `Ra1-a8` is the only legal move that
@@ -365,8 +348,7 @@ fn stop_flag_set_from_another_thread_is_honored() {
 }
 
 /// The one genuinely timing-sensitive test in this suite: a 100ms
-/// wall-clock deadline on a branchy position (kiwipete, the same one
-/// `benches/perft.rs`/`benches/search.rs` use) returns within a generous
+/// wall-clock deadline on a branchy position (kiwipete) returns within a generous
 /// tolerance rather than running away past its budget. Marked explicitly as
 /// the test that can be flaky on a loaded CI runner, rather than pretending
 /// a wall-clock assertion is as reliable as the rest of the suite;
@@ -453,7 +435,7 @@ fn max_nodes_only_search_unaffected_by_soft_limit() {
 }
 
 /// The behavioural half of root randomization, pinned with fixed seeds so it
-/// cannot flake. `tests/uci_session.rs` covers the session defaulting it *on*,
+/// cannot flake. The UCI session tests cover it defaulting *on*,
 /// which is inherently a sampling question; this covers what the shuffle
 /// actually does, which is not.
 ///
@@ -558,8 +540,6 @@ fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() 
     assert_eq!(near_shared.score, near_fresh.score);
 }
 
-// ---- Quiescence in check ----
-//
 // In check, `quiescence` generates evasions rather than standing pat on a
 // capture list, and keeps doing so however deep the checks go, which is an
 // unbounded check extension. Each evasion still spends a unit of `qdepth`,
@@ -576,7 +556,6 @@ fn accepted_gap_shared_table_leaks_a_stale_score_across_a_fifty_move_boundary() 
 // quiescence is handed it directly. `negamax` resolves its own board's
 // terminal case before ever calling quiescence, so routing through it would
 // test the wrong function.
-
 fn expected_quiescence(board: &Board, ply: u8, qdepth: u8, history: &mut Vec<u64>) -> i16 {
     use turox_chess::move_gen::attacks::in_check;
     use turox_engine::eval::evaluate;
@@ -683,8 +662,6 @@ fn quiescence_finds_a_mate_inside_its_own_recursion() {
     );
 }
 
-// ---- Cutoff-index instrumentation ----
-
 /// Kiwipete's own histogram at a fixed depth, pinned as a floor rather than an
 /// exact match: node counts (and so their split across the histogram) shift
 /// with pruning/ordering tuning, which is expected to happen, but a
@@ -716,8 +693,6 @@ fn negamax_first_move_cutoff_rate_does_not_regress_below_a_known_floor() {
         "first-move cutoff rate regressed to {first_move_rate:.3}, below the 0.9 floor"
     );
 }
-
-// ---- Killer-move instrumentation ----
 
 /// `CutoffStats`'s `Killer` cause count is the pre-SPRT sanity check that the
 /// killer table is actually being consulted from inside a real search, not
@@ -752,8 +727,6 @@ fn killer_table_is_consulted_during_a_real_search() {
     );
 }
 
-// ---- Mate-killer instrumentation ----
-
 /// Same shape and reasoning as `killer_table_is_consulted_during_a_real_search`
 /// above, for the mate-killer table instead: not a specific count, just proof
 /// the feature engages at all. A mate-indicating fail-high is much rarer than
@@ -787,8 +760,6 @@ fn mate_killer_table_is_consulted_during_a_real_search() {
          consulted from the real move loop"
     );
 }
-
-// ---- Cutoff history wiring ----
 
 /// The same "is this actually wired into a real move loop" question
 /// `killer_table_is_consulted_during_a_real_search` asks, for `CutoffHistory`:
@@ -851,14 +822,11 @@ fn philidors_legacy_reports_the_full_mating_line_not_just_the_first_move() {
     );
 }
 
-// ---- The three ways to stop a search ----
-//
 // One test per mechanism, each asserting that a search asked to stop actually
 // stops. Each is worth a test of its own because a broken mechanism has no
 // other symptom to offer: the tests that would notice are the ones that depend
 // on stopping in order to finish at all, so they report it by hanging rather
 // than by failing, and a hang cannot be told apart from a slow machine.
-
 /// Far below what the first few iterations below cost, so the margin survives
 /// the search getting faster. Asserting on the depth reached rather than on a
 /// node count keeps that true: node counts move every time pruning improves,
@@ -922,8 +890,6 @@ fn request_stop_before_the_search_stops_it_before_the_asked_for_depth() {
         result.depth
     );
 }
-
-// ---- Independent reference ----
 
 /// Wider than any score a search can return, so a full window never cuts off.
 const INFINITE: Score = MATE + 1;
@@ -1179,8 +1145,6 @@ const DENSE_REFERENCE_BUDGET: u64 = 4_400_000;
 /// 20,000 full-density cases took about two minutes in `--release`, nearly all
 /// of it the reference, so this is around six seconds.
 const DENSE_CASES: u32 = 1024;
-
-// ---- Properties ----
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]

@@ -12,8 +12,6 @@ use turox_chess::move_gen::legal::legal_moves;
 use turox_chess::strategies::any_board_with_legal_move;
 use turox_engine::uci::{parse, Command, GoOptions};
 
-// ---- Concrete: one command per type, from its exact spec string ----
-
 #[test]
 fn parses_uci() {
     assert_eq!(parse("uci"), Some(Command::Uci));
@@ -255,8 +253,6 @@ fn parses_setoption_for_an_unrecognized_option_name() {
         })
     );
 }
-
-// ---- Malformed input: never panics, and never guesses ----
 
 #[test]
 fn rejects_garbage_without_panicking() {

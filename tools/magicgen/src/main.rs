@@ -4,10 +4,10 @@
 //! includes them at compile time.
 //!
 //! Nothing checks that the files came from this program. What is checked, on
-//! every push, is that they are correct: `turox-chess/tests/move_gen_magic.rs`
-//! walks every relevant occupancy of every square through the public lookup
-//! and compares it with an independent ray walk. So a regeneration is reviewed
-//! by that test passing, not by reading a binary diff.
+//! every push, is that they are correct: `turox-chess`'s magic property tests
+//! walk every relevant occupancy of every square through the public lookup and
+//! compares it with an independent ray walk. So a regeneration is reviewed by
+//! that test passing, not by reading a binary diff.
 //!
 //! The search runs here rather than as a `const fn` inside the crate because
 //! const-eval is far too slow for it: a single worst-case square's table build

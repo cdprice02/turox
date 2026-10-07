@@ -1,22 +1,17 @@
-//! Tests for `eval_white_pov` and `evaluate` as a whole: the composition of
-//! every term, its mirror symmetry and sign convention, and what each term may
-//! contribute to it.
+//! Tests for `eval_white_pov` and `evaluate` as a whole: properties against a
+//! naive reference (mirror symmetry, sign convention, and a bound on each
+//! term's contribution), and concrete positions where every term is known
+//! exactly.
 //!
-//! There is no published ground truth for an evaluation, so correctness means
-//! self-consistency, symmetry, and agreement with an independent naive
-//! reference. `naive_eval_white_pov` walks the mailbox directly and shares no
-//! code with the bitboard implementation, except that it calls the real
-//! `pst::pst_value` and `pst::pst_value_eg` rather than transcribing 384 table
-//! entries, which would invite a copy-paste error unrelated to
-//! `eval_white_pov`'s own correctness. The tables are pinned instead by
-//! `tests/eval_pst.rs`. The phase computation is a mailbox walk too,
-//! reproducing the formula `eval::phase` documents rather than calling it.
-//!
-//! The per-term bound properties live here rather than with each term's own
-//! concrete tests, because each measures `eval_white_pov` against the reference
-//! with one term left out, so each needs the whole reference. Concrete
-//! positions pin what `evaluate` adds up to in a few positions where every term
-//! is known exactly.
+//! `naive_eval_white_pov` walks the mailbox square by square and shares none of
+//! the bitboard tricks, file masks or packed accumulator of the real
+//! implementation; that walk is what is being checked. Its magnitudes are not
+//! independent: weights come from `eval::weights` and table values from
+//! `pst::pst_value`, where the implementation reads them, because a tuned
+//! constant has no independent truth and a second copy would only check that
+//! two copies match. The bound properties live here rather than beside each
+//! term's concrete tests because each needs the whole reference with one term
+//! left out.
 
 #![expect(
     clippy::expect_used,
@@ -30,21 +25,6 @@ use turox_chess::{Color, Piece, Square};
 use turox_engine::eval::endgame_scale::{self, ScaleFactor};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, evaluate, weights, Score};
-
-// ---- Independent reference ----
-//
-// Independent in the way that matters: every function below walks
-// `board.piece_at` square by square and recomputes the term from scratch,
-// sharing none of the bitboard tricks, file masks, or packed accumulator the
-// real implementation uses. That walk is the thing being checked.
-//
-// The magnitudes are *not* independent, deliberately. They are imported from
-// `eval::weights`, the same place the implementation reads them. A tuned
-// constant has no independent truth to check against, so a second copy only
-// ever tested that the two copies matched, and made every retune a two-place
-// edit that failed loudly when someone updated one. What the tables and
-// weights themselves are worth is pinned separately, by structure rather than
-// by transcription; see `tests/eval_pst.rs`.
 
 /// The mg/eg halves as plain `i32`, which is what the naive walks accumulate
 /// in. `eval::weights` stores them as `(Score, Score)` because that is what
@@ -63,8 +43,7 @@ fn mg_eg(w: (Score, Score)) -> (i32, i32) {
 /// The properties below are not testing the scale factor; they bound pawn
 /// structure and king safety. The factor is a common multiplier that has to
 /// match on both sides of a deviation for those bounds to mean anything, so
-/// sharing it is what makes them correct. What the factor itself does is pinned
-/// by concrete positions in `tests/eval_endgame_scale.rs`.
+/// sharing it is what makes them correct.
 fn real_scale_factor(board: &Board) -> ScaleFactor {
     endgame_scale::scale_factor(board)
 }
@@ -843,8 +822,8 @@ proptest! {
     // Same discipline as the two bounds above, but for a term that's either
     // fully on or fully off per side rather than scaling with a count: this is
     // what would catch a per-bishop bonus (stacking past `BISHOP_PAIR_BONUS`
-    // for a third or fourth bishop) that the concrete FEN tests in
-    // `tests/eval_bishop_pair.rs` might not happen to construct.
+    // for a third or fourth bishop) that the concrete bishop-pair positions
+    // might not happen to construct.
     #[test]
     fn bishop_pair_contribution_is_bounded_by_a_fixed_amount(board in any_board()) {
         let deviation = i32::from(eval_white_pov(&board))
@@ -921,15 +900,14 @@ proptest! {
 
 /// One pawn's own net tropism contribution to `eval_white_pov` with White's
 /// king fixed at e1 and Black's at e8, the convention most bare-king-plus-pawns
-/// positions in these tests use (`tests/eval_pawn_structure.rs` and the tropism
-/// section of `tests/eval_outposts.rs` explain why). Unlike PST, which depends
-/// only on the king's own square and so cancels for free whenever a comparison
-/// holds both kings fixed, tropism depends on the king's distance to *every
-/// pawn*, so it changes whenever a pawn is added, removed, or moved even with
-/// both kings pinned. `weights::TROPISM_BONUS` sums linearly per pawn, though,
-/// so one pawn's own net contribution (White's tropism from it minus Black's)
-/// is exactly what a comparison that adds or removes that one pawn needs,
-/// independent of whatever other pawns are already on the board.
+/// positions use. Unlike PST, which depends only on the king's own square and
+/// so cancels for free whenever a comparison holds both kings fixed, tropism
+/// depends on the king's distance to *every pawn*, so it changes whenever a
+/// pawn is added, removed, or moved even with both kings pinned.
+/// `weights::TROPISM_BONUS` sums linearly per pawn, though, so one pawn's own
+/// net contribution (White's tropism from it minus Black's) is exactly what a
+/// comparison that adds or removes that one pawn needs, independent of whatever
+/// other pawns are already on the board.
 fn e1_e8_tropism_delta(sq: Square) -> Score {
     let white = weights::TROPISM_BONUS.1 * Score::from(MAX_DISTANCE - Square::E1.distance(sq));
     let black = weights::TROPISM_BONUS.1 * Score::from(MAX_DISTANCE - Square::E8.distance(sq));
@@ -968,7 +946,7 @@ fn start_position_scores_only_the_tempo_bonus() {
 //
 // Three mirrored queen pairs (b/c/g files, clear of the rook's a-file and
 // the kings' e-file) pin combined non-pawn material at exactly
-// `TOTAL_PHASE`, the same technique `tests/eval_bishop_pair.rs` uses, so
+// `TOTAL_PHASE`, the same technique the bishop-pair positions use, so
 // tempo's own contribution is `weights::TEMPO_BONUS.0` exactly rather than
 // some phase-blended fraction of it that happens to floor to the same
 // value this position's un-pinned phase would have given anyway. The

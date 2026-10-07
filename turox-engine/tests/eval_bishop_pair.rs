@@ -1,30 +1,13 @@
 //! Concrete positions for `eval::bishop_pair`, each isolating the pair bonus as
 //! an exact delta.
 //!
-//! `only_the_king_has_a_distinct_endgame_table` (in `tests/eval_pst.rs`) pins
-//! that bishop PST has no separate endgame half, and
-//! `weights::BISHOP_PAIR_BONUS` is flat across both phases too, so neither
-//! depends on what `game_phase` reads. `weights::TEMPO_BONUS` is not flat,
-//! though (`(mg, 0)`, midgame lane only, see `tests/eval_tempo.rs`), and every
-//! position here has White to move with nothing on the Black side to cancel
-//! that term against, so unlike the bishop-pair math, tempo's own contribution
-//! *does* depend on phase, and needs it pinned to a known value to stay exact.
-//!
-//! Three queens per side (mirrored, so their own material/PST cancel the
-//! same way the kings' do) lands combined non-pawn material at exactly
-//! `TOTAL_PHASE`, pinning `game_phase` to 0 and `weights::TEMPO_BONUS.0`
-//! (not some phase-blended fraction of it) as the exact tempo contribution
-//! in every position below. Queens also clear `scale_factor`'s very first
-//! check on their own: a bare king facing one or two
-//! *same-coloured* bishops is insufficient mating material, and
-//! `eval::endgame_scale` would otherwise scale that straight to zero
-//! regardless of what material/PST/pair/tempo terms summed to underneath,
-//! swallowing the exact deltas these tests want to isolate. The two-bishop
-//! positions use c1/f1, the actual starting squares, so the pair is
-//! opposite-coloured and would still score unscaled even without the
-//! queens. Kings sit on their own mirrored squares (e1/e8) in every
-//! position so their own PST and king-safety contributions cancel out too,
-//! leaving only material, bishop PST, the pair bonus, and tempo.
+//! Every position has three mirrored queens per side and kings on e1/e8. The
+//! queens pin `game_phase` to 0, so White's tempo bonus is exactly
+//! `TEMPO_BONUS.0`, and keep `endgame_scale` from scaling a bare king against
+//! same-coloured bishops to zero. Being mirrored, they and the kings cancel out
+//! of every delta, leaving material, bishop PST, the pair bonus and tempo.
+//! Bishop PST and the pair bonus are flat across phases, so the deltas need no
+//! phase arithmetic.
 
 use turox_chess::board::Board;
 use turox_chess::{Color, Piece, Square};
@@ -72,13 +55,12 @@ fn a_second_bishop_adds_its_own_value_plus_the_pair_bonus() {
 
 // Both sides having the pair must cancel out of `eval_white_pov`'s
 // White-minus-Black subtraction, not double-count by summing both sides'
-// bonuses into the same side: a `+=` on both colors instead of `+=`/`-=`
-// would break `eval_white_pov_is_mirror_antisymmetric`
-// (`tests/eval.rs`) for every mirror-symmetric board, and this pins
-// one concrete instance of that, the same way
-// `start_position_scores_only_the_tempo_bonus` pins the general property
-// for the start position. Left with only the tempo bonus rather than zero,
-// for the same reason that test is: White to move, nothing to cancel it.
+// bonuses into the same side: a `+=` on both colors instead of `+=`/`-=` would
+// break `eval_white_pov_is_mirror_antisymmetric` for every mirror-symmetric
+// board, and this pins one concrete instance of that, the same way
+// `start_position_scores_only_the_tempo_bonus` pins the general property for
+// the start position. Left with only the tempo bonus rather than zero, for the
+// same reason that test is: White to move, nothing to cancel it.
 #[test]
 fn bishop_pairs_on_both_sides_cancel_to_exactly_the_tempo_bonus() {
     let board = Board::try_from_fen("qqb1kbq1/8/8/8/8/8/8/QQB1KBQ1 w - - 0 1").expect("valid FEN");

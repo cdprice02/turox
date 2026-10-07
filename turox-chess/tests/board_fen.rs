@@ -1,4 +1,5 @@
-//! Property tests for FEN parsing/formatting (`Board::try_from_fen`/`to_fen`).
+//! Property tests for FEN parsing and formatting (`Board::try_from_fen`,
+//! `to_fen`).
 
 use proptest::prelude::*;
 use turox_chess::board::Board;
@@ -11,7 +12,7 @@ use turox_chess::strategies::{any_color, any_piece_with_king, any_square};
 /// `any_piece_with_king`, not `turox_chess::strategies::any_piece`: this file's whole point is
 /// exercising the no-king/doubled-king cases `turox_chess::strategies::any_piece`'s king-free
 /// distribution would silently stop generating.
-fn any_board() -> impl Strategy<Value = Board> {
+fn any_unvalidated_board() -> impl Strategy<Value = Board> {
     use turox_chess::ColoredPiece;
 
     proptest::collection::vec((any_color(), any_piece_with_king(), any_square()), 2..24).prop_map(
@@ -29,7 +30,7 @@ fn any_board() -> impl Strategy<Value = Board> {
 
 proptest! {
     #[test]
-    fn fen_round_trips(board in any_board()) {
+    fn fen_round_trips(board in any_unvalidated_board()) {
         let fen = board.to_fen();
         let parsed = Board::try_from_fen(&fen).expect("Board::to_fen output must parse");
         prop_assert_eq!(board, parsed);

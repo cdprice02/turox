@@ -11,12 +11,11 @@ use turox_chess::board::Board;
 use turox_engine::eval::{eval_white_pov, weights};
 
 // The start position's own non-tempo total is independently already known to be
-// exactly zero (`start_position_scores_only_the_tempo_bonus` in
-// `tests/eval.rs`, from mirror self-symmetry), so tempo is the only thing
-// either side of this delta can be: `TEMPO_BONUS` for White to move,
-// `-TEMPO_BONUS` for Black. Written as a delta anyway, so this pins both
-// magnitude and sign in one assertion rather than two separate ones that each
-// depend on the zero-baseline fact holding.
+// exactly zero (`start_position_scores_only_the_tempo_bonus`, from mirror
+// self-symmetry), so tempo is the only thing either side of this delta can be:
+// `TEMPO_BONUS` for White to move, `-TEMPO_BONUS` for Black. Written as a delta
+// anyway, so this pins both magnitude and sign in one assertion rather than two
+// separate ones that each depend on the zero-baseline fact holding.
 #[test]
 fn tempo_favors_whoever_is_actually_to_move() {
     let white_to_move = Board::start_pos();

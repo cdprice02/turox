@@ -1,38 +1,16 @@
 //! Concrete positions for `eval::pawn_structure`, each checked against a
 //! hand-computed integer.
 //!
-//! Every position below has only kings and pawns, so `game_phase` reads
-//! its maximum (no non-pawn material to subtract from `TOTAL_PHASE`),
-//! which lands on exactly 256: pure endgame, not just close to it. At that
-//! exact extreme `interpolate` returns the `eg` half of the packed total
-//! with no rounding (`eg * 256 / 256` is exact), so comparisons below are
-//! checked against hand-computed integers, not approximations.
+//! Every position has only kings and pawns, so `game_phase` is exactly 256 and
+//! `interpolate` returns the endgame half with no rounding. Kings stay on e1/e8
+//! in both positions of a pair, so their PST cancels. Tropism does not cancel,
+//! because it depends on every pawn's distance to each king;
+//! `e1_e8_tropism_delta` gives one pawn's net contribution, and since tropism
+//! sums linearly, adding or removing a pawn moves the total by exactly that
+//! pawn's delta.
 //!
-//! Every pair keeps White's and Black's king on the same square in both
-//! positions being compared (e1/e8 throughout), so the kings' own (nonzero)
-//! piece-square contribution cancels out of the difference and doesn't
-//! need to be computed by hand at all; only the pawns being added or moved
-//! matter for that part.
-//!
-//! `eval::outposts`'s tropism term doesn't get the same free cancellation,
-//! though, even with both kings held fixed: unlike PST, which depends only
-//! on the king's own square, tropism depends on the king's distance to
-//! *every pawn* on the board, so it changes whenever a pawn is added,
-//! removed, or moved, which is exactly what every test below does.
-//! `e1_e8_tropism_delta` computes one pawn's own net contribution (White's
-//! tropism from it minus Black's) with both kings pinned at e1/e8; because
-//! tropism sums linearly per pawn, adding or removing a single pawn moves
-//! the total by exactly that pawn's own delta, independent of whatever
-//! other pawns are already on the board, so isolating one pawn's tropism
-//! contribution doesn't require recomputing the whole position's total.
-//!
-//! White's pawn PST (endgame == midgame for pawns; only the king has a separate
-//! endgame table) by rank on the d-file: d2 -20, d4 +20, d5 +25, d6 +30 (the
-//! same numbers `a_central_pawn_push_changes_pst_but_not_material` in
-//! `tests/eval.rs` and the orientation anchors in `tests/eval_pst.rs` already
-//! pin down). Black's d7 is -20 (its own mirrored anchor there); Black's d4 is
-//! +25 and e3 (White) is 0, read the same way, by working through
-//! `pst::pst_value`'s doc.
+//! Pawn PST values the expected numbers use: White d2 -20, d4 +20, d5 +25, d6
+//! +30, e3 0; Black d7 -20, d4 +25.
 
 use turox_chess::board::Board;
 use turox_chess::{Color, Piece, Square};
@@ -41,21 +19,19 @@ use turox_engine::eval::{eval_white_pov, weights, Score};
 
 /// The longest possible `Square::distance` (Chebyshev) between two squares
 /// on an 8x8 board, reproduced here independently of the private
-/// `eval::outposts::MAX_DISTANCE` (unreachable from this integration-test
-/// crate), the same reason `tests/eval.rs` reproduces its own copy.
+/// `eval::outposts::MAX_DISTANCE` (unreachable from this integration-test crate).
 const MAX_DISTANCE: u8 = 7;
 
 /// One pawn's own net tropism contribution to `eval_white_pov` with White's
-/// king fixed at e1 and Black's at e8, the convention most bare-king-plus-pawns
-/// positions in this file use (the module doc and the tropism section of
-/// `tests/eval_outposts.rs` explain why). Unlike PST, which depends only on the
-/// king's own square and so cancels for free whenever a comparison holds both
-/// kings fixed, tropism depends on the king's distance to *every pawn*, so it
-/// changes whenever a pawn is added, removed, or moved even with both kings
-/// pinned. `weights::TROPISM_BONUS` sums linearly per pawn, though, so one
-/// pawn's own net contribution (White's tropism from it minus Black's) is
-/// exactly what a comparison that adds or removes that one pawn needs,
-/// independent of whatever other pawns are already on the board.
+/// king fixed at e1 and Black's at e8, the convention every position in this
+/// file uses. Unlike PST, which depends only on the king's own square and so
+/// cancels for free whenever a comparison holds both kings fixed, tropism
+/// depends on the king's distance to *every pawn*, so it changes whenever a
+/// pawn is added, removed, or moved even with both kings pinned.
+/// `weights::TROPISM_BONUS` sums linearly per pawn, though, so one pawn's own
+/// net contribution (White's tropism from it minus Black's) is exactly what a
+/// comparison that adds or removes that one pawn needs, independent of whatever
+/// other pawns are already on the board.
 fn e1_e8_tropism_delta(sq: Square) -> Score {
     let white = weights::TROPISM_BONUS.1 * Score::from(MAX_DISTANCE - Square::E1.distance(sq));
     let black = weights::TROPISM_BONUS.1 * Score::from(MAX_DISTANCE - Square::E8.distance(sq));

@@ -1,15 +1,13 @@
 //! Concrete tests for `eval::endgame_scale`: which positions produce which
-//! scale factor, and the `ScaleFactor` arithmetic itself, kept apart so a
-//! change to the fixed-point representation fails in the arithmetic tests
-//! rather than as an unexplained drift in a position test.
+//! scale factor, and the `ScaleFactor` arithmetic on its own, so a change to
+//! the fixed-point representation fails in an arithmetic test rather than as
+//! unexplained drift in a position test.
 
 use turox_chess::board::Board;
 use turox_chess::strategies::mirrored;
 use turox_engine::eval::endgame_scale::{scale_factor, ScaleFactor};
 use turox_engine::eval::{eval_white_pov, Score};
 
-// ---- Endgame scale factors ----
-//
 // Every position below keeps the two kings on asymmetric squares (one
 // centralized, one cornered) rather than mirroring each other: a
 // self-mirror-symmetric *placement* here is also the bare-kings KK draw
@@ -19,7 +17,6 @@ use turox_engine::eval::{eval_white_pov, Score};
 // `endgame_scale::scale` did nothing at all. Forcing a real, otherwise
 // nonzero, king-PST or material asymmetry down to exactly 0 is what
 // actually exercises the scale factor.
-
 #[test]
 fn bare_kings_score_exactly_zero_despite_asymmetric_king_placement() {
     let board = Board::try_from_fen("7k/8/8/8/4K3/8/8/8 w - - 0 1").expect("valid FEN");
@@ -144,13 +141,6 @@ fn same_colored_bishops_with_an_extra_pawn_are_not_scaled_down() {
     let board = Board::try_from_fen("b3k3/8/8/8/3P4/8/8/1B2K3 w - - 0 1").expect("valid FEN");
     assert!(eval_white_pov(&board) > 80);
 }
-
-// ---- ScaleFactor arithmetic ----
-//
-// The factor's own behaviour, separate from which positions produce which
-// factor. The concrete endgame positions above cover the second question; these
-// cover the first, so a change to the fixed-point representation fails here
-// rather than showing up as an unexplained centipawn drift in a position test.
 
 /// The identity has to be exact, including for negative scores: it is the
 /// common case by far, so a rounding error here would be a constant small bias

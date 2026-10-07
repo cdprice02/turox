@@ -1,11 +1,11 @@
-//! Tests for `Move::to_uci` and `Move::from_uci`.
+//! Tests for `Move::to_uci` and `Move::from_uci`: a round-trip property over
+//! every legal move, and concrete UCI strings for castling, promotion and en
+//! passant.
 //!
-//! A property round-trips every legal move in every generated position.
-//! Concrete positions cover what it cannot: `any_board()` never generates an en
-//! passant state (see its own doc), so en passant is tested directly, and the
-//! castling and promotion tests pin the exact UCI strings, which a round trip
-//! alone would not catch if both directions agreed with each other and
-//! disagreed with the UCI spec.
+//! A round trip cannot catch both directions agreeing with each other and
+//! disagreeing with the UCI spec, which is what the concrete strings pin. En
+//! passant is concrete-only because `any_board()` never generates an en passant
+//! state.
 
 #![expect(
     clippy::expect_used,
@@ -19,13 +19,10 @@ use turox_chess::strategies::any_board_with_legal_move;
 use turox_chess::types::MoveFlags;
 use turox_chess::{Move, Square};
 
-// ---- Concrete castling: all four corners ----
-//
 // All four corners get checked explicitly rather than trusting symmetry.
 // Confirmed via `legal_moves` directly (not assumed) that this FEN produces exactly
 // `Ra1-c1`/`Rh1-g1`-shaped castles for whichever color is to move, spelled
 // by the king's own destination per UCI (`e1g1`, not `e1h1`).
-
 const OPEN_CASTLE_POSITION_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const OPEN_CASTLE_POSITION_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";
 
@@ -66,14 +63,11 @@ fn black_queenside_castle_is_e8c8() {
     assert_eq!(m.to_uci(), "e8c8");
 }
 
-// ---- Concrete promotion: all four pieces ----
-//
 // All four promotion moves here share the exact same `from`/`to`
 // (`a7a8`), differing *only* in which piece they promote to (confirmed via
 // `legal_moves` directly): the one case where `from_uci` has to actually
 // use the parsed promotion letter to disambiguate, not just match on
 // `from`/`to` alone.
-
 const PROMOTION_POSITION: &str = "8/P7/8/8/8/8/8/4k2K w - - 0 1";
 
 #[test]
@@ -129,8 +123,6 @@ fn capture_promotion_suffixes_round_trip() {
     }
 }
 
-// ---- Concrete en passant ----
-
 const EN_PASSANT_POSITION: &str = "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1";
 
 #[test]
@@ -146,8 +138,6 @@ fn en_passant_capture_round_trips() {
     assert_eq!(ep.to_uci(), "e5d6");
     assert_eq!(Move::from_uci("e5d6", moves.as_slice()), Some(ep));
 }
-
-// ---- Malformed input never panics ----
 
 #[test]
 fn from_uci_rejects_garbage_without_panicking() {

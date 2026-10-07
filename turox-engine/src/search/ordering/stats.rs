@@ -1,8 +1,8 @@
 //! How often each ordering technique earned its place.
 //!
-//! Reported on every UCI `info` line and asserted on directly by
-//! `tests/search.rs`, which is the only check that a technique is doing
-//! anything before an SPRT measures whether it wins games.
+//! Reported on every UCI `info` line and asserted on directly by the search
+//! tests, the only check that a technique is doing anything before an SPRT
+//! measures whether it wins games.
 
 use turox_macros::Ordinal;
 

@@ -1,16 +1,12 @@
-//! Tests for `book`: the opening book's file format and lookup.
-//!
-//! Property tests cover what has to hold for every hash, candidate set and
-//! seed: the chosen move is always among the position's candidates, and with a
-//! seeded RNG repeated calls are not always identical. Concrete tests pin what
-//! a property would not reliably hit: round-tripping through bytes, rejecting a
-//! short or mismatched header, the weighting actually mattering, and the
-//! shipped book's opening names.
+//! Tests for `book`, the opening book's file format and lookup: properties over
+//! every hash, candidate set and seed, and concrete tests for byte round-trips,
+//! header rejection, weighting, and the shipped book's opening names.
 
 use proptest::prelude::*;
 use turox_chess::board::Board;
 use turox_chess::book::{default_book, Book, BookLoadError, BookMove};
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_square;
 use turox_chess::{Move, MoveFlags, Square};
 
 /// A `BookMove`'s `(from, to, flags, weight)`, used to compare book contents
@@ -311,18 +307,6 @@ fn the_shipped_book_does_not_name_the_start_position() {
         Board::start_pos().hash(),
         "the knights return to the start position, which is the case this guards"
     );
-}
-
-/// Every `Square`, as an index for building distinct moves without pulling
-/// in `tests/common`'s move-generation-oriented `any_square` (this file has
-/// no need for `Board` at all: a book entry is just a hash and a set of
-/// moves, board-independent by construction).
-#[expect(
-    clippy::expect_used,
-    reason = "clippy.toml's allow-expect-in-tests reaches #[test] fns, not a plain helper like this one"
-)]
-fn any_square() -> impl Strategy<Value = Square> {
-    (0u8..64).prop_map(|i| Square::from_u8(i).expect("i in 0..64"))
 }
 
 fn any_move() -> impl Strategy<Value = Move> {

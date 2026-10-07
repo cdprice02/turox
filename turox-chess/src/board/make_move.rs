@@ -203,16 +203,12 @@ mod tests {
         }
     }
 
-    // ---- make_move ----
-    //
     // FEN-based scenario tests, one per rule, rather than a proptest here:
-    // `tests/move_gen_legal.rs` already proptests make_move end to end (random
-    // position, random legal move via `legal_moves`, internal-consistency and
-    // FEN-round-trip check), but a failure there only says "some move on some
-    // position broke something." These name the specific rule (double-push
+    // `make_move_after_a_legal_move_stays_internally_consistent_and_fen_round_trips`
+    // covers make_move end to end, but a failure there only says "some move on
+    // some position broke something." These name the specific rule (double-push
     // clock reset, castling rook relocation, en passant capture, ...) so a
     // regression fails with a test name that points straight at it.
-
     #[test]
     fn quiet_move_relocates_piece_and_flips_side_to_move() {
         let board = Board::start_pos();

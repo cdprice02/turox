@@ -1,24 +1,18 @@
-//! Concrete positions for `eval::outposts`: the outpost bonus and king-pawn
-//! tropism, the two terms that module computes. Each isolates one term as an
-//! exact delta; each section's opening comment explains how the rest of the
-//! position is held fixed to make that possible.
+//! Concrete positions for `eval::outposts`'s outpost bonus and king-pawn
+//! tropism, each isolating one term as an exact delta.
 
 use turox_chess::board::Board;
 use turox_chess::{Color, Piece, Square};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 use turox_engine::eval::{eval_white_pov, weights, Score};
 
-// ---- Outposts ----
-//
 // `weights::OUTPOST_BONUS` is flat across both phases, so isolating it only
 // needs the background (pawns, kings) held byte-for-byte identical between the
-// "no minor" and "minor added" positions being compared, the same delta
-// discipline `tests/eval_rook_files.rs` uses. `weights::TEMPO_BONUS` is not
-// flat, though, so three mirrored queen pairs pin phase to exactly zero in
-// every position below (the same technique `tests/eval_bishop_pair.rs` and
-// `tests/eval_tempo.rs` use), keeping tempo's own contribution identical on
-// both sides of every delta regardless of the one extra piece of non-pawn
-// material an added knight brings.
+// "no minor" and "minor added" positions being compared. `weights::TEMPO_BONUS`
+// is not flat, though, so three mirrored queen pairs pin phase to exactly zero
+// in every position below, keeping tempo's own contribution identical on both
+// sides of every delta regardless of the one extra piece of non-pawn material
+// an added knight brings.
 //
 // White's pawn on c4 defends d5 and no enemy pawn exists anywhere, so d5 is a
 // real outpost per
@@ -63,18 +57,13 @@ fn a_black_knight_on_a_defended_unreachable_square_scores_the_outpost_bonus() {
     );
 }
 
-// ---- King-pawn tropism ----
-//
 // `weights::TROPISM_BONUS` packs `(0, eg)`, endgame lane only, the mirror image
 // of tempo's `(mg, 0)`. A single pawn (d5) with only bare kings otherwise gives
 // `game_phase` its pure-endgame extreme (256) with no filler needed: pawns
 // carry zero phase weight, so `game_phase` never sees anything to blend away
-// from 256 regardless of how many exist, unlike `tests/eval_tempo.rs`, which
-// needed bare kings specifically because *any* other piece would have pulled
-// phase off that extreme. King safety vanishes entirely here too (its own `eg`
+// from 256 regardless of how many exist. King safety vanishes entirely here too (its own `eg`
 // half is always zero, the same reason `SHELTER_PENALTY` is `(x, 0)`), leaving
 // only king PST and tropism itself to account for.
-
 #[test]
 fn a_closer_king_scores_more_tropism_in_a_pure_endgame() {
     let near = Board::try_from_fen("7k/8/8/3P4/8/3K4/8/8 w - - 0 1").expect("valid FEN");
@@ -91,7 +80,7 @@ fn a_closer_king_scores_more_tropism_in_a_pure_endgame() {
     );
 }
 
-// Same phase-pinning as the Outposts section above (three mirrored queen
+// Same phase-pinning as the outpost positions (three mirrored queen
 // pairs, `game_phase` exactly 0): if tropism leaked into the midgame lane,
 // this delta would carry an extra term the expected value below doesn't
 // account for. D2 and H1 are chosen to sit at different distances from d5

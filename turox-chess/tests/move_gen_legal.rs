@@ -1,19 +1,12 @@
-//! Tests for `move_gen::legal`: `legal_moves` and its naive reference,
-//! `legal_moves_naive`.
+//! Tests for `move_gen::legal`: properties for `legal_moves_naive` and for
+//! `legal_moves`'s agreement with it, and concrete positions for checks, pins,
+//! en passant, checkmate and stalemate.
 //!
-//! `legal_moves_naive`'s contract *is* "pseudo-legal moves filtered by
-//! post-move king safety", so there is no independent technique to check it
-//! against beyond the definition. Its property states that definition as two
-//! one-directional properties of the returned list (every legal move is safe;
-//! every dropped pseudo-legal move was not) rather than rebuilding an expected
-//! list with the same filter, which would share any mistake in it, such as
-//! checking the wrong side's king. `legal_moves`, the pin-set fast path, is
-//! then checked for exact set agreement with `legal_moves_naive`.
-//!
-//! Concrete positions cover the classic cases a subtly wrong filter gets wrong:
-//! king moves into and out of check, pins, discovered checks, the en passant
-//! discovered-check position, and checkmate and stalemate producing an empty
-//! list.
+//! `legal_moves_naive`'s contract is its definition, pseudo-legal moves
+//! filtered by king safety, so its property states that definition from both
+//! directions (every returned move is safe, every dropped one was not) rather
+//! than rebuilding the list with the same filter, which would share any mistake
+//! in it.
 
 use proptest::prelude::*;
 use std::collections::HashSet;
@@ -214,16 +207,9 @@ proptest! {
     }
 }
 
-// ---- make_move stays correct on genuinely reachable positions ----
-//
-// `board/mod.rs`'s own unit tests check `make_move` against hand-picked FEN
-// scenarios; this is the first point in the crate where an arbitrary
-// *legal* move is actually available, so it's the first point a proptest
-// covering the same invariant makes sense.
-
 /// Every (color, piece) bitboard pair is disjoint and their union is exactly
 /// `occupied()`, and the mailbox agrees with the bitboards at every square.
-/// Same invariant `board/mod.rs`'s own (private) `assert_board_is_internally_consistent`
+/// Same invariant `Board`'s private `assert_board_is_internally_consistent`
 /// checks; duplicated here rather than imported since integration tests only
 /// see the crate's public API.
 fn assert_internally_consistent(board: &Board) {

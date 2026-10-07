@@ -89,7 +89,7 @@ impl SearchResult {
 /// move, score, depth and node count are the same result even though they
 /// took different amounts of time.
 ///
-/// Without this, `tests/search.rs`'s `search_is_deterministic` would
+/// Without this, `search_is_deterministic` would
 /// compare two timings and fail essentially always, and weakening that test
 /// to dodge the problem would give up the check it exists for.
 ///

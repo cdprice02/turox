@@ -1,25 +1,12 @@
 //! Concrete positions for `eval::king_safety`, each isolating one term as an
 //! exact delta.
 //!
-//! Every `eval::king_safety` term packs `(mg, 0)`: an `eg` of zero. That
-//! makes every position below need *some* non-pawn material on the board,
-//! unlike `tests/eval_pawn_structure.rs`, which got away with bare kings
-//! and pawns: at `game_phase`'s pure-endgame extreme (256, no non-pawn
-//! material at all), `interpolate` returns the `eg` half with no blending,
-//! which for a king-safety term is always exactly 0. Testing the term's
-//! real effect needs a phase away from that extreme.
-//!
-//! Every FEN below carries the same fixed filler army on ranks 4 and 5 (a
-//! White queen, two rooks, two bishops, two knights on rank 4; the Black
-//! mirror on rank 5) for exactly that reason: 4 + 2 + 2 + 1 + 1 + 1 + 1 =
-//! 12 per side, 24 combined, which is `TOTAL_PHASE` exactly, so
-//! `game_phase` reads 0 (pure midgame) and `interpolate` reduces to the
-//! `mg` half with no rounding at all. The filler never moves between any
-//! two positions being compared and never shares a file or rank with
-//! anything under test, so its own material and PST contributions are
-//! identical on both sides of every delta below and cancel out; only its
-//! existence (to hold the phase at 0) matters. Kings and king-adjacent
-//! pawns stay on ranks 1/2 and 7/8, well clear of it.
+//! King-safety terms are midgame-only, so every FEN carries the same filler
+//! army (a queen, two rooks, two bishops and two knights per side, on ranks 4
+//! and 5) that sums to `TOTAL_PHASE` and pins `game_phase` to 0, where
+//! `interpolate` returns the midgame half exactly. The filler never moves and
+//! never shares a file or rank with anything under test, so it cancels out of
+//! every delta.
 
 use turox_chess::board::Board;
 use turox_chess::{Color, Piece, Square};
@@ -35,8 +22,7 @@ use turox_engine::eval::pst::pst_value;
 // king stands, since neither depends on the king's square. Only two things
 // differ: the king's own PST value at its two squares (computed here via
 // `pst_value` rather than transcribed, the same discipline
-// `full_phase_material_total_matches_pure_midgame_sum` in `tests/eval_phase.rs`
-// uses), and king safety itself.
+// `full_phase_material_total_matches_pure_midgame_sum` uses), and king safety itself.
 //
 // At d1: zone files c/d/e all have a White pawn on them, so neither
 // `SHELTER_PENALTY` nor `OPEN_FILE_PENALTY` applies to any of the three;

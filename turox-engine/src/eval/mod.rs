@@ -5,12 +5,12 @@
 //! blended between midgame and endgame by `phase`. The submodule list is the
 //! term list; repeating it here is how it goes stale.
 //!
-//! `eval_white_pov` is the absolute (White-relative) sum of terms;
-//! `evaluate` is the side-to-move-relative wrapper negamax search wants.
-//! Kept as two functions rather than one: the mirror-symmetry property test
-//! in `tests/eval.rs` (`eval_white_pov(b) == -eval_white_pov(mirrored(b))`)
-//! is only cleanly expressible against the absolute version, and a printed
-//! eval breakdown is readable in White-POV and confusing in side-relative.
+//! `eval_white_pov` is the absolute (White-relative) sum of terms; `evaluate`
+//! is the side-to-move-relative wrapper negamax search wants. Kept as two
+//! functions rather than one: the mirror-symmetry property (`eval_white_pov(b)
+//! == -eval_white_pov(mirrored(b))`) is only cleanly expressible against the
+//! absolute version, and a printed eval breakdown is readable in White-POV and
+//! confusing in side-relative.
 
 use crate::eval::pst::{pst_value, pst_value_eg};
 use turox_chess::board::Board;
@@ -85,8 +85,7 @@ const TERMS: &[fn(&Board, Color) -> phase::Tapered] = &[
 ///
 /// Iterates `board.pieces` (a `Bitboard`, so `for sq in ...` walks its set
 /// squares), not `board.piece_at` over `Square::ALL`: the mailbox walk is
-/// reserved for `tests/eval.rs`'s independent reference, which this
-/// gets checked against and shouldn't share code with.
+/// reserved for the naive reference this gets checked against, which shouldn't share code with it.
 #[must_use]
 pub fn eval_white_pov(board: &Board) -> Score {
     let mut score: phase::Tapered = 0;

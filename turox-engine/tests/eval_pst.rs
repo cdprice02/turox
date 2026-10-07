@@ -1,24 +1,19 @@
-//! Concrete tests for `eval::pst`, the piece-square tables.
+//! Concrete tests for `eval::pst`: orientation anchors that pin single squares
+//! to their documented values, and structural tests that pin each table's
+//! shape.
 //!
-//! Orientation anchors pin single squares to their documented values, which the
-//! mirror-symmetry property in `tests/eval.rs` cannot see on its own.
-//! Structural tests pin the shape of every table rather than any value in it,
-//! so they survive a retune and catch a sign typo anywhere in the 64 squares.
+//! The anchors catch what mirror symmetry cannot, a table that is swapped or
+//! reversed consistently. The shape tests survive a retune, and catch a dropped
+//! minus sign on any of the 64 squares, where an anchor only covers the square
+//! it names.
 
 use turox_chess::{Color, Piece, Square};
 use turox_engine::eval::pst::{pst_value, pst_value_eg};
 
-// ---- PST orientation anchors ----
-//
-// The one thing the symmetric-position tests in `tests/eval.rs` can't
-// catch on their own: a swapped-but-still-internally-consistent table (or a
-// reindexing that reverses the wrong axis) can still pass every property
-// there while producing an engine that develops backwards. -20 appears
-// exactly once in the pawn table (d2/e2, the "stop blocking your own center
-// pawns" penalty) so it's an unambiguous anchor: getting the visual-to-LERF
-// reindex or the Black flip_rank backwards lands on a distinctly different
-// number, not a coincidentally-equal one.
-
+// -20 appears exactly once in the pawn table (d2/e2, the "stop blocking your
+// own center pawns" penalty) so it's an unambiguous anchor: getting the
+// visual-to-LERF reindex or the Black flip_rank backwards lands on a distinctly
+// different number, not a coincidentally-equal one.
 #[test]
 fn white_pawn_second_rank_penalty_lands_on_the_documented_square() {
     assert_eq!(pst_value(Color::White, Piece::Pawn, Square::D2), -20);
@@ -28,19 +23,6 @@ fn white_pawn_second_rank_penalty_lands_on_the_documented_square() {
 fn black_pawn_reads_the_same_penalty_on_its_own_mirrored_square() {
     assert_eq!(pst_value(Color::Black, Piece::Pawn, Square::D7), -20);
 }
-
-// ---- Piece-square table structure ----
-//
-// These pin the *shape* of the tables rather than any value in them, which is
-// what makes them survive a retune: every one stays true for any table anyone
-// would plausibly write, so a future tuning pass changes numbers here without
-// touching a single assertion.
-//
-// That shape is also what catches a typo. Mutation testing found 29 surviving
-// mutants in `eval::pst`, the largest cluster in the crate, every one of them
-// deleting a minus sign from a table literal. Concrete per-square anchors miss
-// those by construction: they pin the squares someone thought to name, and a
-// typo lands anywhere. Symmetry covers all 64 at once.
 
 /// The three file-mirror pairs where the queen's table is genuinely asymmetric,
 /// as White sees them. This reproduces a known asymmetry in Michniewski's

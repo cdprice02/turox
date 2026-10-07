@@ -3,9 +3,9 @@
 //! rather than the per-call microbenchmarks `benches/move_gen.rs` reports.
 //!
 //! Depths chosen to land in the low millions of nodes (`startpos` depth 5,
-//! ~4.9M; `kiwipete` depth 4, ~4.1M; same depths as `tests/perft.rs`'s
-//! `#[ignore]`d cases), so a single Criterion sample is seconds, not the
-//! tens of minutes a depth-6+ perft would take.
+//! ~4.9M; `kiwipete` depth 4, ~4.1M; the same depths as perft's `#[ignore]`d
+//! test cases), so a single Criterion sample is seconds, not the tens of
+//! minutes a depth-6+ perft would take.
 //!
 //! Measured on this machine (release), before/after the `in_check` and
 //! `legal_moves` changes in this same PR (both positions here load via
