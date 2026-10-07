@@ -1,0 +1,21 @@
+[package]
+name = "magicgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# Matches turox-chess's floor, which this depends on.
+rust-version = "1.87"
+
+# A workspace member for the same reason as bookgen: every `--workspace`
+# command reaches it, so its tests run on every push and its lints are the
+# ones the engine answers to.
+[lints]
+workspace = true
+
+[dependencies]
+turox-chess = { path = "../../turox-chess" }
+turox-rng = { path = "../../turox-rng" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+turox-chess = { path = "../../turox-chess", features = ["strategies"] }

@@ -6,9 +6,7 @@
 # question worth asking. A mutant that survives because no test covers it is a
 # test gap and belongs in the report; only code whose behaviour nothing should
 # depend on belongs here.
-#
-# `move_gen/magic/regen.rs` is deliberately absent: the whole module is
-# `#[cfg(test)]`, so no mutant is generated for it in the first place.
+
 # Every mutant is tested against the whole workspace's tests, not only those of
 # the crate it lives in. Stated rather than left to the default, which is the
 # opposite, because it decides what the score means.

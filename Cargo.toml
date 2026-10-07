@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "tools/bookgen",
+    "tools/magicgen",
     "turox-chess",
     "turox-cli",
     "turox-engine",

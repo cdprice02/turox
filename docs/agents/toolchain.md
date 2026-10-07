@@ -25,8 +25,9 @@ why each of these exists; this file is the lookup.
 | fuzz              | `cargo fuzz run fen --fuzz-dir turox-fuzz`                            |
 | mutants, scoped   | `cargo mutants -p turox-engine --file '**/NAME.rs'`                    |
 | coverage          | `cargo llvm-cov --workspace`                                          |
-| opening book names | `cargo run -p bookgen --features fetch --bin name-book -- --input turox-chess/src/book/opening.bin` |
+| opening book names | `cargo run -p bookgen --features fetch --bin name-book -- --input turox-chess/data/book/opening.bin` |
 | SPRT opening suite | `cargo run -p bookgen --features fetch --bin generate-openings`      |
+| magic tables      | `cargo run -p magicgen --release`                                     |
 
 Both book commands reach the network, which is why they sit behind
 `--features fetch` rather than in a default build: five requests to a pinned
@@ -34,13 +35,20 @@ Both book commands reach the network, which is why they sit behind
 spaced retry. They are run by hand when the checked-in artifact needs
 regenerating, never as part of a build or a test.
 
+`magicgen` is run by hand the same way, after changing the magic search or its
+seed. It rewrites the four `.bin` files in `turox-chess/data/magic/`.
+Nothing checks that the committed files came from it; what is checked, on every
+push, is that they are right: `tests/magic_props.rs` walks every relevant
+occupancy of every square through the lookup and compares it with a naive ray
+walk. Review a regeneration by that test passing, not by its binary diff.
+
 ## What lives in `tools/`
 
 Anything not shipped to a chess GUI. `turox-engine`, `turox-cli` and
 `turox-macros` are the engine; everything that measures it, feeds it, or checks
-the repo around it lives here, in whatever language suits the job. `bookgen` is
-a workspace member despite living here, so every `--workspace` command reaches
-it; `turox-fuzz` stays outside because it needs a different toolchain, which is
+the repo around it lives here, in whatever language suits the job. `bookgen` and
+`magicgen` are workspace members despite living here, so every `--workspace`
+command reaches them; `turox-fuzz` stays outside because it needs a different toolchain, which is
 a different reason from the one `bookgen` used to have.
 
 Two rules, both learned rather than assumed:

@@ -9,13 +9,15 @@
 //! Every property here pairs a `Square` with an arbitrary `occupied: Bitboard`
 //! (2^64 values), a genuinely unbounded domain, which is what `proptest`'s
 //! random sampling is for. The `Square`-only checks (fixed `Bitboard::ALL`)
-//! live as plain exhaustive `#[test]`s in `move_gen/magic/mod.rs`'s own test
+//! live as plain exhaustive `#[test]`s in `move_gen/magic.rs`'s own test
 //! module instead: no unbounded domain there for `proptest` to be worth its
 //! overhead over a loop, and it's a unit-level check of that module's own
 //! functions, not a cross-module integration property.
 
 use proptest::prelude::*;
-use turox_chess::move_gen::magic::{bishop_attacks, queen_attacks, rook_attacks};
+use turox_chess::move_gen::magic::{
+    bishop_attacks, bishop_mask, queen_attacks, rook_attacks, rook_mask,
+};
 use turox_chess::strategies::{any_bitboard, any_square};
 use turox_chess::{Bitboard, Square};
 
@@ -97,6 +99,24 @@ fn naive_relevant_mask(sq: Square, dirs: &[(i8, i8)]) -> Bitboard {
         }
     }
     mask
+}
+
+/// The masks decide the table layout the generator writes and the lookup
+/// reads, so each must be exactly the squares between `sq` and the edge.
+#[test]
+fn masks_match_the_naive_walk_on_every_square() {
+    for sq in Square::ALL {
+        assert_eq!(
+            rook_mask(sq),
+            naive_relevant_mask(sq, &ROOK_DIRS),
+            "rook on {sq:?}"
+        );
+        assert_eq!(
+            bishop_mask(sq),
+            naive_relevant_mask(sq, &BISHOP_DIRS),
+            "bishop on {sq:?}"
+        );
+    }
 }
 
 /// Checks the committed tables against the naive walk at every occupancy they

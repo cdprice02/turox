@@ -5,38 +5,87 @@
 //! restricted to that mask, down to a small table index: a lookup instead of a ray walk
 //! on every call.
 //!
-//! The `Magic` parameters and `ROOK_ATTACKS`/`BISHOP_ATTACKS` tables below are
-//! precomputed and committed (`magics.rs`, `rook_attacks.bin`/`bishop_attacks.bin`);
-//! `regen` is the `#[cfg(test)]`-only search that found them and keeps them honest
-//! against drift.
+//! Two things here are found by search rather than derived, and are included as
+//! data from `data/magic/`: the multipliers (`rook_magics.bin`/`bishop_magics.bin`)
+//! and the attack tables they index (`rook_attacks.bin`/`bishop_attacks.bin`).
+//! The `magicgen` tool writes all four. Everything else about a square's hash follows from its
+//! mask, and is computed here at compile time.
 
-use crate::types::bitboard::Bitboard;
+use crate::types::bitboard::{Bitboard, Direction};
 use crate::types::square::Square;
 
-mod magics;
-#[cfg(test)]
-mod regen;
+/// The four rook ray directions, as data rather than a piece distinction to
+/// branch on: `relevant_mask` and `magics` do the same work for either set.
+const ROOK_DIRS: [Direction; 4] = [
+    Direction::North,
+    Direction::South,
+    Direction::East,
+    Direction::West,
+];
 
-use magics::{BISHOP_MAGICS, ROOK_MAGICS};
+/// The four bishop ray directions.
+const BISHOP_DIRS: [Direction; 4] = [
+    Direction::NorthEast,
+    Direction::NorthWest,
+    Direction::SouthEast,
+    Direction::SouthWest,
+];
 
-/// `1 << 12`: the worst-case rook mask popcount across all 64 squares (e.g. a
-/// rook on `a1`: 6 file squares + 6 rank squares, each excluding its far edge).
-/// Not every square's slice is this long: `Magic::offset` plus this square's
-/// actual `1 << mask.count_ones()` is what `ROOK_ATTACKS` actually reserves for
-/// it; this is only the sum's upper bound, used to size that flat array.
+/// The relevant occupancy mask for a slider on `sq` moving along `dirs`:
+/// squares whose occupancy can actually change the attack set.
+///
+/// Drops each ray's terminal square by shifting the full unblocked ray one
+/// step further (off the board) and back, rather than reasoning per square
+/// about which edge a ray dies on: `occluded_fill(sq.bitboard(), ALL,
+/// dir).shift(dir).shift(dir.opposite())`. A rook standing on `FILE_A` has its
+/// entire north/south mask living on `FILE_A`, so subtracting that edge
+/// outright would wipe out real blocker squares, not just the terminus.
+const fn relevant_mask(sq: Square, dirs: [Direction; 4]) -> Bitboard {
+    let mut mask = Bitboard::EMPTY;
+    let mut i = 0;
+    while i < dirs.len() {
+        let dir = dirs[i];
+        mask = mask.or(sq
+            .bitboard()
+            .occluded_fill(Bitboard::ALL, dir)
+            .shift(dir)
+            .shift(dir.opposite()));
+        i += 1;
+    }
+    mask.without(sq)
+}
+
+/// The squares whose occupancy can change a rook's attacks from `sq`: its rank
+/// and file, minus `sq` and each ray's edge square, since a blocker on the edge
+/// stops nothing that the edge would not stop anyway.
+///
+/// Public so the generator that searches for the magic multipliers, which
+/// lives outside this crate, hashes exactly the mask the lookup uses: the
+/// table layout depends on it, and two definitions could drift.
+#[must_use]
+pub const fn rook_mask(sq: Square) -> Bitboard {
+    relevant_mask(sq, ROOK_DIRS)
+}
+
+/// The bishop counterpart of [`rook_mask`], over both diagonals.
+#[must_use]
+pub const fn bishop_mask(sq: Square) -> Bitboard {
+    relevant_mask(sq, BISHOP_DIRS)
+}
+
+/// The sum of `1 << rook_mask(sq).count()` over all 64 squares: one slot per
+/// relevant occupancy, so the flat table wastes nothing between slices.
+/// `magics` checks it against the masks at compile time.
 const ROOK_TABLE_SIZE: usize = 102_400;
 
-/// `1 << 9`: the worst-case bishop mask popcount (a bishop on one of the four
-/// central squares). Same "sum of actual per-square sizes, not 64× the max"
-/// relationship to `BISHOP_ATTACKS` as `ROOK_TABLE_SIZE` has to `ROOK_ATTACKS`.
+/// The bishop counterpart of `ROOK_TABLE_SIZE`.
 const BISHOP_TABLE_SIZE: usize = 5_248;
 
-/// One square's precomputed magic-hash parameters: where its relevant occupancy
-/// bits live (`mask`), the multiplier that hashes them collision-free
-/// (`magic`), how far to shift the product down to an index (`shift`), and
-/// where its slice starts in the flat `ROOK_ATTACKS`/`BISHOP_ATTACKS` array
-/// (`offset`). One array of 64 of these per piece type.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// One square's magic-hash parameters: where its relevant occupancy bits live
+/// (`mask`), the multiplier that hashes them collision-free (`magic`), how far
+/// to shift the product down to an index (`shift`), and where its slice starts
+/// in the flat `ROOK_ATTACKS`/`BISHOP_ATTACKS` array (`offset`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::struct_field_names,
     reason = "`magic` is the actual chess-programming term for this field; a generic name like `multiplier` would read worse to this module's audience"
@@ -46,11 +95,10 @@ struct Magic {
     /// be blocked by, with the board edges excluded, since a piece on the edge
     /// blocks nothing beyond itself.
     mask: Bitboard,
-    /// The multiplier that maps masked occupancy onto a dense index. Found by
-    /// search rather than derived; see `regen`.
+    /// The one field found by search rather than derived from `mask`.
     magic: u64,
-    /// How far right to shift the product, `64 - mask.count()`, so the index
-    /// keeps exactly as many bits as the mask has.
+    /// `64 - mask.count()`, so the index keeps exactly as many bits as the mask
+    /// has.
     shift: u32,
     /// Where this square's slice begins in the shared attack table, since all
     /// 64 squares live in one array rather than 64 separate ones.
@@ -61,7 +109,7 @@ struct Magic {
 /// `m.offset` to get an actual `ROOK_ATTACKS`/`BISHOP_ATTACKS` index. Restrict
 /// `occupied` to `m.mask`'s bits, multiply by `m.magic`, keep the top
 /// `64 - m.shift` bits. This is the one piece of this file that runs on
-/// every real move-generation lookup, not just at table-build time.
+/// every real move-generation lookup.
 // `m.shift` always leaves at most 12 significant bits (the widest rook/bishop
 // mask), which fits `usize` on every platform this engine targets; there is
 // no const-stable `TryFrom<u64> for usize` to reach for instead
@@ -76,16 +124,17 @@ const fn magic_index(occupied: Bitboard, m: &Magic) -> usize {
     (((occupied.and(m.mask)).bits().wrapping_mul(m.magic)) >> m.shift) as usize
 }
 
-/// Reinterprets `bytes` (tightly packed little-endian `u64`s, `N * 8` bytes
-/// long, what `rook_attacks.bin`/`bishop_attacks.bin` hold) as `[Bitboard;
-/// N]`. Panics (via the `bytes[...]` index) if `bytes.len() < N * 8`; the two
-/// committed `.bin` files are always exactly `N * 8` for their respective `N`,
-/// so this only fires if they and the `N` this is called with ever drift
-/// apart. Stays `const fn` because reinterpreting already-known bytes is
-/// cheap (`u64::from_le_bytes` per entry); the search/build that produced
-/// those bytes in the first place (`regen`) isn't.
-const fn decode<const N: usize>(bytes: &[u8]) -> [Bitboard; N] {
-    let mut table = [Bitboard::EMPTY; N];
+/// Reinterprets `bytes`, tightly packed little-endian `u64`s, as `[u64; N]`.
+///
+/// Requires the length to be exactly `N * 8`, so a file the generator wrote
+/// for a different table size fails the build rather than being silently
+/// truncated or read past.
+const fn decode<const N: usize>(bytes: &[u8]) -> [u64; N] {
+    assert!(
+        bytes.len() == N * 8,
+        "a magic data file's length does not match the table it is decoded into"
+    );
+    let mut values = [0u64; N];
     let mut i = 0;
     while i < N {
         let mut b = [0u8; 8];
@@ -94,21 +143,93 @@ const fn decode<const N: usize>(bytes: &[u8]) -> [Bitboard; N] {
             b[j] = bytes[i * 8 + j];
             j += 1;
         }
-        table[i] = Bitboard::from_bits(u64::from_le_bytes(b));
+        values[i] = u64::from_le_bytes(b);
+        i += 1;
+    }
+    values
+}
+
+/// [`decode`], as the attack table's `Bitboard`s.
+const fn decode_table<const N: usize>(bytes: &[u8]) -> [Bitboard; N] {
+    let values: [u64; N] = decode(bytes);
+    let mut table = [Bitboard::EMPTY; N];
+    let mut i = 0;
+    while i < N {
+        table[i] = Bitboard::from_bits(values[i]);
         i += 1;
     }
     table
 }
 
-/// The flat rook attack table, decoded from the committed `rook_attacks.bin`;
-/// see `ROOK_MAGICS`'s doc and `decode`'s doc for how it got there. `static`,
-/// not `const`: at 800 KB, a `const` risks the compiler duplicating the whole
-/// array at every reference site instead of storing it once.
-static ROOK_ATTACKS: [Bitboard; ROOK_TABLE_SIZE] = decode(include_bytes!("rook_attacks.bin"));
+/// Every square's `Magic`, from its multiplier in `multipliers` and everything
+/// else derived from its mask: the shift from the mask's width, and the offset
+/// as a running total of the slice sizes before it.
+///
+/// Fails the build unless those slices add up to exactly `table_size`, which
+/// is what ties the masks here to the table the generator wrote: a mask that
+/// disagreed with the generator's would shift every later offset.
+const fn magics(multipliers: &[u8], dirs: [Direction; 4], table_size: usize) -> [Magic; 64] {
+    let multipliers: [u64; 64] = decode(multipliers);
+    let mut magics = [Magic {
+        mask: Bitboard::EMPTY,
+        magic: 0,
+        shift: 0,
+        offset: 0,
+    }; 64];
+    let mut offset = 0;
+    let mut i = 0;
+    while i < Square::ALL.len() {
+        let mask = relevant_mask(Square::ALL[i], dirs);
+        magics[i] = Magic {
+            mask,
+            magic: multipliers[i],
+            shift: 64 - mask.count(),
+            offset,
+        };
+        offset += 1 << mask.count();
+        i += 1;
+    }
+    assert!(
+        offset == table_size,
+        "the masks' slices do not add up to the attack table's size"
+    );
+    magics
+}
 
-/// The flat bishop attack table, decoded from `bishop_attacks.bin`. Same
-/// `static`-not-`const` reasoning as `ROOK_ATTACKS`.
-static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] = decode(include_bytes!("bishop_attacks.bin"));
+/// Every square's rook hash parameters, indexed by `Square::index`.
+const ROOK_MAGICS: [Magic; 64] = magics(
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/magic/rook_magics.bin"
+    )),
+    ROOK_DIRS,
+    ROOK_TABLE_SIZE,
+);
+
+/// Every square's bishop hash parameters, indexed by `Square::index`.
+const BISHOP_MAGICS: [Magic; 64] = magics(
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/magic/bishop_magics.bin"
+    )),
+    BISHOP_DIRS,
+    BISHOP_TABLE_SIZE,
+);
+
+/// The flat rook attack table. `static`, not `const`: at 800 KB, a `const`
+/// risks the compiler duplicating the whole array at every reference site
+/// instead of storing it once.
+static ROOK_ATTACKS: [Bitboard; ROOK_TABLE_SIZE] = decode_table(include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/magic/rook_attacks.bin"
+)));
+
+/// The flat bishop attack table. Same `static`-not-`const` reasoning as
+/// `ROOK_ATTACKS`.
+static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] = decode_table(include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/magic/bishop_attacks.bin"
+)));
 
 /// Every square a rook standing on `sq` attacks, given `occupied` (both empty and
 /// enemy/friendly squares; this module doesn't know about color).
@@ -180,7 +301,7 @@ mod tests {
     }
 
     /// Rook standing on the a-file itself, blocked by a piece further up the
-    /// same file. This is the concrete case `regen::relevant_mask`'s mask
+    /// same file. This is the concrete case `relevant_mask`'s mask
     /// gotcha would get wrong: if `rook_mask` incorrectly subtracted all of `FILE_A`
     /// (rather than just the far edge per direction), the north/south blocker
     /// on `A6` would fall outside the mask, and the magic hash would collapse
@@ -312,7 +433,7 @@ mod tests {
         for v in values {
             bytes.extend_from_slice(&v.to_le_bytes());
         }
-        let table: [Bitboard; 3] = decode(&bytes);
+        let table: [Bitboard; 3] = decode_table(&bytes);
         for (i, v) in values.into_iter().enumerate() {
             assert_eq!(table[i], Bitboard::from_bits(v), "mismatch at index {i}");
         }
