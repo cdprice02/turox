@@ -30,7 +30,7 @@ pub fn pseudo_legal_moves(board: &Board, list: &mut MoveList) {
 /// it, without building the list.
 ///
 /// Full re-derivation, not a shortcut: a stale or hash-collided TT move has
-/// to be rejected here, not downstream. `tests/pseudo_legal_props.rs` states the
+/// to be rejected here, not downstream. `tests/move_gen_pseudo_legal.rs` states the
 /// contract directly as membership in `pseudo_legal_moves`'s own output, over both
 /// moves drawn from that output (must accept) and arbitrary `(from, to, flags)` triples
 /// (must reject unless they happen to coincide with a real one).

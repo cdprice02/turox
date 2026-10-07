@@ -5,7 +5,7 @@
 //! `turox-engine`'s need the same generators, and two copies of them is the
 //! duplication this repo keeps getting bitten by.
 //!
-//! `fen_props.rs` has its own `any_board()`, deliberately not reused here:
+//! `board_fen.rs` has its own `any_board()`, deliberately not reused here:
 //! that one exists to prove FEN round-tripping doesn't care whether a board is
 //! chess-legal, so it *shouldn't* constrain placement. Move generation cares a
 //! great deal, so this is a separate, stricter strategy.
@@ -111,7 +111,7 @@ fn pawn_rank() -> impl Strategy<Value = Rank> {
 ///
 /// En passant is always `None`; no
 /// test in this crate needs a proptest-random ep state; the concrete FEN tests
-/// in `pseudo_legal_props.rs` cover that rule directly, and legal move
+/// in `move_gen_pseudo_legal.rs` cover that rule directly, and legal move
 /// generation produces real ep states from real move sequences, which is a
 /// better source of them than manufacturing one here.
 ///

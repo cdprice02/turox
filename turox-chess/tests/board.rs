@@ -4,7 +4,7 @@
 //! one place where being wrong is invisible rather than loud: mutation testing
 //! found that replacing the whole comparison with `true` survived the entire
 //! suite, as did flipping each of its seven `&&` to `||`. Nothing anywhere
-//! asserted that two boards were *unequal*, so `fen_props.rs`'s round-trip
+//! asserted that two boards were *unequal*, so `board_fen.rs`'s round-trip
 //! property was only confirming that the comparison did not crash.
 //!
 //! The shape below fixes that by construction: take a board, change exactly one

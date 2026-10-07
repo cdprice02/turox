@@ -4,7 +4,7 @@
 //! includes them at compile time.
 //!
 //! Nothing checks that the files came from this program. What is checked, on
-//! every push, is that they are correct: `turox-chess/tests/magic_props.rs`
+//! every push, is that they are correct: `turox-chess/tests/move_gen_magic.rs`
 //! walks every relevant occupancy of every square through the public lookup
 //! and compares it with an independent ray walk. So a regeneration is reviewed
 //! by that test passing, not by reading a binary diff.

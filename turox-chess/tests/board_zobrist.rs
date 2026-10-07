@@ -112,7 +112,7 @@ proptest! {
     // Expected to fail until board::zobrist's documented make_move gap
     // (side to move, castling rights, en passant) is closed: this is the
     // first point in the file that actually calls `make_move`, the same
-    // role `tests/legal_props.rs`'s own
+    // role `tests/move_gen_legal.rs`'s own
     // `any_board_and_legal_move`-based test plays for move generation.
     #[test]
     fn hash_stays_correct_after_a_legal_move((board, m) in any_board_and_legal_move()) {

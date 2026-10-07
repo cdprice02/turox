@@ -394,8 +394,7 @@ mod tests {
     // pure enough (no board mutation, no search recursion) to test directly
     // here rather than only through `Search::search` end to end, matching this
     // crate's convention of unit-testing a private pure function in-module and
-    // reserving `tests/search.rs`/`search_props.rs` for `Search`'s own public
-    // API.
+    // reserving `tests/search.rs` for `Search`'s own public API.
 
     /// `find_move` alone is ambiguous for a promotion square: a pawn reaching the
     /// back rank has up to four legal moves sharing the same `from`/`to`, one per

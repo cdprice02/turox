@@ -2,7 +2,7 @@
 //! quiescence search at the horizon, and MVV-LVA capture ordering.
 //!
 //! Mirrors `move_gen`'s naive-reference discipline: there's no perft
-//! equivalent for search, so `tests/search_props.rs` checks this against an
+//! equivalent for search, so `tests/search.rs` checks this against an
 //! independent, unpruned negamax reference rather than trusting a
 //! read-through.
 
@@ -34,7 +34,7 @@ use turox_rng::xorshift64star;
 /// One ply up, negamax's sign flip turns that into `MATE - ply` for the side that just
 /// delivered it, so a shorter forced mate always outscores a longer one. This exact ply
 /// direction is a classic place for an off-by-one to hide silently and look plausible;
-/// `tests/search_props.rs`'s mate puzzles are what actually pin the formula down, not
+/// `tests/search.rs`'s mate puzzles are what actually pin the formula down, not
 /// this comment.
 pub const MATE: Score = 30_000;
 
@@ -67,13 +67,13 @@ pub const fn is_mate_score(score: Score) -> bool {
 ///
 /// Without a cap, a sufficiently tangled position (many mutually-en-prise pieces) can
 /// make the *breadth* of the capture tree blow up long before it naturally bottoms out on
-/// material alone: `tests/search_props.rs`'s `alpha_beta_agrees_with_unpruned_negamax`
+/// material alone: `tests/search.rs`'s `alpha_beta_agrees_with_unpruned_negamax`
 /// property test hit exactly this on an `any_board()`-generated position, burning minutes
 /// of CPU on a single case. A handful of plies is typical; too low and captures get cut
 /// off mid-exchange again, just one horizon further out, defeating quiescence's own
 /// purpose.
 ///
-/// `pub`, not private: `tests/search_props.rs`'s own `naive_quiescence` oracle needs the
+/// `pub`, not private: `tests/search.rs`'s own `expected_quiescence` oracle needs the
 /// identical cap, not a hand-copied literal that could drift out of sync and silently
 /// turn the property test into a comparison between two different search depths.
 pub const MAX_QUIESCENCE_DEPTH: u8 = 8;
@@ -336,7 +336,7 @@ pub struct Search<'a> {
     /// reaches this count. A wall-clock deadline makes "iterative deepening
     /// was interrupted partway through a deeper iteration" untestable
     /// without a flaky sleep; a node budget makes it exact and repeatable
-    /// (see `tests/search_props.rs`).
+    /// (see `tests/search.rs`).
     max_nodes: Option<u64>,
     /// Where [`Search::now`] reads the current time, `None` meaning the real
     /// clock.
@@ -581,7 +581,7 @@ impl<'a> Search<'a> {
     /// with a no-op callback. Kept as a separate method (rather than
     /// threading an `Option<impl FnMut>` through `search` itself) so
     /// existing callers that only want a final result (`benches/search.rs`,
-    /// most of `tests/search_props.rs`) don't need to know callbacks exist.
+    /// most of `tests/search.rs`) don't need to know callbacks exist.
     ///
     /// `on_iteration_complete` only fires for iterations that actually ran
     /// to completion. If depth 1 itself aborts, `result` falls back to

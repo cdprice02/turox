@@ -38,7 +38,7 @@ regenerating, never as part of a build or a test.
 `magicgen` is run by hand the same way, after changing the magic search or its
 seed. It rewrites the four `.bin` files in `turox-chess/data/magic/`.
 Nothing checks that the committed files came from it; what is checked, on every
-push, is that they are right: `tests/magic_props.rs` walks every relevant
+push, is that they are right: `tests/move_gen_magic.rs` walks every relevant
 occupancy of every square through the lookup and compares it with a naive ray
 walk. Review a regeneration by that test passing, not by its binary diff.
 

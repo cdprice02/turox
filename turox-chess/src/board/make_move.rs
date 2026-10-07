@@ -206,7 +206,7 @@ mod tests {
     // ---- make_move ----
     //
     // FEN-based scenario tests, one per rule, rather than a proptest here:
-    // `tests/legal_props.rs` already proptests make_move end to end (random
+    // `tests/move_gen_legal.rs` already proptests make_move end to end (random
     // position, random legal move via `legal_moves`, internal-consistency and
     // FEN-round-trip check), but a failure there only says "some move on some
     // position broke something." These name the specific rule (double-push

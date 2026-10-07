@@ -225,7 +225,7 @@ pub(crate) const FINGERPRINT: u64 = fingerprint();
 ///
 /// Every occupied square via `piece_at` (not the bitboards `place`/`remove` maintain),
 /// plus side to move, castling rights, and en passant. Used only as
-/// `tests/zobrist_props.rs`'s test oracle, checked against the incrementally-maintained
+/// `tests/board_zobrist.rs`'s test oracle, checked against the incrementally-maintained
 /// `Board::hash()`; production code should always read `Board::hash()` instead;
 /// recomputing this on a hot path defeats the entire point of maintaining the hash
 /// incrementally.

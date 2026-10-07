@@ -1,7 +1,7 @@
 //! Coverage-guided fuzzing of `Board::try_from_fen`, the one place the engine
 //! will take untrusted input directly off the wire: UCI's `position fen
 //! <...>` command. `Err` is a correct outcome for a malformed string; a panic
-//! is not. `tests/fen_props.rs` already checks the same property
+//! is not. `tests/board_fen.rs` already checks the same property
 //! (`try_from_fen_never_panics_on_arbitrary_input`) over a proptest-generated
 //! `".{0,64}"` regex; this is the coverage-guided version of it, exploring
 //! inputs that random regex sampling won't reliably hit.

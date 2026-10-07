@@ -8,7 +8,7 @@
 //! `eval_white_pov` is the absolute (White-relative) sum of terms;
 //! `evaluate` is the side-to-move-relative wrapper negamax search wants.
 //! Kept as two functions rather than one: the mirror-symmetry property test
-//! in `tests/eval_props.rs` (`eval_white_pov(b) == -eval_white_pov(mirrored(b))`)
+//! in `tests/eval.rs` (`eval_white_pov(b) == -eval_white_pov(mirrored(b))`)
 //! is only cleanly expressible against the absolute version, and a printed
 //! eval breakdown is readable in White-POV and confusing in side-relative.
 
@@ -85,7 +85,7 @@ const TERMS: &[fn(&Board, Color) -> phase::Tapered] = &[
 ///
 /// Iterates `board.pieces` (a `Bitboard`, so `for sq in ...` walks its set
 /// squares), not `board.piece_at` over `Square::ALL`: the mailbox walk is
-/// reserved for `tests/eval_props.rs`'s independent reference, which this
+/// reserved for `tests/eval.rs`'s independent reference, which this
 /// gets checked against and shouldn't share code with.
 #[must_use]
 pub fn eval_white_pov(board: &Board) -> Score {

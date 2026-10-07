@@ -116,7 +116,7 @@ form `{winning, losing, neither} x {store, probe}`.
 
 ### Why the existing tests do not catch it
 
-`turox-engine/tests/tt_props.rs` has one round-trip property, and its own doc
+`turox-engine/tests/search_tt.rs` has one round-trip property, and its own doc
 comment names the constraint out loud: a store followed by a probe "at the
 *same* `ply` and `depth` (the simplest case: no path-dependence to
 reconstruct)." At equal ply the `-ply` and `+ply` cancel exactly, so the

@@ -31,7 +31,7 @@ use crate::{Color, Piece, Square};
 ///    move must land on a square `attacked_without_king` doesn't cover.
 ///
 /// `legal_moves_naive` below is the naive reference this has to agree with;
-/// `tests/legal_props.rs`'s proptest checks exactly that.
+/// `tests/move_gen_legal.rs`'s proptest checks exactly that.
 #[must_use]
 pub fn legal_moves(board: &Board) -> MoveList {
     let mut moves = MoveList::default();

@@ -23,7 +23,7 @@ use std::ops::Not;
 /// `from_bits`/`bits()`.
 ///
 /// Every operation here is implemented and verified against a naive reference
-/// (see `tests/bitboard_props.rs`).
+/// (see `tests/types_bitboard.rs`).
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct Bitboard(u64);
@@ -545,7 +545,7 @@ mod tests {
     use super::*;
 
     /// Anchors `rotate_90_cw` to an absolute direction. The group-law property
-    /// tests in `tests/bitboard_props.rs` (four cw rotations = identity, cw/ccw
+    /// tests in `tests/types_bitboard.rs` (four cw rotations = identity, cw/ccw
     /// are mutual inverses) only prove the two are *consistent with each other*;
     /// that would hold even if both were secretly counter-clockwise. This pins it
     /// down: a physical clockwise spin (White's side, a1 bottom-left, h8
@@ -560,7 +560,7 @@ mod tests {
     }
 
     /// A hand-computed, eyeball-able complement to the property tests in
-    /// `tests/bitboard_props.rs`: a center square has all 8 king-move neighbors.
+    /// `tests/types_bitboard.rs`: a center square has all 8 king-move neighbors.
     #[test]
     fn dilate_center_square_covers_all_eight_neighbors() {
         let expected = Bitboard::EMPTY
@@ -590,7 +590,7 @@ mod tests {
 
     /// The edge cases `lsb`/`msb`'s `is_empty()` guard exists for: an empty
     /// board has neither, and a full board's lowest/highest bit is exactly
-    /// the LERF ordering's endpoints. `tests/bitboard_props.rs`'s
+    /// the LERF ordering's endpoints. `tests/types_bitboard.rs`'s
     /// `lsb_msb_match_trailing_leading_zeros` covers the general case against
     /// a naive reference; these pin the two boundary values concretely.
     #[test]

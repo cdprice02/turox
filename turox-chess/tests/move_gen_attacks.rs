@@ -99,7 +99,7 @@ fn attacked_by_with_the_kings_own_square_removed_reveals_the_square_behind_it() 
 fn a_piece_pinned_along_a_file_by_a_rook_is_reported() {
     // White king e1, White bishop e2, Black rook e8: the bishop is the only
     // piece between king and rook, so it's pinned. Same position
-    // `tests/legal.rs`'s `pinned_bishop_cannot_move_off_the_pin_line` uses to
+    // `tests/move_gen_legal.rs`'s `pinned_bishop_cannot_move_off_the_pin_line` uses to
     // check the *consuming* legality rule; this checks the fact underneath it.
     let board = Board::try_from_fen("4r3/8/8/8/8/8/4B3/4K3 w - - 0 1").expect("valid FEN");
     let expected = Bitboard::EMPTY.with(Square::E2);

@@ -451,7 +451,7 @@ fn double_pawn_push_blocked_on_the_intermediate_square_is_not_pseudo_legal() {
     // White pawn e2, White knight e3 blocking, e4 empty. The final square is
     // clear and two ranks forward on the right rank, but pawn_pushes builds
     // the double push by shifting the *already-empty-filtered* single push
-    // (tests/pseudo_legal.rs's own `white_double_push_blocked_by_piece_on_intermediate_square`
+    // (`white_double_push_blocked_by_piece_on_intermediate_square`, in this file,
     // pins this down for the generator); a predicate that only checks e4's
     // occupancy and skips e3 would wrongly accept this.
     let board = Board::try_from_fen("8/8/8/8/8/4N3/4P3/4K2k w - - 0 1").expect("valid FEN");
@@ -479,7 +479,7 @@ fn sorted_naive_keys(moves: Vec<Move>) -> Vec<(u8, u8, MoveFlags)> {
 //
 // Deliberately independent of `Bitboard`'s pawn/knight/slider primitives:
 // built from `Square::offset` stepping only, same discipline as
-// `tests/magic_props.rs`/`tests/attacks_props.rs`.
+// `tests/move_gen_magic.rs`/`tests/move_gen_attacks.rs`.
 
 const KNIGHT_DELTAS: [(i8, i8); 8] = [
     (1, 2),
