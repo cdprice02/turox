@@ -1,13 +1,25 @@
-//! Concrete scenario tests for `move_gen::attacks`'s public API.
+//! Tests for `move_gen::attacks`'s public API.
 //!
-//! `tests/attacks_props.rs` has the exhaustive-against-independent-reference
-//! coverage; these are hand-picked positions pinning specific, easy-to-get-
-//! backwards cases (kingless boards, pawn attack direction, occupancy edge
-//! effects) that are worth reading as documentation in their own right.
+//! Two techniques. Property tests check each function against an independent
+//! naive reference built from `Square::offset` stepping, not from `tables` or
+//! `magic`. `attackers_of` is checked against the *forward* definition rather
+//! than a second reverse one: a forward implementation never inverts anything, so
+//! it cannot get the pawn-colour flip wrong, which is what makes it trustworthy as
+//! a check on the real reverse, superpiece-trick implementation.
+//!
+//! Concrete positions pin the easy-to-get-backwards cases (kingless boards, pawn
+//! attack direction, occupancy edge effects) and read as documentation in their
+//! own right.
 
+use proptest::prelude::*;
 use turox_chess::board::Board;
-use turox_chess::move_gen::attacks::{attacked_by, attackers_of, in_check, king_square, pinned};
-use turox_chess::{Bitboard, Color, Square};
+use turox_chess::move_gen::attacks::{
+    attacked_by, attackers_of, in_check, is_attacked, king_square, piece_attacks, pinned,
+};
+use turox_chess::strategies::{
+    any_bitboard, any_board, any_color, any_piece_with_king, any_square,
+};
+use turox_chess::{Bitboard, Color, Piece, Square};
 
 #[test]
 fn king_square_is_none_on_a_kingless_board() {
@@ -159,4 +171,153 @@ fn start_position_has_no_pins() {
     let board = Board::start_pos();
     assert_eq!(pinned(&board, Color::White, Square::E1), Bitboard::EMPTY);
     assert_eq!(pinned(&board, Color::Black, Square::E8), Bitboard::EMPTY);
+}
+
+const ROOK_DIRS: [(i8, i8); 4] = [(0, 1), (0, -1), (1, 0), (-1, 0)];
+const BISHOP_DIRS: [(i8, i8); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+const KNIGHT_DELTAS: [(i8, i8); 8] = [
+    (1, 2),
+    (2, 1),
+    (2, -1),
+    (1, -2),
+    (-1, -2),
+    (-2, -1),
+    (-2, 1),
+    (-1, 2),
+];
+
+fn naive_slider_attacks(sq: Square, occupied: Bitboard, dirs: &[(i8, i8)]) -> Bitboard {
+    let mut result = Bitboard::EMPTY;
+    for &(df, dr) in dirs {
+        let mut current = sq;
+        while let Some(next) = current.offset(df, dr) {
+            result = result.with(next);
+            if occupied.contains(next) {
+                break;
+            }
+            current = next;
+        }
+    }
+    result
+}
+
+/// Reference definition of `piece_attacks`, independent of `tables`/`magic`.
+fn naive_piece_attacks(piece: Piece, color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
+    match piece {
+        Piece::Pawn => {
+            let dr = match color {
+                Color::White => 1,
+                Color::Black => -1,
+            };
+            let mut result = Bitboard::EMPTY;
+            if let Some(t) = sq.offset(-1, dr) {
+                result = result.with(t);
+            }
+            if let Some(t) = sq.offset(1, dr) {
+                result = result.with(t);
+            }
+            result
+        }
+        Piece::Knight => {
+            let mut result = Bitboard::EMPTY;
+            for (df, dr) in KNIGHT_DELTAS {
+                if let Some(t) = sq.offset(df, dr) {
+                    result = result.with(t);
+                }
+            }
+            result
+        }
+        Piece::King => {
+            let mut result = Bitboard::EMPTY;
+            for df in -1i8..=1 {
+                for dr in -1i8..=1 {
+                    if df == 0 && dr == 0 {
+                        continue;
+                    }
+                    if let Some(t) = sq.offset(df, dr) {
+                        result = result.with(t);
+                    }
+                }
+            }
+            result
+        }
+        Piece::Bishop => naive_slider_attacks(sq, occupied, &BISHOP_DIRS),
+        Piece::Rook => naive_slider_attacks(sq, occupied, &ROOK_DIRS),
+        Piece::Queen => naive_slider_attacks(sq, occupied, &ROOK_DIRS).or(naive_slider_attacks(
+            sq,
+            occupied,
+            &BISHOP_DIRS,
+        )),
+    }
+}
+
+fn naive_attacked_by(board: &Board, by: Color, occupied: Bitboard) -> Bitboard {
+    let mut result = Bitboard::EMPTY;
+    for sq in Square::ALL {
+        if let Some(cp) = board.piece_at(sq) {
+            if cp.color() == by {
+                result = result.or(naive_piece_attacks(cp.piece(), by, sq, occupied));
+            }
+        }
+    }
+    result
+}
+
+fn naive_attackers_of(board: &Board, target: Square, by: Color) -> Bitboard {
+    let mut result = Bitboard::EMPTY;
+    for sq in Square::ALL {
+        if let Some(cp) = board.piece_at(sq) {
+            if cp.color() == by
+                && naive_piece_attacks(cp.piece(), by, sq, board.occupied()).contains(target)
+            {
+                result = result.with(sq);
+            }
+        }
+    }
+    result
+}
+
+proptest! {
+    #[test]
+    fn piece_attacks_matches_naive_stepper(
+        piece in any_piece_with_king(),
+        color in any_color(),
+        sq in any_square(),
+        occupied in any_bitboard(),
+    ) {
+        prop_assert_eq!(
+            piece_attacks(piece, color, sq, occupied),
+            naive_piece_attacks(piece, color, sq, occupied)
+        );
+    }
+
+    #[test]
+    fn attacked_by_matches_naive_union(board in any_board(), by in any_color(), occupied in any_bitboard()) {
+        prop_assert_eq!(attacked_by(&board, by, occupied), naive_attacked_by(&board, by, occupied));
+    }
+
+    #[test]
+    fn attacked_by_against_own_occupancy_matches_naive(board in any_board(), by in any_color()) {
+        let occ = board.occupied();
+        prop_assert_eq!(attacked_by(&board, by, occ), naive_attacked_by(&board, by, occ));
+    }
+
+    #[test]
+    fn attackers_of_matches_naive_forward_definition(board in any_board(), sq in any_square(), by in any_color()) {
+        prop_assert_eq!(attackers_of(&board, sq, by), naive_attackers_of(&board, sq, by));
+    }
+
+    #[test]
+    fn is_attacked_matches_naive(board in any_board(), sq in any_square(), by in any_color()) {
+        prop_assert_eq!(
+            is_attacked(&board, sq, by),
+            naive_attacked_by(&board, by, board.occupied()).contains(sq)
+        );
+    }
+
+    #[test]
+    fn king_square_finds_the_real_king(board in any_board(), color in any_color()) {
+        let expected = board.pieces(color, Piece::King).lsb();
+        prop_assert_eq!(king_square(&board, color), expected);
+    }
 }

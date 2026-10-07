@@ -1,21 +1,20 @@
-//! Concrete scenario tests for `Move::to_uci`/`Move::from_uci`.
+//! Tests for `Move::to_uci` and `Move::from_uci`.
 //!
-//! `tests/move_uci_props.rs` has the load-bearing round-trip property (every
-//! legal move, in every generated position); `any_board()` never generates
-//! an en passant state though (see its own doc), so the concrete en passant
-//! test here covers that flag directly, the same split `pseudo_legal.rs`
-//! uses for en passant generation itself. The castling and promotion tests
-//! here also pin exact UCI strings down, which a property alone wouldn't
-//! catch if `to_uci`/`from_uci` agreed with each other but both disagreed
-//! with the UCI spec.
+//! A property round-trips every legal move in every generated position. Concrete
+//! positions cover what it cannot: `any_board()` never generates an en passant
+//! state (see its own doc), so en passant is tested directly, and the castling and
+//! promotion tests pin the exact UCI strings, which a round trip alone would not
+//! catch if both directions agreed with each other and disagreed with the UCI spec.
 
 #![expect(
     clippy::expect_used,
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
+use proptest::prelude::*;
 use turox_chess::board::Board;
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_board_with_legal_move;
 use turox_chess::types::MoveFlags;
 use turox_chess::{Move, Square};
 
@@ -180,4 +179,22 @@ fn from_uci_rejects_a_well_formed_but_illegal_move() {
     let board = Board::try_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
     let moves = legal_moves(&board);
     assert_eq!(Move::from_uci("e2e4", moves.as_slice()), None);
+}
+
+proptest! {
+    /// The load-bearing check: for every legal move in every generated
+    /// position, `to_uci` then `from_uci` (resolved against that same
+    /// position's legal moves) recovers the exact original `Move`, flags
+    /// included. This is what actually proves `from_uci`'s legal-move
+    /// matching disambiguates correctly, not just that the two functions
+    /// don't panic.
+    #[test]
+    fn to_uci_then_from_uci_recovers_the_original_move(board in any_board_with_legal_move()) {
+        let moves = legal_moves(&board);
+        for &m in moves.as_slice() {
+            let uci = m.to_uci();
+            let recovered = Move::from_uci(&uci, moves.as_slice());
+            prop_assert_eq!(recovered, Some(m), "uci string was {:?}", uci);
+        }
+    }
 }
