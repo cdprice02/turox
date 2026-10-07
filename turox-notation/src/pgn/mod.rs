@@ -10,6 +10,11 @@
 
 use std::io::BufRead;
 
+use scanner::Scanner;
+
+mod parser;
+mod scanner;
+
 /// One game: its tag pairs and its movetext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PgnGame {
@@ -215,27 +220,44 @@ impl PgnGame {
 /// line that starts with `[`, so one bad game in a multi-gigabyte source
 /// costs only itself.
 pub struct PgnReader<R> {
-    /// The source bytes. Scanned rather than split into lines first, because
-    /// a comment or variation may span blank lines and only the grammar knows
-    /// where a game ends.
-    #[expect(dead_code, reason = "read by the scanner, which is a stub")]
-    reader: R,
+    /// Scanned rather than split into lines first, because a comment or
+    /// variation may span blank lines and only the grammar knows where a game
+    /// ends.
+    scanner: Scanner<R>,
+    /// Set after an I/O error, which recovery cannot skip past: the same
+    /// read would fail again on every call.
+    failed: bool,
 }
 
 impl<R: BufRead> PgnReader<R> {
     /// Wraps `reader`. Reads nothing until the first call to `next`.
     #[must_use]
     pub const fn new(reader: R) -> Self {
-        Self { reader }
+        Self {
+            scanner: Scanner::new(reader),
+            failed: false,
+        }
     }
 }
 
 impl<R: BufRead> Iterator for PgnReader<R> {
     type Item = Result<PgnGame, PgnError>;
 
-    #[expect(clippy::todo, reason = "the scanner and parser are stubs")]
     fn next(&mut self) -> Option<Self::Item> {
-        todo!("scan and parse one game")
+        if self.failed {
+            return None;
+        }
+        match parser::game(&mut self.scanner) {
+            Ok(game) => game.map(Ok),
+            Err(err) => {
+                if matches!(err.kind, PgnErrorKind::Io(_)) {
+                    self.failed = true;
+                } else {
+                    self.scanner.skip_to_next_game();
+                }
+                Some(Err(err))
+            }
+        }
     }
 }
 
@@ -254,8 +276,6 @@ pub const fn parse_pgn(text: &str) -> PgnReader<&[u8]> {
 /// # Errors
 ///
 /// Any [`PgnErrorKind`] that applies to movetext, positioned within `text`.
-#[expect(clippy::todo, reason = "the scanner and parser are stubs")]
 pub fn parse_movetext(text: &str) -> Result<Line, PgnError> {
-    let _ = text;
-    todo!("scan and parse one movetext section")
+    parser::movetext(&mut Scanner::new(text.as_bytes()))
 }
