@@ -743,6 +743,25 @@ fn a_malformed_game_costs_only_itself() {
 }
 
 #[test]
+fn a_variation_left_open_by_the_next_games_tags_costs_only_its_own_game() {
+    // The line stops on the next game's `[`, and the error is found only
+    // after that bracket has been read; recovering from it must not skip the
+    // game the bracket opens.
+    let results = parse(&format!(
+        "{}{}",
+        game("1. e4 e5 (1... c5"),
+        game("1. d4 d5 1-0")
+    ));
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert_eq!(
+        results[0],
+        Err(error(6, 10, PgnErrorKind::UnclosedVariation))
+    );
+    let second = results[1].clone().expect("the next game parses");
+    assert_eq!(mainline(&second), ["d4", "d5"]);
+}
+
+#[test]
 fn error_lines_count_from_the_start_of_the_input_not_the_game() {
     let results = parse(&format!("{}{}", game("1. e4 ) 1-0"), game("1. d4 ) 1-0")));
     assert_eq!(

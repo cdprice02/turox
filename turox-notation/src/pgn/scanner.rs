@@ -71,21 +71,33 @@ pub(super) enum Token {
     Termination(GameResult),
 }
 
+impl Pos {
+    /// Moves past `bytes`. The one place position is tracked, so every way of
+    /// consuming input agrees on where it ends up.
+    fn advance(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+        }
+    }
+}
+
 /// Turns a byte stream into [`Token`]s, tracking each one's position.
 ///
-/// Reads through `BufRead` one byte at a time with `fill_buf` and `consume`,
-/// so a refill can land anywhere, mid-token included, without changing what
-/// is scanned.
+/// Reads through `BufRead`'s `fill_buf` and `consume` rather than `lines` or
+/// `split`: those take the reader by value, `lines` fails on invalid UTF-8,
+/// and a token can span lines or touch its neighbours with no space between.
 pub(super) struct Scanner<R> {
     /// The source bytes.
     reader: R,
-    /// The line of the next unread byte.
-    line: usize,
-    /// The column of the next unread byte.
-    column: usize,
-    /// True when the next unread byte starts a line, which is the only place
-    /// a `%` escapes the rest of it.
-    at_line_start: bool,
+    /// Where the next unread byte is. A field of its own, not loose counters
+    /// on `Scanner`, so it can advance while a slice borrowed from `reader`'s
+    /// buffer is still alive: a `&mut self` method could not.
+    pos: Pos,
     /// One token of lookahead, filled by `peek` and drained by `next`.
     peeked: Option<(Token, Pos)>,
 }
@@ -95,25 +107,35 @@ impl<R: BufRead> Scanner<R> {
     pub const fn new(reader: R) -> Self {
         Self {
             reader,
-            line: 1,
-            column: 1,
-            at_line_start: true,
+            pos: Pos { line: 1, column: 1 },
             peeked: None,
         }
     }
 
     /// The next token and where it starts, without consuming it. `None` at
     /// the end of input.
-    #[expect(clippy::todo, reason = "the scanner is a stub")]
     pub fn peek(&mut self) -> Result<Option<&(Token, Pos)>, PgnError> {
-        todo!("fill self.peeked if empty, then borrow it")
+        // Checked and then filled, not `if let Some(t) = &self.peeked {
+        // return .. }`: returning a borrow from one branch and assigning in
+        // the other is a case the borrow checker rejects.
+        if self.peeked.is_none() {
+            self.peeked = self.scan()?;
+        }
+        Ok(self.peeked.as_ref())
     }
 
     /// The next token and where it starts, consuming it. `None` at the end of
     /// input.
-    #[expect(clippy::todo, reason = "the scanner is a stub")]
     pub fn next(&mut self) -> Result<Option<(Token, Pos)>, PgnError> {
-        todo!("take self.peeked, or scan a token")
+        self.peeked
+            .take()
+            .map_or_else(|| self.scan(), |token| Ok(Some(token)))
+    }
+
+    /// Reads one token from the bytes, ignoring `peeked`.
+    #[expect(clippy::todo, reason = "the scanner is a stub")]
+    fn scan(&mut self) -> Result<Option<(Token, Pos)>, PgnError> {
+        todo!("skip whitespace and % lines, note self.pos, then branch on peek_byte")
     }
 
     /// Discards input up to the next `[` that starts a line, or to the end,
@@ -122,12 +144,98 @@ impl<R: BufRead> Scanner<R> {
     /// Works on raw bytes rather than tokens, because the input it is
     /// recovering from may not tokenize: an unclosed comment or string is
     /// exactly what can leave a reader here.
-    #[expect(clippy::todo, reason = "the scanner is a stub")]
+    ///
+    /// A peeked `[` that starts a line is kept rather than dropped. A line
+    /// stops by peeking the next game's bracket, so an error found there (a
+    /// variation still open, say) has that bracket already read out of
+    /// `reader`, and dropping it would skip a game that parses.
+    ///
+    /// An I/O error stops the skip where it is; the next read meets it again
+    /// and reports it.
     pub fn skip_to_next_game(&mut self) {
-        todo!("skip bytes until a `[` with at_line_start set")
+        if matches!(self.peeked, Some((Token::LBracket, Pos { column: 1, .. }))) {
+            return;
+        }
+        self.peeked = None;
+        loop {
+            if self.skip_while(|byte| byte != b'[').is_err() {
+                return;
+            }
+            match self.peek_byte() {
+                Ok(Some(_)) if self.pos.column != 1 => {
+                    let _ = self.next_byte();
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// The next byte, without consuming it. `None` at the end of input.
+    fn peek_byte(&mut self) -> Result<Option<u8>, PgnError> {
+        let pos = self.pos;
+        let buf = self
+            .reader
+            .fill_buf()
+            .map_err(|err| pos.error(PgnErrorKind::Io(err.kind())))?;
+        Ok(buf.first().copied())
+    }
+
+    /// The next byte, consuming it and advancing `pos` past it. `None` at the
+    /// end of input.
+    fn next_byte(&mut self) -> Result<Option<u8>, PgnError> {
+        let byte = self.peek_byte()?;
+        if let Some(byte) = byte {
+            self.reader.consume(1);
+            self.pos.advance(&[byte]);
+        }
+        Ok(byte)
+    }
+
+    /// Appends bytes to `out` while `keep` holds, stopping before the first
+    /// byte it rejects (left unread, for the caller to inspect) or at the end
+    /// of input.
+    fn take_while(
+        &mut self,
+        keep: impl FnMut(u8) -> bool,
+        out: &mut Vec<u8>,
+    ) -> Result<(), PgnError> {
+        self.consume_while(keep, Some(out))
+    }
+
+    /// [`Self::take_while`] with nowhere to put the bytes.
+    fn skip_while(&mut self, keep: impl FnMut(u8) -> bool) -> Result<(), PgnError> {
+        self.consume_while(keep, None)
+    }
+
+    /// Consumes a whole buffered chunk at a time rather than a byte at a
+    /// time, refilling only when `keep` accepted all of it.
+    fn consume_while(
+        &mut self,
+        mut keep: impl FnMut(u8) -> bool,
+        mut out: Option<&mut Vec<u8>>,
+    ) -> Result<(), PgnError> {
+        loop {
+            let pos = self.pos;
+            let buf = self
+                .reader
+                .fill_buf()
+                .map_err(|err| pos.error(PgnErrorKind::Io(err.kind())))?;
+            let available = buf.len();
+            let taken = buf
+                .iter()
+                .position(|&byte| !keep(byte))
+                .unwrap_or(available);
+            if let Some(out) = out.as_deref_mut() {
+                out.extend_from_slice(&buf[..taken]);
+            }
+            self.pos.advance(&buf[..taken]);
+            self.reader.consume(taken);
+            if taken < available || available == 0 {
+                return Ok(());
+            }
+        }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +658,23 @@ mod tests {
         assert_eq!(
             scanner.next().expect("scans"),
             Some((Token::LBracket, at(1, 1)))
+        );
+    }
+
+    #[test]
+    fn skip_to_next_game_keeps_a_peeked_bracket_starting_a_line() {
+        // The parser peeks the next game's `[` to end a line, then reports an
+        // error about the line; recovery must leave that game to be read.
+        let mut scanner = Scanner::new(&b"e4\n[Event"[..]);
+        assert_eq!(scanner.next().expect("scans"), Some((sym("e4"), at(1, 1))));
+        assert_eq!(
+            scanner.peek().expect("scans"),
+            Some(&(Token::LBracket, at(2, 1)))
+        );
+        scanner.skip_to_next_game();
+        assert_eq!(
+            scanner.next().expect("scans"),
+            Some((Token::LBracket, at(2, 1)))
         );
     }
 
