@@ -68,6 +68,10 @@ FEN stays with the positions it encodes rather than moving to `turox-notation`.
   - **`book`**: the opening book's file format and lookup. Here rather than in
     `turox-engine` because the generator writing it has to agree with the
     engine reading it.
+  - **`data/`**: generated binary data the crate embeds at compile time, one
+    subdirectory per module that reads it (`book/`, `magic/`). Kept out of
+    `src/` so a module directory holds code, and next to it rather than at the
+    workspace root so the crate still builds on its own.
 - **`turox-notation`**: how a *game* is written down. `pgn` parsing, and `san`
   resolution against a real position. Nothing here needs to know how to choose
   a move.

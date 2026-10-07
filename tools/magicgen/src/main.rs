@@ -1,6 +1,6 @@
 //! The `magicgen` binary: searches for a magic multiplier for every square, for
 //! rooks and bishops, builds the attack tables those multipliers index, and
-//! writes all four into `turox-chess/src/move_gen/magic/`, where the crate
+//! writes all four into `turox-chess/data/magic/`, where the crate
 //! includes them at compile time.
 //!
 //! Nothing checks that the files came from this program. What is checked, on
@@ -260,7 +260,7 @@ fn generate(mask: MaskFn, dirs: [Direction; 4]) -> Result<(Vec<u8>, Vec<u8>), Sq
 }
 
 fn main() -> ExitCode {
-    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../turox-chess/src/move_gen/magic");
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../turox-chess/data/magic");
     let pieces: [(&str, MaskFn, [Direction; 4]); 2] = [
         ("rook", rook_mask, ROOK_DIRS),
         ("bishop", bishop_mask, BISHOP_DIRS),

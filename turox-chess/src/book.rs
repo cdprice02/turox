@@ -10,7 +10,7 @@
 //!
 //! # The embedded default book
 //!
-//! `opening.bin` is `tools/bookgen`'s output from the Lichess Elite
+//! `data/book/opening.bin` is `tools/bookgen`'s output from the Lichess Elite
 //! Database (CC0-licensed; see ADR 0006 for why this crate builds its own
 //! format rather than reading Polyglot), covering December 2024 through
 //! November 2025 (twelve monthly snapshots, ~3.4 million games), filtered
@@ -60,7 +60,10 @@ const FORMAT_VERSION: u8 = 3;
 /// The generated book file itself: see the module doc's "The embedded
 /// default book" section for exactly what source data and settings
 /// produced it.
-const OPENING_BOOK_BYTES: &[u8] = include_bytes!("opening.bin");
+const OPENING_BOOK_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/book/opening.bin"
+));
 
 /// Decodes the book embedded in this binary.
 ///

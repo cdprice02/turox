@@ -6,9 +6,9 @@
 //! on every call.
 //!
 //! Two things here are found by search rather than derived, and are included as
-//! data: the multipliers (`rook_magics.bin`/`bishop_magics.bin`) and the attack
-//! tables they index (`rook_attacks.bin`/`bishop_attacks.bin`). The `magicgen`
-//! tool writes all four. Everything else about a square's hash follows from its
+//! data from `data/magic/`: the multipliers (`rook_magics.bin`/`bishop_magics.bin`)
+//! and the attack tables they index (`rook_attacks.bin`/`bishop_attacks.bin`).
+//! The `magicgen` tool writes all four. Everything else about a square's hash follows from its
 //! mask, and is computed here at compile time.
 
 use crate::types::bitboard::{Bitboard, Direction};
@@ -198,14 +198,20 @@ const fn magics(multipliers: &[u8], dirs: [Direction; 4], table_size: usize) -> 
 
 /// Every square's rook hash parameters, indexed by `Square::index`.
 const ROOK_MAGICS: [Magic; 64] = magics(
-    include_bytes!("rook_magics.bin"),
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/magic/rook_magics.bin"
+    )),
     ROOK_DIRS,
     ROOK_TABLE_SIZE,
 );
 
 /// Every square's bishop hash parameters, indexed by `Square::index`.
 const BISHOP_MAGICS: [Magic; 64] = magics(
-    include_bytes!("bishop_magics.bin"),
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/magic/bishop_magics.bin"
+    )),
     BISHOP_DIRS,
     BISHOP_TABLE_SIZE,
 );
@@ -213,12 +219,17 @@ const BISHOP_MAGICS: [Magic; 64] = magics(
 /// The flat rook attack table. `static`, not `const`: at 800 KB, a `const`
 /// risks the compiler duplicating the whole array at every reference site
 /// instead of storing it once.
-static ROOK_ATTACKS: [Bitboard; ROOK_TABLE_SIZE] = decode_table(include_bytes!("rook_attacks.bin"));
+static ROOK_ATTACKS: [Bitboard; ROOK_TABLE_SIZE] = decode_table(include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/magic/rook_attacks.bin"
+)));
 
 /// The flat bishop attack table. Same `static`-not-`const` reasoning as
 /// `ROOK_ATTACKS`.
-static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] =
-    decode_table(include_bytes!("bishop_attacks.bin"));
+static BISHOP_ATTACKS: [Bitboard; BISHOP_TABLE_SIZE] = decode_table(include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/magic/bishop_attacks.bin"
+)));
 
 /// Every square a rook standing on `sq` attacks, given `occupied` (both empty and
 /// enemy/friendly squares; this module doesn't know about color).

@@ -1,5 +1,5 @@
 //! Property tests for `move_gen::magic`: the executable version of the
-//! contracts documented on each function in `src/move_gen/magic/mod.rs`.
+//! contracts documented on each function in `src/move_gen/magic.rs`.
 //!
 //! Every function gets a reference-equivalence check against an independent
 //! implementation built directly from `Square::offset` stepped one square at a
@@ -9,7 +9,7 @@
 //! Every property here pairs a `Square` with an arbitrary `occupied: Bitboard`
 //! (2^64 values), a genuinely unbounded domain, which is what `proptest`'s
 //! random sampling is for. The `Square`-only checks (fixed `Bitboard::ALL`)
-//! live as plain exhaustive `#[test]`s in `move_gen/magic/mod.rs`'s own test
+//! live as plain exhaustive `#[test]`s in `move_gen/magic.rs`'s own test
 //! module instead: no unbounded domain there for `proptest` to be worth its
 //! overhead over a loop, and it's a unit-level check of that module's own
 //! functions, not a cross-module integration property.
