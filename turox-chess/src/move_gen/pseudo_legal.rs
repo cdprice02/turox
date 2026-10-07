@@ -29,11 +29,10 @@ pub fn pseudo_legal_moves(board: &Board, list: &mut MoveList) {
 /// Whether `m` is exactly the move `pseudo_legal_moves(board)` would have produced for
 /// it, without building the list.
 ///
-/// Full re-derivation, not a shortcut: a stale or hash-collided TT move has
-/// to be rejected here, not downstream. `tests/pseudo_legal_props.rs` states the
-/// contract directly as membership in `pseudo_legal_moves`'s own output, over both
-/// moves drawn from that output (must accept) and arbitrary `(from, to, flags)` triples
-/// (must reject unless they happen to coincide with a real one).
+/// Full re-derivation, not a shortcut: a stale or hash-collided TT move has to
+/// be rejected here, not downstream. The contract is membership in
+/// `pseudo_legal_moves`'s own output: accept every move it produces, reject
+/// every other `(from, to, flags)` triple.
 #[must_use]
 pub fn is_pseudo_legal(board: &Board, m: Move) -> bool {
     let sq_from = m.from();

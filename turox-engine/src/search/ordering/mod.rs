@@ -393,9 +393,7 @@ mod tests {
     // `move_priority` and `order` are private to this module, and both are
     // pure enough (no board mutation, no search recursion) to test directly
     // here rather than only through `Search::search` end to end, matching this
-    // crate's convention of unit-testing a private pure function in-module and
-    // reserving `tests/search.rs`/`search_props.rs` for `Search`'s own public
-    // API.
+    // crate's convention of unit-testing a private pure function in-module.
 
     /// `find_move` alone is ambiguous for a promotion square: a pawn reaching the
     /// back rank has up to four legal moves sharing the same `from`/`to`, one per
@@ -759,13 +757,10 @@ mod tests {
             );
         }
     }
-    // ---- Killer-move classification ----
-    //
     // `MoveOrdering::move_priority`'s own `killer_slots(ply)` lookup carries the two
     // slots for the ply the move is being classified at. A killer only outranks
     // a quiet move, never a capture, so these check the boundary in both
     // directions rather than only that a match is recognised.
-
     #[test]
     fn move_priority_with_matching_first_killer_slot_classifies_as_killer() {
         let board = capture_and_quiet_position();
@@ -843,13 +838,10 @@ mod tests {
         );
     }
 
-    // ---- Mate-killer classification ----
-    //
     // Same shape as the ordinary killer tests above, seeding the killer table
     // rather than driving a real search to populate it: `move_priority`'s own
     // lookup is what is under test, not `on_cutoff`'s population logic,
-    // which has its own section below.
-
+    // which has its own tests below.
     #[test]
     fn move_priority_with_matching_mate_killer_classifies_as_mate_killer() {
         let board = capture_and_quiet_position();
@@ -927,14 +919,11 @@ mod tests {
         );
     }
 
-    // ---- Mate-killer recording (`on_cutoff`) ----
-    //
     // `move_priority`'s own lookup is covered above; these instead drive
     // `on_cutoff` itself, the write side, directly. `on_cutoff`
     // is private and pure enough (no recursion, no board mutation beyond
     // `self`'s own tables) to test the same way `move_priority`/`order`
     // are, per this module's convention.
-
     #[test]
     fn on_cutoff_records_a_mate_killer_on_a_quiet_move_with_a_mate_score() {
         let board = capture_and_quiet_position();
@@ -1010,8 +999,6 @@ mod tests {
         );
     }
 
-    // ---- Previous-iteration PV classification ----
-    //
     // `PrincipalVariation` outranks `Hash` (see `MovePriority`'s own doc for
     // why): a hash-table entry can belong to a different, more recently
     // searched line once replacement has overwritten it, where the previous
@@ -1020,7 +1007,6 @@ mod tests {
     // The hint arrives as an argument rather than off a table, so whether a
     // node is entitled to one is the recursion's question and is tested
     // there; these check only what ordering does once given one.
-
     #[test]
     fn move_priority_prefers_previous_pv_move_over_hash_when_a_move_matches_both() {
         let board = capture_and_quiet_position();
@@ -1202,8 +1188,6 @@ mod tests {
             "no position produced enough tiers for the property to mean anything: {richest}"
         );
     }
-
-    // ---- Move ordering's priority runs ----
 
     /// Positions paired with the exact order `order` puts them in, all
     /// four seeded identically by [`seeded_ordering`].

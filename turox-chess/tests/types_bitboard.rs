@@ -1,12 +1,7 @@
-//! Property tests for `Bitboard`: the executable version of the contracts
-//! documented on each method in `src/types/bitboard.rs`.
-//!
-//! These bitboard primitives are what the entire engine's correctness rests on:
-//! every square set, move generated, and position evaluated eventually bottoms
-//! out in one of these operations, so coverage here is deliberately heavier than
-//! elsewhere: every function gets a reference-equivalence check against an
-//! independent (if naive/slow) implementation built from already-verified
-//! primitives, not just algebraic sanity properties.
+//! Property tests for `Bitboard`: every method against a naive reference built
+//! from already-verified primitives, not only algebraic laws, because every
+//! square set, move generated and position evaluated bottoms out in one of
+//! these operations.
 
 use proptest::prelude::*;
 use turox_chess::strategies::{any_bitboard, any_color, any_square};
@@ -185,7 +180,6 @@ fn naive_front_attack_span(a: Bitboard, color: Color) -> Bitboard {
 }
 
 proptest! {
-    // ---- Core arithmetic invariants ----
 
     #[test]
     fn complement_is_disjoint_and_covers_all(a in any_bitboard()) {
@@ -213,8 +207,6 @@ proptest! {
         let expected = if n < 64 { a.bits() << n } else { 0 };
         prop_assert_eq!(a.shl(n).bits(), expected);
     }
-
-    // ---- Square membership and scanning ----
 
     #[test]
     fn with_without_contains_agree(a in any_bitboard(), sq in any_square()) {
@@ -266,8 +258,6 @@ proptest! {
         prop_assert_eq!(bb, Bitboard::EMPTY);
     }
 
-    // ---- Iteration (built on pop_lsb/contains, so inherits their dependency) ----
-
     #[test]
     fn iteration_yields_exactly_the_contained_squares(a in any_bitboard()) {
         let collected: Vec<Square> = a.into_iter().collect();
@@ -278,8 +268,6 @@ proptest! {
         let rebuilt = collected.into_iter().fold(Bitboard::EMPTY, turox_chess::Bitboard::with);
         prop_assert_eq!(rebuilt, a);
     }
-
-    // ---- Direction shifts ----
 
     #[test]
     fn shift_east_never_lands_on_file_a(a in any_bitboard()) {
@@ -303,8 +291,6 @@ proptest! {
         let there_and_back = a.shift(dir).shift(dir.opposite());
         prop_assert_eq!(there_and_back.and(!a), Bitboard::EMPTY);
     }
-
-    // ---- Flips: involution and reference-equivalence against a per-square walk ----
 
     #[test]
     fn flip_horizontal_is_an_involution(a in any_bitboard()) {
@@ -343,15 +329,10 @@ proptest! {
         prop_assert_eq!(a.flip_diagonal_a8h1().flip_diagonal_a8h1(), a);
     }
 
-    // ---- Rotations ----
-    //
     // The group-law properties below (four cw rotations = identity, cw and ccw are
     // mutual inverses) only prove rotate_90_cw and rotate_90_ccw are *consistent
     // with each other*; that holds even if both were secretly counter-clockwise.
-    // The absolute direction is pinned down by a plain #[test] (not a property, so
-    // it lives with the other unit tests in src/types/bitboard.rs, not here) named
-    // rotate_90_cw_matches_known_corner_mapping.
-
+    // The absolute direction is pinned by `rotate_90_cw_matches_known_corner_mapping`.
     #[test]
     fn rotate_90_cw_four_times_is_identity(a in any_bitboard()) {
         prop_assert_eq!(a.rotate_90_cw().rotate_90_cw().rotate_90_cw().rotate_90_cw(), a);
@@ -380,8 +361,6 @@ proptest! {
         prop_assert_eq!(a.mirror_for(Color::Black), a.flip_vertical());
     }
 
-    // ---- Every transform preserves population count ----
-
     #[test]
     fn every_transform_preserves_count(a in any_bitboard()) {
         let transforms: [fn(Bitboard) -> Bitboard; 7] = [
@@ -397,8 +376,6 @@ proptest! {
             prop_assert_eq!(t(a).count(), a.count());
         }
     }
-
-    // ---- Carry-Rippler subset enumeration (planned for the move-gen change) ----
 
     #[test]
     fn subsets_yields_exactly_two_to_the_count_distinct_subsets(a in small_bitboard()) {
@@ -421,8 +398,6 @@ proptest! {
         sorted.dedup();
         prop_assert_eq!(sorted.len(), subsets.len(), "all subsets must be distinct");
     }
-
-    // ---- Fills (Kogge-Stone) ----
 
     #[test]
     fn north_fill_matches_naive_smear(a in any_bitboard()) {
@@ -461,12 +436,9 @@ proptest! {
         prop_assert_eq!(a.file_fill().count() % 8, 0);
     }
 
-    // ---- Occluded fill ----
-    //
     // occluded_fill takes a Direction (like shift) rather than being 8 hardcoded
     // per-direction methods, so these properties are parametrized over
     // Direction::ALL rather than repeated 8 times.
-
     #[test]
     fn occluded_fill_matches_naive_walk(
         a in any_bitboard(),
@@ -493,8 +465,6 @@ proptest! {
         prop_assert_eq!(a.occluded_fill(Bitboard::ALL, Direction::South), a.south_fill());
     }
 
-    // ---- Dilation ----
-
     #[test]
     fn dilate_matches_union_of_all_eight_shifts(a in any_bitboard()) {
         let mut expected = a;
@@ -508,8 +478,6 @@ proptest! {
     fn dilate_is_a_superset(a in any_bitboard()) {
         prop_assert_eq!(a.and_not(a.dilate()), Bitboard::EMPTY);
     }
-
-    // ---- Color-relative fills ----
 
     #[test]
     fn forward_fill_white_matches_north_fill(a in any_bitboard()) {

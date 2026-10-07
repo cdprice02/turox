@@ -30,8 +30,7 @@ use crate::{Color, Piece, Square};
 ///    square)`; an en passant capture must also pass `en_passant_is_legal`; and a king
 ///    move must land on a square `attacked_without_king` doesn't cover.
 ///
-/// `legal_moves_naive` below is the naive reference this has to agree with;
-/// `tests/legal_props.rs`'s proptest checks exactly that.
+/// `legal_moves_naive` below is the naive reference this has to agree with.
 #[must_use]
 pub fn legal_moves(board: &Board) -> MoveList {
     let mut moves = MoveList::default();

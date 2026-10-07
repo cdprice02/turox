@@ -154,13 +154,10 @@ mod tests {
         );
     }
 
-    // ---- The policy ----
-    //
     // A move is reduced when it is quiet, the node has depth to spare, and
     // enough moves have already been searched at full depth. Everything else
     // answers zero, which the caller reads as "search it normally" rather than
     // as "reduce it by no plies".
-
     #[test]
     fn a_move_that_is_not_quiet_is_never_reduced() {
         for depth in [3, 8, 20, 31] {

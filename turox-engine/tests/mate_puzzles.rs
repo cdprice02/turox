@@ -1,30 +1,13 @@
-//! Forced-mate fixtures shared by every selective-search feature.
+//! Forced-mate puzzles searched at and past their mate distance, asserting the
+//! exact mate score.
 //!
-//! Each of late move reductions, reverse futility, null-move, futility and
-//! late move pruning can lose a forced mate, and each loses it the same way:
-//! the line is still in the tree, but the node that would have found it was
-//! reduced, skipped or cut short. A search that no longer sees a mate it used
-//! to see is a correctness failure that otherwise surfaces only as unexplained
-//! strength loss, so the guard lives in one place rather than being rebuilt
-//! per feature.
-//!
-//! The property is absolute rather than comparative: each puzzle names the
-//! exact mate distance, so nothing needs a feature switch to compare against.
-//! Any change that stops the search reaching a mate fails here.
-//!
-//! **Every puzzle is searched past where it is found as well as at it.**
-//! Searching a mate in three at depth three proves very little about pruning:
-//! the mating line is most of the tree. Searching the same puzzle several
-//! plies deeper puts the mate inside a tree full of ordinary moves, which is
-//! where a reduction or a margin actually gets the chance to prune it away.
-//!
-//! `tests/search.rs` keeps its own mate tests, which assert the mating *move*
-//! and carry the provenance of each FEN. These assert the score, and exist to
-//! be re-run rather than read.
-//!
-//! The deep searches make this one of the slower tests in the suite, and it
-//! stays out of `#[ignore]` anyway: a guard that only runs in the deep job
-//! does not guard the pull request that breaks it.
+//! Every selective-search feature (late move reductions, reverse futility, null
+//! move, futility, late move pruning) can lose a forced mate by reducing or
+//! skipping the node that finds it, which otherwise shows up only as
+//! unexplained strength loss. Searching several plies past the mate puts it
+//! inside a tree of ordinary moves, where pruning gets the chance to cut it.
+//! Kept out of `#[ignore]` despite the cost: a guard that only runs in the deep
+//! job does not guard the pull request that breaks it.
 
 use turox_chess::board::Board;
 use turox_engine::search::{Search, MATE};

@@ -298,7 +298,7 @@ does `cargo check` it on every push, so it cannot silently stop building). `try_
 the one place the engine takes untrusted input directly off the wire,
 since UCI's `position fen <...>` command resolves through it: `Err` is a
 correct outcome for a malformed string, a panic is not.
-`tests/fen_props.rs` already checks the same property over
+`tests/board_fen.rs` already checks the same property over
 proptest-generated inputs; this is the coverage-guided version of it, for
 inputs a random regex won't reliably hit.
 

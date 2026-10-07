@@ -1,17 +1,9 @@
-//! `perft` against the six standard test positions (see the README's
-//! "References" section), the end-to-end correctness gate for move
-//! generation: it exercises `legal_moves`, `pseudo_legal`, `attacks`, `MoveList`,
-//! `Board::make_move`, `tables`, and `magic` together. A wrong count at low
-//! depth on any position localizes to a specific rule; matching all six
-//! (including the deep, `#[ignore]`d depths) is the point at which move
-//! generation is actually done.
+//! `perft` against the six standard positions (see the README's References
+//! section): the end-to-end gate for move generation, where a wrong count at
+//! low depth localizes to a specific rule.
 //!
-//! `perft` counts the last ply's moves rather than making them, so it runs at
-//! tens of millions of nodes a second even in the `dev` profile CI uses
-//! (`opt-level = 1`; see the workspace `Cargo.toml`). Depths up to about 16M
-//! nodes take under half a second there and run on every push. The depths of
-//! 90M nodes and more are `#[ignore]`d: a few seconds each in `--release`, run
-//! with `cargo nextest run --workspace --run-ignored all --release`.
+//! Depths up to about 16M nodes run on every push in the `dev` profile. Deeper
+//! ones are `#[ignore]`d and run with `--run-ignored all --release`.
 
 #![expect(
     clippy::expect_used,
@@ -31,8 +23,6 @@ const POSITION_6: &str = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPP
 fn board(fen: &str) -> Board {
     Board::try_from_fen(fen).expect("valid FEN")
 }
-
-// ---- startpos ----
 
 #[test]
 fn startpos_perft_1() {
@@ -65,8 +55,6 @@ fn startpos_perft_6() {
     assert_eq!(perft(&board(STARTPOS), 6), 119_060_324);
 }
 
-// ---- Kiwipete ----
-
 #[test]
 fn kiwipete_perft_1() {
     assert_eq!(perft(&board(KIWIPETE), 1), 48);
@@ -92,8 +80,6 @@ fn kiwipete_perft_4() {
 fn kiwipete_perft_5() {
     assert_eq!(perft(&board(KIWIPETE), 5), 193_690_690);
 }
-
-// ---- Position 3 ----
 
 #[test]
 fn position_3_perft_1() {
@@ -131,8 +117,6 @@ fn position_3_perft_7() {
     assert_eq!(perft(&board(POSITION_3), 7), 178_633_661);
 }
 
-// ---- Position 4 ----
-
 #[test]
 fn position_4_perft_1() {
     assert_eq!(perft(&board(POSITION_4), 1), 6);
@@ -157,8 +141,6 @@ fn position_4_perft_4() {
 fn position_4_perft_5() {
     assert_eq!(perft(&board(POSITION_4), 5), 15_833_292);
 }
-
-// ---- Position 5 ----
 
 #[test]
 fn position_5_perft_1() {
@@ -186,8 +168,6 @@ fn position_5_perft_5() {
     assert_eq!(perft(&board(POSITION_5), 5), 89_941_194);
 }
 
-// ---- Position 6 ----
-
 #[test]
 fn position_6_perft_1() {
     assert_eq!(perft(&board(POSITION_6), 1), 46);
@@ -214,19 +194,13 @@ fn position_6_perft_5() {
     assert_eq!(perft(&board(POSITION_6), 5), 164_075_551);
 }
 
-// ---- perft(0) ----
-
 #[test]
 fn perft_zero_is_one_leaf() {
     assert_eq!(perft(&board(STARTPOS), 0), 1);
 }
 
-// ---- perft_divide ----
-//
-// Per-root-move node counts. Not called by any test above; it earns its
-// place the moment one of the counts above is ever wrong and needs
-// localizing to a specific root move, which is exactly what a raw total
-// can't tell you.
+/// Per-root-move node counts, for localizing a wrong total to the root move
+/// that produced it.
 #[expect(
     dead_code,
     reason = "kept compiling and ready for the moment a perft count is wrong and needs localizing to a root move"

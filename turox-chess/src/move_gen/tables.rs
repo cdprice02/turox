@@ -277,8 +277,6 @@ mod tests {
         assert_eq!(line(Square::B1, Square::C3), Bitboard::EMPTY);
     }
 
-    // ---- Exhaustive checks against an independent reference ----
-    //
     // The concrete examples above are readable, pinned anchors; these check
     // every function against a definition built directly from
     // `Square::offset`/file-rank arithmetic, not from whatever `Bitboard`

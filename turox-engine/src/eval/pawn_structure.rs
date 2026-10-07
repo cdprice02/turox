@@ -73,8 +73,6 @@ mod tests {
     use super::*;
     use turox_chess::types::Square;
 
-    // ---- doubled_penalty ----
-
     #[test]
     fn doubled_penalty_is_zero_on_an_empty_board() {
         assert_eq!(doubled_penalty(Bitboard::EMPTY, Color::White), 0);
@@ -126,8 +124,6 @@ mod tests {
         );
     }
 
-    // ---- isolated_penalty ----
-
     #[test]
     fn isolated_penalty_counts_a_lone_pawn() {
         let pawns = Bitboard::EMPTY.with(Square::D4);
@@ -162,8 +158,6 @@ mod tests {
         let pawns = Bitboard::EMPTY.with(Square::D4).with(Square::C6);
         assert_eq!(isolated_penalty(pawns), 0);
     }
-
-    // ---- passed_bonus ----
 
     #[test]
     fn passed_bonus_counts_every_pawn_when_no_enemy_pawns_exist() {

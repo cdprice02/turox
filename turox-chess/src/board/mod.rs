@@ -60,15 +60,13 @@ pub struct Board {
     /// `PartialEq` (see the manual impl below): it's a pure function of
     /// every other field, not part of a position's identity, so it
     /// shouldn't change what "equal" means for callers. A hash-maintenance
-    /// bug should surface as a `tests/zobrist_props.rs` failure, not as
+    /// bug should surface as a hash test failure, not as
     /// every unrelated equality-based test in the suite going red alongside
     /// it.
     hash: u64,
 }
 
 /// Compares every field except `hash`; see that field's own doc for why.
-/// `tests/zobrist_props.rs` checks hash correctness directly, through
-/// `Board::hash()`/`zobrist::compute_hash`, rather than through this impl.
 impl PartialEq for Board {
     fn eq(&self, other: &Self) -> bool {
         self.by_color == other.by_color
@@ -297,8 +295,7 @@ impl Board {
     }
 
     /// This position's Zobrist hash. Read this, not `zobrist::compute_hash`
-    /// (that exists purely as this field's incremental-maintenance test
-    /// oracle, checked against it in `tests/zobrist_props.rs`).
+    /// (that exists purely as this field's incremental-maintenance test oracle).
     #[must_use]
     pub const fn hash(&self) -> u64 {
         self.hash

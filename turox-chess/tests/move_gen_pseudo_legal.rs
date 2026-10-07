@@ -1,20 +1,20 @@
-//! Concrete scenario tests for `move_gen::pseudo_legal`'s public API.
+//! Tests for `move_gen::pseudo_legal`: each generator's property against a
+//! naive reference built from `Square::offset` stepping and `Board` accessors,
+//! `is_pseudo_legal`'s property against `pseudo_legal_moves` itself, and
+//! concrete positions for double pushes, en passant, promotion and castling.
 //!
-//! `tests/pseudo_legal_props.rs` has the exhaustive-against-independent-
-//! reference coverage for `pawn_moves`/`knight_moves`/`king_moves`/
-//! `slider_moves`; these are hand-picked positions for the cases a naive
-//! reference (built the same way, with the same offset-stepping technique)
-//! wouldn't independently catch a mistake in: pawn double-push blocking, en
-//! passant, promotion, and `castling_moves`'s per-corner mapping
-//! specifically, which hinges on `move_gen::attacks` (already
-//! independently tested elsewhere) rather than on move-stepping at all.
+//! Move lists compare as sorted `(from, to, flags)` triples, because `Move` has
+//! no `Ord` and generation order is not part of the contract.
 
+use proptest::prelude::*;
 use turox_chess::board::Board;
 use turox_chess::move_gen::move_list::MoveList;
 use turox_chess::move_gen::pseudo_legal::{
-    castling_moves, is_pseudo_legal, pawn_moves, pseudo_legal_moves,
+    castling_moves, is_pseudo_legal, king_moves, knight_moves, pawn_moves, pseudo_legal_moves,
+    slider_moves,
 };
-use turox_chess::{Move, MoveFlags, Square};
+use turox_chess::strategies::{any_board, any_square};
+use turox_chess::{Color, Move, MoveFlags, Piece, Rank, Square};
 
 fn contains(list: &MoveList, from: Square, to: Square, flags: MoveFlags) -> bool {
     list.iter()
@@ -35,8 +35,6 @@ const PROMO_CAPTURE: [MoveFlags; 4] = [
     MoveFlags::PromoteCaptureRook,
     MoveFlags::PromoteCaptureQueen,
 ];
-
-// ---- pawn: double push blocking ----
 
 #[test]
 fn white_double_push_blocked_by_piece_on_intermediate_square() {
@@ -99,8 +97,6 @@ fn black_double_push_blocked_by_piece_on_far_square_only() {
     ));
 }
 
-// ---- pawn: en passant ----
-
 #[test]
 fn white_en_passant_capture_is_generated() {
     let board = Board::try_from_fen("8/8/8/3pP3/8/8/8/8 w - d6 0 1").expect("valid FEN");
@@ -136,8 +132,6 @@ fn en_passant_target_set_but_no_pawn_can_reach_it_generates_nothing() {
     pawn_moves(&board, &mut list);
     assert!(!list.iter().any(|m| m.flags() == MoveFlags::EnPassant));
 }
-
-// ---- pawn: promotion ----
 
 #[test]
 fn white_quiet_promotion_generates_all_four_pieces() {
@@ -203,12 +197,9 @@ fn black_capturing_promotion_generates_all_four_pieces_alongside_quiet() {
     assert_eq!(list.len(), 8);
 }
 
-// ---- castling ----
-//
 // Concrete FEN tests, not a proptest: legality here hinges on
 // `move_gen::attacks` (already independently tested), so what's worth pinning
 // down is the per-corner rook mapping specifically.
-
 const CASTLE_BASE_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const CASTLE_BASE_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";
 
@@ -412,8 +403,6 @@ fn no_castling_moves_when_rights_are_absent() {
     assert!(list.is_empty());
 }
 
-// ---- pseudo_legal_moves: the full aggregate ----
-
 #[test]
 fn start_pos_has_exactly_twenty_pseudo_legal_moves() {
     let board = Board::start_pos();
@@ -443,10 +432,261 @@ fn double_pawn_push_blocked_on_the_intermediate_square_is_not_pseudo_legal() {
     // White pawn e2, White knight e3 blocking, e4 empty. The final square is
     // clear and two ranks forward on the right rank, but pawn_pushes builds
     // the double push by shifting the *already-empty-filtered* single push
-    // (tests/pseudo_legal.rs's own `white_double_push_blocked_by_piece_on_intermediate_square`
+    // (`white_double_push_blocked_by_piece_on_intermediate_square`, in this file,
     // pins this down for the generator); a predicate that only checks e4's
     // occupancy and skips e3 would wrongly accept this.
     let board = Board::try_from_fen("8/8/8/8/8/4N3/4P3/4K2k w - - 0 1").expect("valid FEN");
     let m = Move::new(Square::E2, Square::E4, MoveFlags::DoublePawnPush);
     assert!(!is_pseudo_legal(&board, m));
+}
+
+const fn move_key(m: Move) -> (u8, u8, MoveFlags) {
+    (m.from().to_u8(), m.to().to_u8(), m.flags())
+}
+
+fn sorted_keys(list: &MoveList) -> Vec<(u8, u8, MoveFlags)> {
+    let mut keys: Vec<_> = list.iter().map(|&m| move_key(m)).collect();
+    keys.sort_unstable();
+    keys
+}
+
+fn sorted_naive_keys(moves: Vec<Move>) -> Vec<(u8, u8, MoveFlags)> {
+    let mut keys: Vec<_> = moves.into_iter().map(move_key).collect();
+    keys.sort_unstable();
+    keys
+}
+
+// Deliberately independent of `Bitboard`'s pawn/knight/slider primitives:
+// built from `Square::offset` stepping only.
+const KNIGHT_DELTAS: [(i8, i8); 8] = [
+    (1, 2),
+    (2, 1),
+    (2, -1),
+    (1, -2),
+    (-1, -2),
+    (-2, -1),
+    (-2, 1),
+    (-1, 2),
+];
+const ROOK_DIRS: [(i8, i8); 4] = [(0, 1), (0, -1), (1, 0), (-1, 0)];
+const BISHOP_DIRS: [(i8, i8); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+
+fn naive_knight_moves(board: &Board) -> Vec<Move> {
+    let us = board.side_to_move();
+    let mut moves = Vec::new();
+    for from in board.pieces(us, Piece::Knight) {
+        for (df, dr) in KNIGHT_DELTAS {
+            let Some(to) = from.offset(df, dr) else {
+                continue;
+            };
+            match board.piece_at(to) {
+                Some(cp) if cp.color() == us => {}
+                Some(_) => moves.push(Move::new(from, to, MoveFlags::Capture)),
+                None => moves.push(Move::new(from, to, MoveFlags::Quiet)),
+            }
+        }
+    }
+    moves
+}
+
+fn naive_king_moves(board: &Board) -> Vec<Move> {
+    let us = board.side_to_move();
+    let mut moves = Vec::new();
+    for from in board.pieces(us, Piece::King) {
+        for df in -1i8..=1 {
+            for dr in -1i8..=1 {
+                if df == 0 && dr == 0 {
+                    continue;
+                }
+                let Some(to) = from.offset(df, dr) else {
+                    continue;
+                };
+                match board.piece_at(to) {
+                    Some(cp) if cp.color() == us => {}
+                    Some(_) => moves.push(Move::new(from, to, MoveFlags::Capture)),
+                    None => moves.push(Move::new(from, to, MoveFlags::Quiet)),
+                }
+            }
+        }
+    }
+    moves
+}
+
+fn naive_slider_moves_for(board: &Board, piece: Piece, dirs: &[(i8, i8)]) -> Vec<Move> {
+    let us = board.side_to_move();
+    let mut moves = Vec::new();
+    for from in board.pieces(us, piece) {
+        for &(df, dr) in dirs {
+            let mut current = from;
+            while let Some(to) = current.offset(df, dr) {
+                match board.piece_at(to) {
+                    Some(cp) if cp.color() == us => break,
+                    Some(_) => {
+                        moves.push(Move::new(from, to, MoveFlags::Capture));
+                        break;
+                    }
+                    None => {
+                        moves.push(Move::new(from, to, MoveFlags::Quiet));
+                        current = to;
+                    }
+                }
+            }
+        }
+    }
+    moves
+}
+
+fn naive_slider_moves(board: &Board) -> Vec<Move> {
+    let mut moves = naive_slider_moves_for(board, Piece::Bishop, &BISHOP_DIRS);
+    moves.extend(naive_slider_moves_for(board, Piece::Rook, &ROOK_DIRS));
+    moves.extend(naive_slider_moves_for(board, Piece::Queen, &ROOK_DIRS));
+    moves.extend(naive_slider_moves_for(board, Piece::Queen, &BISHOP_DIRS));
+    moves
+}
+
+fn naive_pawn_moves(board: &Board) -> Vec<Move> {
+    let us = board.side_to_move();
+    let them = us.flip();
+    let forward: i8 = match us {
+        Color::White => 1,
+        Color::Black => -1,
+    };
+    let start_rank = match us {
+        Color::White => Rank::R2,
+        Color::Black => Rank::R7,
+    };
+    let promo_rank = match us {
+        Color::White => Rank::R8,
+        Color::Black => Rank::R1,
+    };
+    let ep = board.en_passant();
+
+    let mut moves = Vec::new();
+    for from in board.pieces(us, Piece::Pawn) {
+        if let Some(one) = from.offset(0, forward) {
+            if board.piece_at(one).is_none() {
+                if one.rank() == promo_rank {
+                    for &flag in &PROMO_QUIET {
+                        moves.push(Move::new(from, one, flag));
+                    }
+                } else {
+                    moves.push(Move::new(from, one, MoveFlags::Quiet));
+                    if from.rank() == start_rank {
+                        if let Some(two) = from.offset(0, 2 * forward) {
+                            if board.piece_at(two).is_none() {
+                                moves.push(Move::new(from, two, MoveFlags::DoublePawnPush));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for df in [-1i8, 1i8] {
+            let Some(to) = from.offset(df, forward) else {
+                continue;
+            };
+            if let Some(cp) = board.piece_at(to) {
+                if cp.color() == them {
+                    if to.rank() == promo_rank {
+                        for &flag in &PROMO_CAPTURE {
+                            moves.push(Move::new(from, to, flag));
+                        }
+                    } else {
+                        moves.push(Move::new(from, to, MoveFlags::Capture));
+                    }
+                }
+            } else if Some(to) == ep {
+                moves.push(Move::new(from, to, MoveFlags::EnPassant));
+            }
+        }
+    }
+    moves
+}
+
+// Its contract is membership in `pseudo_legal_moves`'s own output, checked from both
+// directions: every move that generator actually produces must be accepted, and an
+// arbitrary `(from, to, flags)` triple must be rejected unless it happens to coincide
+// with a real one. The second direction is the one a shortcut implementation (e.g.
+// "is there a piece of the right color on `from`") would fail silently on: a stale or
+// hash-collided TT move has to be caught here, not waved through.
+const ALL_MOVE_FLAGS: [MoveFlags; 14] = [
+    MoveFlags::Quiet,
+    MoveFlags::DoublePawnPush,
+    MoveFlags::KingCastle,
+    MoveFlags::QueenCastle,
+    MoveFlags::Capture,
+    MoveFlags::EnPassant,
+    MoveFlags::PromoteKnight,
+    MoveFlags::PromoteBishop,
+    MoveFlags::PromoteRook,
+    MoveFlags::PromoteQueen,
+    MoveFlags::PromoteCaptureKnight,
+    MoveFlags::PromoteCaptureBishop,
+    MoveFlags::PromoteCaptureRook,
+    MoveFlags::PromoteCaptureQueen,
+];
+
+fn any_move_flags() -> impl Strategy<Value = MoveFlags> {
+    proptest::sample::select(&ALL_MOVE_FLAGS[..])
+}
+
+proptest! {
+    #[test]
+    fn is_pseudo_legal_accepts_every_move_pseudo_legal_moves_produces(board in any_board()) {
+        let mut list = MoveList::new();
+        pseudo_legal_moves(&board, &mut list);
+        for &m in &list {
+            prop_assert!(
+                is_pseudo_legal(&board, m),
+                "is_pseudo_legal rejected {:?}, which pseudo_legal_moves produced", m
+            );
+        }
+    }
+
+    #[test]
+    fn is_pseudo_legal_rejects_arbitrary_moves_not_in_pseudo_legal_moves(
+        board in any_board(), from in any_square(), to in any_square(), flags in any_move_flags(),
+    ) {
+        let mut list = MoveList::new();
+        pseudo_legal_moves(&board, &mut list);
+        let m = Move::new(from, to, flags);
+        let is_real = list.contains(&m);
+
+        prop_assert_eq!(
+            is_pseudo_legal(&board, m),
+            is_real,
+            "is_pseudo_legal disagreed with pseudo_legal_moves membership for {:?}", m
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn knight_moves_matches_naive(board in any_board()) {
+        let mut list = MoveList::new();
+        knight_moves(&board, &mut list);
+        prop_assert_eq!(sorted_keys(&list), sorted_naive_keys(naive_knight_moves(&board)));
+    }
+
+    #[test]
+    fn king_moves_matches_naive(board in any_board()) {
+        let mut list = MoveList::new();
+        king_moves(&board, &mut list);
+        prop_assert_eq!(sorted_keys(&list), sorted_naive_keys(naive_king_moves(&board)));
+    }
+
+    #[test]
+    fn slider_moves_matches_naive(board in any_board()) {
+        let mut list = MoveList::new();
+        slider_moves(&board, &mut list);
+        prop_assert_eq!(sorted_keys(&list), sorted_naive_keys(naive_slider_moves(&board)));
+    }
+
+    #[test]
+    fn pawn_moves_matches_naive(board in any_board()) {
+        let mut list = MoveList::new();
+        pawn_moves(&board, &mut list);
+        prop_assert_eq!(sorted_keys(&list), sorted_naive_keys(naive_pawn_moves(&board)));
+    }
 }

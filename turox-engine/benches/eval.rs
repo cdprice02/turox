@@ -17,8 +17,7 @@ use turox_chess::board::Board;
 use turox_chess::move_gen::legal::legal_moves;
 use turox_engine::eval::evaluate;
 
-// Same six standard perft positions as benches/move_gen.rs and
-// tests/perft.rs; duplicated rather than shared, since a bench compiles as
+// The six standard perft positions, duplicated rather than shared, since a bench compiles as
 // its own binary and only sees `pub` API.
 const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const KIWIPETE: &str = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";

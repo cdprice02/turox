@@ -1,8 +1,5 @@
-//! End-to-end test: a small synthetic PGN fixture, all the way through
-//! `bookgen::build_book`, to a `Book` a real position can be looked up in.
-//! `tests/pgn.rs`, `tests/san.rs`, `tests/aggregate.rs`, and `tests/weight.rs`
-//! cover each stage in isolation; this is the one place that proves they
-//! actually compose.
+//! End-to-end test: a small synthetic PGN fixture through `bookgen::build_book`
+//! to a `Book` a real position can be looked up in, proving the stages compose.
 
 use bookgen::aggregate::BuildOptions;
 use bookgen::build_book;

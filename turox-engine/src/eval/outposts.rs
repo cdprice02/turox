@@ -107,8 +107,6 @@ mod tests {
         assert_eq!(Square::A1.distance(Square::H8), MAX_DISTANCE);
     }
 
-    // ---- outpost_bonus ----
-
     #[test]
     fn outpost_bonus_is_zero_with_no_minors() {
         assert_eq!(
@@ -167,8 +165,6 @@ mod tests {
             OUTPOST_BONUS
         );
     }
-
-    // ---- tropism_bonus ----
 
     #[test]
     fn tropism_bonus_is_zero_with_no_pawns() {

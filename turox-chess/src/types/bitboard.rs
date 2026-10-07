@@ -21,9 +21,6 @@ use std::ops::Not;
 /// `Not` is the one exception (unary, no such split, kept as `!board`).
 /// No `From<u64>`/`PartialEq<u64>`: raw integers cross the boundary only through
 /// `from_bits`/`bits()`.
-///
-/// Every operation here is implemented and verified against a naive reference
-/// (see `tests/bitboard_props.rs`).
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct Bitboard(u64);
@@ -544,13 +541,13 @@ impl fmt::Display for Bitboard {
 mod tests {
     use super::*;
 
-    /// Anchors `rotate_90_cw` to an absolute direction. The group-law property
-    /// tests in `tests/bitboard_props.rs` (four cw rotations = identity, cw/ccw
-    /// are mutual inverses) only prove the two are *consistent with each other*;
-    /// that would hold even if both were secretly counter-clockwise. This pins it
-    /// down: a physical clockwise spin (White's side, a1 bottom-left, h8
-    /// top-right) sends each corner to the next one going bottom-left -> top-left
-    /// -> top-right -> bottom-right -> bottom-left.
+    /// Anchors `rotate_90_cw` to an absolute direction. The group-law properties
+    /// (four cw rotations = identity, cw/ccw are mutual inverses) only prove the
+    /// two are *consistent with each other*; that would hold even if both were
+    /// secretly counter-clockwise. This pins it down: a physical clockwise spin
+    /// (White's side, a1 bottom-left, h8 top-right) sends each corner to the next
+    /// one going bottom-left -> top-left -> top-right -> bottom-right ->
+    /// bottom-left.
     #[test]
     fn rotate_90_cw_matches_known_corner_mapping() {
         assert_eq!(Square::A1.bitboard().rotate_90_cw(), Square::A8.bitboard());
@@ -559,8 +556,8 @@ mod tests {
         assert_eq!(Square::H1.bitboard().rotate_90_cw(), Square::A1.bitboard());
     }
 
-    /// A hand-computed, eyeball-able complement to the property tests in
-    /// `tests/bitboard_props.rs`: a center square has all 8 king-move neighbors.
+    /// A hand-computed, eyeball-able complement to the property tests: a center
+    /// square has all 8 king-move neighbors.
     #[test]
     fn dilate_center_square_covers_all_eight_neighbors() {
         let expected = Bitboard::EMPTY
@@ -589,10 +586,10 @@ mod tests {
     }
 
     /// The edge cases `lsb`/`msb`'s `is_empty()` guard exists for: an empty
-    /// board has neither, and a full board's lowest/highest bit is exactly
-    /// the LERF ordering's endpoints. `tests/bitboard_props.rs`'s
-    /// `lsb_msb_match_trailing_leading_zeros` covers the general case against
-    /// a naive reference; these pin the two boundary values concretely.
+    /// board has neither, and a full board's lowest/highest bit is exactly the
+    /// LERF ordering's endpoints. `lsb_msb_match_trailing_leading_zeros` covers
+    /// the general case against a naive reference; these pin the two boundary
+    /// values concretely.
     #[test]
     fn lsb_msb_on_empty_and_full_boards() {
         assert_eq!(Bitboard::EMPTY.lsb(), None);

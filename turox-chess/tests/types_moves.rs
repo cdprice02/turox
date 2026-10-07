@@ -1,31 +1,28 @@
-//! Concrete scenario tests for `Move::to_uci`/`Move::from_uci`.
+//! Tests for `Move::to_uci` and `Move::from_uci`: a round-trip property over
+//! every legal move, and concrete UCI strings for castling, promotion and en
+//! passant.
 //!
-//! `tests/move_uci_props.rs` has the load-bearing round-trip property (every
-//! legal move, in every generated position); `any_board()` never generates
-//! an en passant state though (see its own doc), so the concrete en passant
-//! test here covers that flag directly, the same split `pseudo_legal.rs`
-//! uses for en passant generation itself. The castling and promotion tests
-//! here also pin exact UCI strings down, which a property alone wouldn't
-//! catch if `to_uci`/`from_uci` agreed with each other but both disagreed
-//! with the UCI spec.
+//! A round trip cannot catch both directions agreeing with each other and
+//! disagreeing with the UCI spec, which is what the concrete strings pin. En
+//! passant is concrete-only because `any_board()` never generates an en passant
+//! state.
 
 #![expect(
     clippy::expect_used,
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
+use proptest::prelude::*;
 use turox_chess::board::Board;
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_board_with_legal_move;
 use turox_chess::types::MoveFlags;
 use turox_chess::{Move, Square};
 
-// ---- Concrete castling: all four corners ----
-//
 // All four corners get checked explicitly rather than trusting symmetry.
 // Confirmed via `legal_moves` directly (not assumed) that this FEN produces exactly
 // `Ra1-c1`/`Rh1-g1`-shaped castles for whichever color is to move, spelled
 // by the king's own destination per UCI (`e1g1`, not `e1h1`).
-
 const OPEN_CASTLE_POSITION_WHITE: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
 const OPEN_CASTLE_POSITION_BLACK: &str = "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1";
 
@@ -66,14 +63,11 @@ fn black_queenside_castle_is_e8c8() {
     assert_eq!(m.to_uci(), "e8c8");
 }
 
-// ---- Concrete promotion: all four pieces ----
-//
 // All four promotion moves here share the exact same `from`/`to`
 // (`a7a8`), differing *only* in which piece they promote to (confirmed via
 // `legal_moves` directly): the one case where `from_uci` has to actually
 // use the parsed promotion letter to disambiguate, not just match on
 // `from`/`to` alone.
-
 const PROMOTION_POSITION: &str = "8/P7/8/8/8/8/8/4k2K w - - 0 1";
 
 #[test]
@@ -129,8 +123,6 @@ fn capture_promotion_suffixes_round_trip() {
     }
 }
 
-// ---- Concrete en passant ----
-
 const EN_PASSANT_POSITION: &str = "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1";
 
 #[test]
@@ -146,8 +138,6 @@ fn en_passant_capture_round_trips() {
     assert_eq!(ep.to_uci(), "e5d6");
     assert_eq!(Move::from_uci("e5d6", moves.as_slice()), Some(ep));
 }
-
-// ---- Malformed input never panics ----
 
 #[test]
 fn from_uci_rejects_garbage_without_panicking() {
@@ -180,4 +170,22 @@ fn from_uci_rejects_a_well_formed_but_illegal_move() {
     let board = Board::try_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
     let moves = legal_moves(&board);
     assert_eq!(Move::from_uci("e2e4", moves.as_slice()), None);
+}
+
+proptest! {
+    /// The load-bearing check: for every legal move in every generated
+    /// position, `to_uci` then `from_uci` (resolved against that same
+    /// position's legal moves) recovers the exact original `Move`, flags
+    /// included. This is what actually proves `from_uci`'s legal-move
+    /// matching disambiguates correctly, not just that the two functions
+    /// don't panic.
+    #[test]
+    fn to_uci_then_from_uci_recovers_the_original_move(board in any_board_with_legal_move()) {
+        let moves = legal_moves(&board);
+        for &m in moves.as_slice() {
+            let uci = m.to_uci();
+            let recovered = Move::from_uci(&uci, moves.as_slice());
+            prop_assert_eq!(recovered, Some(m), "uci string was {:?}", uci);
+        }
+    }
 }

@@ -1,18 +1,6 @@
-//! Property tests for `move_gen::magic`: the executable version of the
-//! contracts documented on each function in `src/move_gen/magic.rs`.
-//!
-//! Every function gets a reference-equivalence check against an independent
-//! implementation built directly from `Square::offset` stepped one square at a
-//! time, not from `Bitboard::occluded_fill` or whatever magic-hashing technique
-//! the real implementation ends up using.
-//!
-//! Every property here pairs a `Square` with an arbitrary `occupied: Bitboard`
-//! (2^64 values), a genuinely unbounded domain, which is what `proptest`'s
-//! random sampling is for. The `Square`-only checks (fixed `Bitboard::ALL`)
-//! live as plain exhaustive `#[test]`s in `move_gen/magic.rs`'s own test
-//! module instead: no unbounded domain there for `proptest` to be worth its
-//! overhead over a loop, and it's a unit-level check of that module's own
-//! functions, not a cross-module integration property.
+//! Property tests for `move_gen::magic`'s lookups against a naive reference
+//! that steps one square at a time with `Square::offset`, over arbitrary
+//! occupancies.
 
 use proptest::prelude::*;
 use turox_chess::move_gen::magic::{
@@ -51,7 +39,6 @@ fn naive_bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
 }
 
 proptest! {
-    // ---- Rook ----
 
     #[test]
     fn rook_attacks_matches_naive_walk(sq in any_square(), occupied in any_bitboard()) {
@@ -63,8 +50,6 @@ proptest! {
         prop_assert!(!rook_attacks(sq, occupied).contains(sq));
     }
 
-    // ---- Bishop ----
-
     #[test]
     fn bishop_attacks_matches_naive_walk(sq in any_square(), occupied in any_bitboard()) {
         prop_assert_eq!(bishop_attacks(sq, occupied), naive_bishop_attacks(sq, occupied));
@@ -74,8 +59,6 @@ proptest! {
     fn bishop_attacks_never_contains_its_own_square(sq in any_square(), occupied in any_bitboard()) {
         prop_assert!(!bishop_attacks(sq, occupied).contains(sq));
     }
-
-    // ---- Queen ----
 
     #[test]
     fn queen_attacks_never_contains_its_own_square(sq in any_square(), occupied in any_bitboard()) {

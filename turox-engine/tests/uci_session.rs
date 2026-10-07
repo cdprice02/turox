@@ -1,8 +1,5 @@
-//! End-to-end UCI session tests, driven over in-memory buffers instead of
-//! real stdin/stdout. This is what actually proves parsing, emission, and
-//! search compose correctly together as one session, not just that each
-//! works in isolation; a genuine integration test, so it lives here rather
-//! than as a unit test alongside any one of those pieces.
+//! End-to-end UCI session tests over in-memory buffers: parsing, emission and
+//! search composing as one session.
 
 #![expect(
     clippy::expect_used,

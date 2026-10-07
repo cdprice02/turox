@@ -155,8 +155,6 @@ pub const fn king_safety_score(board: &Board, color: Color) -> Tapered {
 mod tests {
     use super::*;
 
-    // ---- zone_files ----
-
     #[test]
     fn zone_files_has_no_empty_entries_for_a_non_edge_king() {
         assert!(zone_files(Square::G1).iter().all(|f| !f.is_empty()));
@@ -245,8 +243,6 @@ mod tests {
         );
     }
 
-    // ---- open_file_penalty ----
-
     #[test]
     fn open_file_penalty_is_zero_when_every_zone_file_has_a_pawn_of_either_color() {
         let king_sq = Square::G1;
@@ -308,8 +304,6 @@ mod tests {
         );
     }
 
-    // ---- storm_zone ----
-
     #[test]
     fn storm_zone_is_nine_squares_for_a_non_edge_king() {
         // 3 files (f, g, h) x STORM_RANGE (3) ranks ahead.
@@ -337,8 +331,6 @@ mod tests {
         assert!(!zone.and(Square::G7.bitboard()).is_empty());
         assert!(zone.and(Square::G4.bitboard()).is_empty());
     }
-
-    // ---- storm_penalty ----
 
     #[test]
     fn storm_penalty_is_zero_for_a_pawn_still_on_its_home_rank() {

@@ -1,14 +1,12 @@
-//! Concrete tests for `book`: the opening book's file format and lookup.
-//!
-//! `tests/book_props.rs` has the property coverage over arbitrary hashes,
-//! move sets, and seeds; this file pins the specific concrete scenarios a
-//! property alone wouldn't reliably hit: round-tripping through bytes,
-//! rejecting a too-short byte stream, rejecting a fingerprint mismatch, and
-//! the weighting actually mattering rather than just being random.
+//! Tests for `book`, the opening book's file format and lookup: properties over
+//! every hash, candidate set and seed, and concrete tests for byte round-trips,
+//! header rejection, weighting, and the shipped book's opening names.
 
+use proptest::prelude::*;
 use turox_chess::board::Board;
 use turox_chess::book::{default_book, Book, BookLoadError, BookMove};
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_square;
 use turox_chess::{Move, MoveFlags, Square};
 
 /// A `BookMove`'s `(from, to, flags, weight)`, used to compare book contents
@@ -309,4 +307,121 @@ fn the_shipped_book_does_not_name_the_start_position() {
         Board::start_pos().hash(),
         "the knights return to the start position, which is the case this guards"
     );
+}
+
+fn any_move() -> impl Strategy<Value = Move> {
+    (any_square(), any_square()).prop_map(|(from, to)| Move::new(from, to, MoveFlags::Quiet))
+}
+
+/// 1 to 5 candidate moves for one book position, each distinct (by `from`/
+/// `to`, since every move here is `MoveFlags::Quiet`) and with a positive
+/// weight: a book position with a zero-weight-only candidate set, or with
+/// two "different" moves that are actually the same move twice, isn't a
+/// meaningful scenario for either property below.
+fn any_candidate_set() -> impl Strategy<Value = Vec<BookMove>> {
+    proptest::collection::vec((any_move(), 1u32..1000), 1..5).prop_map(|pairs| {
+        let mut seen = std::collections::HashSet::new();
+        pairs
+            .into_iter()
+            .filter(|(mv, _)| seen.insert((mv.from(), mv.to())))
+            .map(|(mv, weight)| BookMove::new(mv, weight))
+            .collect()
+    })
+}
+
+proptest! {
+    /// Whatever `choose` returns is always one of the position's own
+    /// candidates, never a move the book never recorded for that hash.
+    #[test]
+    fn chosen_move_is_always_among_the_position_candidates(
+        hash: u64,
+        candidates in any_candidate_set(),
+        seed: u64,
+    ) {
+        let book = Book::new(vec![(hash, candidates.clone())]);
+        let chosen = book.choose(hash, seed);
+
+        prop_assert!(
+            chosen.is_some_and(|m| candidates.iter().any(|bm| bm.mv == m)),
+            "choose({hash:#x}, {seed}) returned {chosen:?}, not one of {candidates:?}"
+        );
+    }
+
+    /// Same hash, same candidates, same seed: the same choice every time.
+    /// Matches `a_fixed_seed_fully_determines_the_search_result`'s
+    /// reasoning: a caller who wants a reproducible run (measurement, a
+    /// fixed test) needs this, and it costs nothing real play needs, since
+    /// real play reseeds per game.
+    #[test]
+    fn chosen_move_is_reproducible_for_a_given_seed(
+        hash: u64,
+        candidates in any_candidate_set(),
+        seed: u64,
+    ) {
+        let book = Book::new(vec![(hash, candidates)]);
+
+        prop_assert_eq!(book.choose(hash, seed), book.choose(hash, seed));
+    }
+
+    /// A position outside the book stays outside it regardless of seed:
+    /// `choose` on a hash with no entry is `None` for every seed, not just
+    /// the ones a smaller example happened to try.
+    #[test]
+    fn an_out_of_book_hash_never_produces_a_move(unknown_hash: u64, seed: u64) {
+        let book = Book::new(vec![]);
+
+        prop_assert_eq!(book.choose(unknown_hash, seed), None);
+    }
+}
+
+/// An arbitrary fixed hash for the tests below that don't care which
+/// position they're probing, only that `choose` behaves consistently for
+/// one. Named (rather than a repeated inline literal) so it's grouped
+/// cleanly for `clippy::unusual_byte_groupings`.
+const PROBE_HASH: u64 = 0x00C0_FFEE;
+
+const fn b1c3() -> Move {
+    Move::new(Square::B1, Square::C3, MoveFlags::Quiet)
+}
+
+/// Concrete candidate sets, deliberately at moderate weight ratios (no
+/// steeper than 3:2) rather than proptest-drawn ones. A proptest weight in
+/// `1..1000` can land arbitrarily close to 999:1, and at that ratio the
+/// chance that none of 50 fixed seeds lands in the minority slice is real,
+/// not negligible: that is what surfaced as a flaky CI failure once
+/// already. At these ratios, missing a candidate across 50 independent
+/// seeds is astronomically unlikely rather than a coin flip.
+fn moderate_weight_candidate_sets() -> Vec<Vec<BookMove>> {
+    vec![
+        vec![BookMove::new(e2e4(), 2), BookMove::new(d2d4(), 1)],
+        vec![BookMove::new(e2e4(), 3), BookMove::new(d2d4(), 2)],
+        vec![
+            BookMove::new(e2e4(), 1),
+            BookMove::new(d2d4(), 1),
+            BookMove::new(b1c3(), 1),
+        ],
+    ]
+}
+
+/// Not a `proptest!` property: this needs many *seeds* for a few fixed
+/// candidate sets, which is a loop over seeds rather than a property
+/// proptest itself shrinks over. Mirrors
+/// `root_randomization_actually_varies_the_chosen_move`'s same shape.
+#[test]
+fn chosen_move_varies_across_seeds_when_multiple_candidates_exist() {
+    for candidates in moderate_weight_candidate_sets() {
+        let book = Book::new(vec![(PROBE_HASH, candidates.clone())]);
+
+        let chosen: std::collections::HashSet<_> = (0u64..50)
+            .map(|seed| {
+                book.choose(PROBE_HASH, seed.max(1))
+                    .map(|m| (m.from(), m.to()))
+            })
+            .collect();
+
+        assert!(
+            chosen.len() > 1,
+            "every seed produced the same move among {candidates:?}, so weighting is inert"
+        );
+    }
 }
