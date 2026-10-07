@@ -364,7 +364,7 @@ proptest! {
     }
 
     /// Same hash, same candidates, same seed: the same choice every time.
-    /// Matches `root_randomization_is_reproducible_for_a_given_seed`'s
+    /// Matches `a_fixed_seed_fully_determines_the_search_result`'s
     /// reasoning: a caller who wants a reproducible run (measurement, a
     /// fixed test) needs this, and it costs nothing real play needs, since
     /// real play reseeds per game.

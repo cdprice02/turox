@@ -1,27 +1,45 @@
-//! Concrete scenario tests for `search::Search`'s public API.
+//! Tests for `search::Search` as a whole. A test aimed at one search module's
+//! own public item lives in the file named after that module instead, as
+//! `search::tt`'s do.
 //!
-//! `tests/search_props.rs` has the unpruned-negamax-oracle property coverage;
-//! these are mate puzzles, score conventions, and time/node-budget behavior
-//! that a property over arbitrary boards wouldn't exercise on its own. Every
-//! FEN and every named move below was verified directly against this crate's
-//! own `legal_moves`/`make_move` before being written down here, not
-//! hand-analyzed or taken on faith from a source: this project has shipped
-//! hand-authored FEN bugs before, and a FEN pulled from a chess site for
-//! Philidor's Legacy turned out not to be a genuinely forced mate as given
-//! either.
+//! There is no published ground truth for search, so the properties rest on
+//! `Reference`: a plain negamax over the same leaf logic (quiescence, mate and
+//! draw scoring) the real `Search` uses, written from the definition rather
+//! than from `Search`'s code. It cannot validate quiescence's own move
+//! selection, since both sides call the same one; the concrete horizon tests
+//! cover that. The reference agrees with `Search` only while `Search` is pure
+//! alpha-beta, which is why every property stops at depth 2: late move
+//! reductions begin at depth 3, and from there a reduced move that fails low is
+//! never re-searched, so `Search` may legitimately miss what minimax finds.
+//! What a selective search does is checked by the tree-shape tests instead.
+//!
+//! Concrete tests cover what a property over arbitrary boards would not
+//! exercise: mate puzzles, score conventions, time and node budgets, root
+//! randomization, and a transposition table never changing a score. Every FEN
+//! and named move was checked against this crate's own `legal_moves` and
+//! `make_move` before being written down, not hand-analyzed or taken from a
+//! source: hand-authored FENs have been wrong here before, and a published
+//! Philidor's Legacy FEN turned out not to be a forced mate as given.
 
 #![expect(
     clippy::expect_used,
     reason = "`clippy.toml`'s allow-expect-in-tests reaches `#[test]` functions and `#[cfg(test)]` modules, but not plain helpers in an integration test or bench, where a failed fixture should abort the run"
 )]
 
+use proptest::prelude::*;
+use proptest::test_runner::TestCaseError;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use turox_chess::board::Board;
+use turox_chess::move_gen::attacks::in_check;
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::move_gen::move_list::MoveList;
+use turox_chess::strategies::any_board_with_legal_move;
 use turox_chess::{Move, Square};
-use turox_engine::search::{is_mate_score, CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
+use turox_engine::eval::{evaluate, Score};
+use turox_engine::search::tt::Tt;
+use turox_engine::search::{draw, is_mate_score, CutoffCause, Search, MATE, MAX_QUIESCENCE_DEPTH};
 
 // ---- Shared fixture ----
 
@@ -903,4 +921,602 @@ fn request_stop_before_the_search_stops_it_before_the_asked_for_depth() {
         "a search asked to stop before it began reported depth {} of a requested {DEPTH_NO_BOUNDED_SEARCH_REACHES}, so `request_stop` did not reach `should_abort`",
         result.depth
     );
+}
+
+// ---- Independent reference ----
+
+/// Wider than any score a search can return, so a full window never cuts off.
+const INFINITE: Score = MATE + 1;
+
+/// Minimax over the tree `Search` explores at depths 1 and 2, with a node
+/// budget so that a board too expensive to check is skipped rather than
+/// hanging the run.
+///
+/// Shares `draw`/`in_check`/`legal_moves`/`evaluate` with the real
+/// implementation (those are themselves already independently tested
+/// elsewhere), but not `Search`'s own ordering, windowing, table or abort
+/// logic. It searches moves in generation order and stores nothing.
+///
+/// `prune` picks between two ways of computing the same number. Unpruned, it
+/// is the definition itself: every move searched, the best one taken. With
+/// pruning, it is textbook fail-soft alpha-beta, which returns the identical
+/// score at the root by construction. That is the reference the dense boards
+/// need: unpruned, a sixth of `any_board()` positions cost more than a
+/// million nodes and one in fifteen more than twenty million, because in check
+/// quiescence searches every evasion and a board with several queens can
+/// keep checking for twenty plies. Alpha-beta in generation order brings the
+/// worst case down to a couple of million, and it is still a dozen lines
+/// with no ordering to get wrong.
+struct Reference {
+    prune: bool,
+    nodes: u64,
+    budget: u64,
+}
+
+impl Reference {
+    const fn unpruned(budget: u64) -> Self {
+        Self {
+            prune: false,
+            nodes: 0,
+            budget,
+        }
+    }
+
+    const fn alpha_beta(budget: u64) -> Self {
+        Self {
+            prune: true,
+            nodes: 0,
+            budget,
+        }
+    }
+
+    /// `None` once the budget is spent, which aborts the whole search.
+    fn visit(&mut self) -> Option<()> {
+        self.nodes += 1;
+        (self.nodes <= self.budget).then_some(())
+    }
+
+    fn negamax(
+        &mut self,
+        board: &Board,
+        depth: u8,
+        ply: u8,
+        alpha: Score,
+        beta: Score,
+        history: &mut Vec<u64>,
+    ) -> Option<Score> {
+        self.visit()?;
+        if draw::is_draw(board, history, board.hash()) {
+            return Some(0);
+        }
+        let moves = legal_moves(board);
+        if moves.is_empty() {
+            return Some(if in_check(board, board.side_to_move()) {
+                Score::from(ply) - MATE
+            } else {
+                0
+            });
+        }
+        if depth == 0 {
+            return self.quiescence(board, ply, MAX_QUIESCENCE_DEPTH, alpha, beta, history);
+        }
+        self.best_child(
+            board,
+            &moves,
+            -INFINITE,
+            alpha,
+            beta,
+            history,
+            |r, child, a, b, h| r.negamax(child, depth - 1, ply + 1, a, b, h),
+        )
+    }
+
+    /// Stand-pat, then every legal capture or promotion, `qdepth` of them
+    /// deep at most (seeded from the same [`MAX_QUIESCENCE_DEPTH`] constant
+    /// the real `quiescence` uses, not a hand-copied literal).
+    ///
+    /// In check, this generates evasions instead of captures and does not
+    /// stand pat. An evasion spends one unit of `qdepth` like a capture does,
+    /// floored at zero rather than stopping there: evasions continue however
+    /// deep the checks go, and a capture after them is only searched while
+    /// some `qdepth` is left. `ply` (distance from the true search root, not
+    /// from this function's own entry) is what an empty evasion list scores
+    /// against, the same formula `negamax` uses for its own terminal case.
+    /// Checks `history` for a draw on the evasion path only, the same scope
+    /// the real `quiescence` checks it in: captures and promotions can never
+    /// repeat a position (both are irreversible), so there's nothing for the
+    /// capture path to ever find.
+    fn quiescence(
+        &mut self,
+        board: &Board,
+        ply: u8,
+        qdepth: u8,
+        alpha: Score,
+        beta: Score,
+        history: &mut Vec<u64>,
+    ) -> Option<Score> {
+        self.visit()?;
+        if in_check(board, board.side_to_move()) {
+            if draw::is_draw(board, history, board.hash()) {
+                return Some(0);
+            }
+            let evasions = legal_moves(board);
+            if evasions.is_empty() {
+                return Some(Score::from(ply) - MATE);
+            }
+            return self.best_child(
+                board,
+                &evasions,
+                -INFINITE,
+                alpha,
+                beta,
+                history,
+                |r, child, a, b, h| r.quiescence(child, ply + 1, qdepth.saturating_sub(1), a, b, h),
+            );
+        }
+
+        let stand_pat = evaluate(board);
+        if qdepth == 0 {
+            return Some(stand_pat);
+        }
+        let mut captures = legal_moves(board);
+        captures.retain(|m| m.flags().is_capture() || m.flags().is_promotion());
+        self.best_child(
+            board,
+            &captures,
+            stand_pat,
+            alpha,
+            beta,
+            history,
+            |r, child, a, b, h| r.quiescence(child, ply + 1, qdepth - 1, a, b, h),
+        )
+    }
+
+    /// The best of `floor` and every move's negated child score, with `board`
+    /// on the repetition stack while its children are searched.
+    ///
+    /// Pruned, `floor` raises alpha before any move is tried, which is where
+    /// quiescence's stand-pat cutoff comes from; unpruned, the window is
+    /// passed down untouched and never consulted.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one search node's full state, passed straight through from both callers"
+    )]
+    fn best_child(
+        &mut self,
+        board: &Board,
+        moves: &MoveList,
+        floor: Score,
+        mut alpha: Score,
+        beta: Score,
+        history: &mut Vec<u64>,
+        mut child: impl FnMut(&mut Self, &Board, Score, Score, &mut Vec<u64>) -> Option<Score>,
+    ) -> Option<Score> {
+        let mut best = floor;
+        history.push(board.hash());
+        for &m in moves.as_slice() {
+            if self.prune {
+                alpha = alpha.max(best);
+                if alpha >= beta {
+                    break;
+                }
+            }
+            let score = child(self, &board.make_move(m), -beta, -alpha, history);
+            let Some(score) = score else {
+                history.pop();
+                return None;
+            };
+            best = best.max(-score);
+        }
+        history.pop();
+        Some(best)
+    }
+}
+
+/// Fails, naming the position, if `Search` runs out of budget or disagrees
+/// with the reference.
+///
+/// The reference runs first, against a fixed budget, and a board that would
+/// cost more is skipped rather than failed: its cost is a property of the
+/// board, not a defect in anything under test, and a handful in 20,000 dense
+/// cases need more.
+///
+/// `Search`'s budget is derived from what the reference spent on the same
+/// board rather than fixed. On random boards the most expensive case keeps
+/// growing with the number drawn (55k nodes over 2,000 dense cases, 425k
+/// over 40,000), so any fixed budget is eventually flaky. Relative to the
+/// reference it is stable: over 40,000 cases `Search` never spent more than
+/// five times what the reference did once the reference needed a thousand
+/// nodes, nor more than about 5,000 nodes past twice it on any board. The
+/// budget only has to turn a search that hangs into a failure that names its
+/// board, which a pruning bug does by running for minutes, not by doubling.
+fn assert_search_matches_reference(
+    board: &Board,
+    depth: u8,
+    mut reference: Reference,
+) -> Result<(), TestCaseError> {
+    let expected = reference.negamax(board, depth, 0, -INFINITE, INFINITE, &mut Vec::new());
+    prop_assume!(expected.is_some(), "the reference's own budget ran out");
+    let expected = expected.expect("assumed above");
+
+    let fen = board.to_fen();
+    let search_budget = 4 * reference.nodes + 10_000;
+    let result = Search::new(Vec::new())
+        .with_max_nodes(search_budget)
+        .search(board, depth);
+    prop_assert_eq!(
+        result.depth,
+        depth,
+        "Search spent its {}-node budget on {} at depth {}",
+        search_budget,
+        fen,
+        depth
+    );
+    prop_assert_eq!(result.score, expected, "{} at depth {}", fen, depth);
+    Ok(())
+}
+
+/// `any_board_with_legal_move`, further restricted to at most 8 total
+/// pieces (both kings plus up to 6 extra, versus `any_board()`'s own
+/// 2-to-22 range), which is what lets the default gate afford the unpruned
+/// reference. The `#[ignore]`d thorough variant restores full density
+/// instead.
+fn sparse_board_with_legal_move() -> impl Strategy<Value = Board> {
+    any_board_with_legal_move().prop_filter(
+        "keep the unpruned reference cheap enough for the default test gate",
+        |board| board.occupied().count() <= 8,
+    )
+}
+
+/// About twice the most the unpruned reference spent over 2,000 sparse
+/// cases, 335,155 nodes.
+const SPARSE_REFERENCE_BUDGET: u64 = 700_000;
+
+/// About twice the most the alpha-beta reference spent over 2,000 dense
+/// cases, 2,176,292 nodes.
+const DENSE_REFERENCE_BUDGET: u64 = 4_400_000;
+
+/// 20,000 full-density cases took about two minutes in `--release`, nearly all
+/// of it the reference, so this is around six seconds.
+const DENSE_CASES: u32 = 1024;
+
+// ---- Properties ----
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    #[test]
+    fn alpha_beta_agrees_with_unpruned_negamax(board in sparse_board_with_legal_move(), depth in 1u8..=2) {
+        assert_search_matches_reference(&board, depth, Reference::unpruned(SPARSE_REFERENCE_BUDGET))?;
+    }
+
+    #[test]
+    fn best_move_is_always_legal(board in any_board_with_legal_move(), depth in 1u8..=2) {
+        let mut search = Search::new(Vec::new());
+        let result = search.search(&board, depth);
+        let best_move = result.best_move().expect("board has a legal move, so search must return one");
+        prop_assert!(legal_moves(&board).as_slice().contains(&best_move));
+    }
+
+    /// Every move in `result.pv` must be legal at the point it's reached: replaying
+    /// the line from `board` one move at a time, each move has to be in that
+    /// position's own `legal_moves`. This is what would catch the PV table
+    /// recording a move from an unrelated branch of the tree -- a legal-looking
+    /// move at the wrong position, not an illegal one, so nothing shorter than an
+    /// actual replay would notice.
+    ///
+    /// Filters out positions where the side *not* to move is already in check:
+    /// `any_board()` picks piece placement and side-to-move independently, so it
+    /// can (rarely) generate a board no real game reaches, where the side to
+    /// move can legally "capture" the opposing king. That's a pre-existing gap
+    /// in the generator, not a PV-table one, and unrelated to what this test is
+    /// checking; excluded here rather than widening `any_board_with_legal_move`
+    /// itself, which other tests may be relying on as-is.
+    #[test]
+    fn pv_line_is_always_playable_from_root(
+        board in any_board_with_legal_move().prop_filter(
+            "opponent must not already be in check: that position can't arise from real play",
+            |board| !in_check(board, board.side_to_move().flip()),
+        ),
+        depth in 1u8..=3,
+    ) {
+        let mut search = Search::new(Vec::new());
+        let result = search.search(&board, depth);
+        let mut position = board;
+        for m in result.pv.into_iter().map_while(|m| m) {
+            let legal = legal_moves(&position);
+            prop_assert!(
+                legal.as_slice().contains(&m),
+                "{m:?} is not legal in the position reached by the pv so far"
+            );
+            position = position.make_move(m);
+        }
+    }
+
+    #[test]
+    fn search_is_deterministic(board in any_board_with_legal_move(), depth in 1u8..=2) {
+        let result_a = Search::new(Vec::new()).search(&board, depth);
+        let result_b = Search::new(Vec::new()).search(&board, depth);
+        prop_assert_eq!(result_a, result_b);
+    }
+
+    /// `CutoffStats::record` always increments `fail_high_nodes` and exactly
+    /// one bucket of `cutoff_index` together, so the histogram summing to the
+    /// counter is true by construction; this is the property that would catch
+    /// a future edit breaking that pairing (a bucket incremented without the
+    /// counter, or vice versa), for negamax and quiescence both.
+    #[test]
+    fn cutoff_histogram_sums_to_its_own_fail_high_counter(board in any_board_with_legal_move(), depth in 1u8..=2) {
+        let result = Search::new(Vec::new()).search(&board, depth);
+        prop_assert_eq!(
+            result.negamax_cutoffs.cutoff_index.iter().sum::<u64>(),
+            result.negamax_cutoffs.fail_high_nodes
+        );
+        prop_assert_eq!(
+            result.quiescence_cutoffs.cutoff_index.iter().sum::<u64>(),
+            result.quiescence_cutoffs.fail_high_nodes
+        );
+        // The cause histogram carries the same invariant, and it is the one
+        // that can break silently: every cutoff lands in exactly one cause, so
+        // a new technique whose classification misses a case shows up here as
+        // a total that no longer reconciles.
+        prop_assert_eq!(
+            result.negamax_cutoffs.by_cause.iter().sum::<u64>(),
+            result.negamax_cutoffs.fail_high_nodes
+        );
+        prop_assert_eq!(
+            result.quiescence_cutoffs.by_cause.iter().sum::<u64>(),
+            result.quiescence_cutoffs.fail_high_nodes
+        );
+        // Quiescence orders by no hash move, so it can never cut off because
+        // of one, whatever the table happens to hold for those positions.
+        //
+        // This is the invariant that makes per-ply hash-move tracking safe:
+        // every loop records what it ordered by before running, including the
+        // ones that ordered by nothing, and a loop that forgot would inherit
+        // whichever move last occupied that depth and start attributing
+        // quiescence cutoffs to the table. That shows up here and nowhere
+        // else, since the totals above would still reconcile.
+        prop_assert_eq!(
+            result.quiescence_cutoffs.by_cause[CutoffCause::HashMove.index()],
+            0
+        );
+    }
+}
+
+// A separate `proptest!` block: this one needs its own case count and runs
+// `#[ignore]`d, so it can't share the default-gate block's config above.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(DENSE_CASES))]
+
+    /// Same check as `alpha_beta_agrees_with_unpruned_negamax`, but over
+    /// full-density `any_board()` positions rather than the default gate's
+    /// sparse restriction, against the alpha-beta reference that density
+    /// makes necessary.
+    #[test]
+    #[ignore = "full-density sweep, about 6s in --release; run with --run-ignored all"]
+    fn alpha_beta_agrees_with_minimax_at_full_density(board in any_board_with_legal_move(), depth in 1u8..=2) {
+        assert_search_matches_reference(&board, depth, Reference::alpha_beta(DENSE_REFERENCE_BUDGET))?;
+    }
+}
+
+/// Root randomization must never cost strength: the score reported with it on
+/// has to match the score reported with it off, because shuffling only changes
+/// *which* of several equally-good moves is chosen, never how good the chosen
+/// one is.
+///
+/// This is the property that makes the feature safe to ship without an SPRT
+/// verdict of its own. If it ever fails, randomization is picking worse moves
+/// rather than reordering equal ones.
+#[test]
+fn root_randomization_never_changes_the_score() {
+    let board = Board::start_pos();
+    let baseline = Search::new(Vec::new()).search(&board, 4);
+
+    for seed in 1..40u64 {
+        let randomized = Search::new(Vec::new())
+            .with_root_randomization(seed)
+            .search(&board, 4);
+        assert_eq!(
+            randomized.score, baseline.score,
+            "seed {seed} changed the root score, so it picked a worse move"
+        );
+    }
+}
+
+/// The behaviour the feature exists for. A deterministic engine played
+/// byte-identical games on lichess; over a spread of seeds the chosen move has
+/// to actually vary, or nothing has been fixed.
+///
+/// A `Vec` rather than a `HashSet` because `Move` deliberately implements
+/// neither `Hash` nor `Ord`; comparing against the first result answers the
+/// question without needing either.
+#[test]
+fn root_randomization_actually_varies_the_chosen_move() {
+    let board = Board::start_pos();
+    let chosen: Vec<_> = (1..60u64)
+        .map(|seed| {
+            Search::new(Vec::new())
+                .with_root_randomization(seed)
+                .search(&board, 3)
+                .best_move()
+                .expect("start position has legal moves")
+        })
+        .collect();
+
+    let first = chosen[0];
+    assert!(
+        chosen.iter().any(|m| *m != first),
+        "every seed produced the same move, so randomization is inert"
+    );
+}
+
+/// Same seed, same result. Randomization is opt-in partly so that a caller who
+/// wants reproducibility can still have it, which requires the seed to fully
+/// determine the outcome.
+#[test]
+fn a_fixed_seed_fully_determines_the_search_result() {
+    let board = Board::start_pos();
+    let a = Search::new(Vec::new())
+        .with_root_randomization(12345)
+        .search(&board, 4);
+    let b = Search::new(Vec::new())
+        .with_root_randomization(12345)
+        .search(&board, 4);
+    assert_eq!(a, b, "a fixed seed must fully determine the search result");
+}
+
+/// xorshift64* maps zero to zero forever, so a zero seed would silently produce
+/// an all-zero sequence and a shuffle that never moves anything. `Search`
+/// forces it nonzero rather than letting that fail quietly, which is the one
+/// case where "it still works" and "it silently did nothing" look identical
+/// from the outside.
+#[test]
+fn a_zero_seed_is_forced_nonzero_rather_than_silently_disabling_the_shuffle() {
+    let board = Board::start_pos();
+    let baseline = Search::new(Vec::new()).search(&board, 3);
+
+    let zero = Search::new(Vec::new())
+        .with_root_randomization(0)
+        .search(&board, 3);
+    assert_eq!(zero.score, baseline.score, "score must be unaffected");
+
+    let again = Search::new(Vec::new())
+        .with_root_randomization(0)
+        .search(&board, 3);
+    assert_eq!(zero, again, "a zero seed must still be reproducible");
+
+    // The real check: a seed of 0 must behave like the seed it is remapped to,
+    // not like "no randomization at all". Comparing against an explicit 1
+    // pins that remapping rather than just asserting nothing crashed.
+    let one = Search::new(Vec::new())
+        .with_root_randomization(1)
+        .search(&board, 3);
+    assert_eq!(
+        zero, one,
+        "a zero seed should be remapped to 1, not left as a no-op shuffle"
+    );
+}
+
+/// A transposition table is a memoisation of a pure function, so a search that
+/// uses one must return exactly what the same search returns without one. Any
+/// score difference is a table bug by definition, which makes this the one
+/// check that needs no independent oracle.
+///
+/// This is the property that would have caught the mate-score corruption
+/// directly. The existing round-trip property could not: it probes at the same
+/// ply it stored at, where the adjustment applied on store and the one applied
+/// on probe cancel exactly.
+///
+/// Depths are small on purpose. The no-table side is a search with its
+/// memoisation removed, so it pays full price at this engine's branching
+/// factor; the deeper sweep that actually exercises accumulated drift is the
+/// `#[ignore]`d test below, following the same split the deep perft depths
+/// already use.
+#[test]
+fn a_warm_transposition_table_never_changes_a_score() {
+    assert_table_never_changes_scores(&[
+        // The position turox got this wrong in: one legal move, forced mate
+        // against it.
+        ("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53", 5),
+        // A bare forced mate.
+        ("4k3/8/8/8/8/8/6q1/6K1 w - - 0 1", 4),
+        // An ordinary midgame position, so the property is not only checked on
+        // mate scores, which are the special case rather than the common one.
+        (
+            "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+            4,
+        ),
+    ]);
+}
+
+/// The deep version of the property above. Mate-score drift grows with the gap
+/// between the storing ply and the probing ply, so it is shallow depths that
+/// are least likely to catch it; this is the run that would.
+#[test]
+#[ignore = "searches without a table at depth, under a second in --release; run with \
+            --run-ignored all"]
+fn a_warm_transposition_table_never_changes_a_score_at_depth() {
+    assert_table_never_changes_scores(&[
+        ("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53", 10),
+        ("4k3/8/8/8/8/8/6q1/6K1 w - - 0 1", 8),
+        (
+            "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+            6,
+        ),
+    ]);
+}
+
+fn assert_table_never_changes_scores(cases: &[(&str, u8)]) {
+    for &(fen, max_depth) in cases {
+        let board = Board::try_from_fen(fen).expect("test FEN is valid");
+        for depth in 1..=max_depth {
+            let without = Search::new(Vec::new()).search(&board, depth);
+            let mut tt = Tt::new(16);
+            let with = Search::new(Vec::new())
+                .with_tt(&mut tt)
+                .search(&board, depth);
+
+            assert_eq!(
+                with.score, without.score,
+                "depth {depth} on {fen}: table changed the score from {} to {}",
+                without.score, with.score
+            );
+        }
+    }
+}
+
+/// The same table reused across successive searches, which is how the UCI
+/// session actually drives it: the table outlives any one `go`, so entries
+/// stored during a shallow search get probed during a deeper one. That reuse
+/// is what let the error accumulate in a real game rather than staying within
+/// a single search.
+#[test]
+fn a_table_reused_across_searches_never_changes_a_score() {
+    let board =
+        Board::try_from_fen("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53").expect("test FEN is valid");
+    let mut tt = Tt::new(16);
+
+    for depth in 1u8..=6 {
+        let without = Search::new(Vec::new()).search(&board, depth);
+        let with = Search::new(Vec::new())
+            .with_tt(&mut tt)
+            .search(&board, depth);
+        assert_eq!(
+            with.score, without.score,
+            "depth {depth}: a table carried over from earlier depths changed the score"
+        );
+    }
+}
+
+/// No search may report a score outside the range `negamax` can produce. The
+/// UCI layer derives a mate's *sign* from this value, so a score past `MATE`
+/// does not merely misreport the distance, it can invert which side is mating.
+///
+/// Every search here uses the table, which is the shape the real game had: the
+/// engine reported `mate 118` at depth 64 in a position it was being mated in.
+/// Depth 12 is enough to catch it, since the drift was already visible at
+/// depth 10 (-30022, printed as `mate 10`); the root has one legal move but
+/// the opponent has a queen, so deeper costs real time for no extra coverage.
+#[test]
+fn a_search_score_never_escapes_the_mate_range() {
+    let board =
+        Board::try_from_fen("8/2p3pp/1p3k2/8/6Kn/5q1P/8/8 w - - 8 53").expect("test FEN is valid");
+    let mut tt = Tt::new(16);
+
+    for depth in 1u8..=12 {
+        let score = Search::new(Vec::new())
+            .with_tt(&mut tt)
+            .search(&board, depth)
+            .score;
+        assert!(
+            score.abs() <= MATE,
+            "depth {depth} reported {score}, outside +/- MATE"
+        );
+        assert!(
+            score < 0,
+            "depth {depth} reported {score}: this position is a forced mate \
+             against the side to move, so the score must stay negative"
+        );
+    }
 }
