@@ -10,7 +10,7 @@
 //! on a single sample. Every round needs its own start position instead.
 //!
 //! A second binary in `bookgen` rather than a new crate: reuses
-//! `pgn::tokenize_movetext` and `san::resolve_san` directly instead of a
+//! `pgn::parse_movetext` and `san::resolve_san` directly instead of a
 //! second, independent SAN implementation, and this tool's `pgn`/`san`
 //! modules are exactly what a "replay a SAN line into a position" job
 //! needs. Replaces `tools/selfplay/generate-openings.py`, whose
@@ -35,7 +35,7 @@ use turox_chess::board::Board;
 use turox_chess::move_gen::legal::legal_moves;
 use turox_chess::{Color, Piece};
 use turox_engine::eval::weights::PIECE_VALUES;
-use turox_notation::pgn::tokenize_movetext;
+use turox_notation::pgn::parse_movetext;
 
 /// Ply bounds on a line to be usable as a start position. Below the lower
 /// bound the positions are too generic to spread games out (there are
@@ -167,11 +167,11 @@ fn build_suite(rows: Vec<OpeningRow>) -> Vec<Opening> {
     let mut suite: Vec<Opening> = rows
         .into_iter()
         .filter_map(|row| {
-            let moves = tokenize_movetext(&row.pgn);
-            if !(MIN_PLIES..=MAX_PLIES).contains(&moves.len()) {
+            let line = parse_movetext(&row.pgn).ok()?;
+            if !(MIN_PLIES..=MAX_PLIES).contains(&line.moves.len()) {
                 return None;
             }
-            let board = replay(&moves)?;
+            let board = replay(&line)?;
             if legal_moves(&board).is_empty() || material_imbalance(&board) > MAX_MATERIAL_IMBALANCE
             {
                 return None;

@@ -4,6 +4,7 @@
 
 use bookgen::aggregate::BuildOptions;
 use clap::Parser;
+use std::cell::Cell;
 use std::fs;
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -52,7 +53,13 @@ fn main() -> ExitCode {
             }
         }
     }
-    let games = readers.into_iter().flatten();
+    // A malformed game costs only itself, but a source that is mostly
+    // malformed should not pass for a small one, so the skips are counted.
+    let malformed = Cell::new(0_u64);
+    let games = readers.into_iter().flatten().filter_map(|game| {
+        game.inspect_err(|_| malformed.set(malformed.get() + 1))
+            .ok()
+    });
 
     let options = BuildOptions {
         min_rating: args.min_rating,
@@ -60,6 +67,9 @@ fn main() -> ExitCode {
         max_ply: args.max_ply,
     };
     let book = bookgen::build_book_from_games(games, &options);
+    if malformed.get() > 0 {
+        eprintln!("bookgen: skipped {} malformed games", malformed.get());
+    }
 
     if let Err(err) = fs::write(&args.output, book.to_bytes()) {
         eprintln!("bookgen: failed to write {}: {err}", args.output.display());

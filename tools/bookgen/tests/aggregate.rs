@@ -3,16 +3,46 @@
 use bookgen::aggregate::{aggregate, filter_by_density, BuildOptions, MoveStats};
 use turox_chess::board::Board;
 use turox_chess::{Move, MoveFlags, Square};
-use turox_notation::pgn::{GameResult, PgnGame};
+use turox_notation::pgn::{GameResult, Line, MoveNode, PgnGame, TagPair, Tags};
+
+fn tag(name: &str, value: &str) -> TagPair {
+    TagPair {
+        name: name.to_string(),
+        value: value.to_string(),
+    }
+}
 
 fn game(white_elo: u32, black_elo: u32, result: GameResult, moves: &[&str]) -> PgnGame {
+    let result_tag = match result {
+        GameResult::WhiteWins => "1-0",
+        GameResult::BlackWins => "0-1",
+        GameResult::Draw => "1/2-1/2",
+        GameResult::Unknown => "*",
+    };
     PgnGame {
-        white_elo: Some(white_elo),
-        black_elo: Some(black_elo),
-        result,
-        moves: moves.iter().map(|s| (*s).to_string()).collect(),
-        opening_name: None,
+        tags: Tags(vec![
+            tag("Result", result_tag),
+            tag("WhiteElo", &white_elo.to_string()),
+            tag("BlackElo", &black_elo.to_string()),
+        ]),
+        movetext: Line {
+            comments: Vec::new(),
+            moves: moves
+                .iter()
+                .map(|san| MoveNode {
+                    san: (*san).to_string(),
+                    ..MoveNode::default()
+                })
+                .collect(),
+        },
+        termination: Some(result),
     }
+}
+
+/// `game`, with the `BlackElo` tag removed.
+fn without_black_elo(mut game: PgnGame) -> PgnGame {
+    game.tags.0.retain(|pair| pair.name != "BlackElo");
+    game
 }
 
 const fn e4() -> Move {
@@ -75,8 +105,7 @@ fn a_game_with_either_player_below_min_rating_is_excluded() {
 
 #[test]
 fn a_game_missing_either_elo_tag_is_excluded() {
-    let mut incomplete = game(2400, 2400, GameResult::WhiteWins, &["e4"]);
-    incomplete.black_elo = None;
+    let incomplete = without_black_elo(game(2400, 2400, GameResult::WhiteWins, &["e4"]));
 
     let result = aggregate([incomplete], &LOOSE_OPTIONS);
     assert!(
