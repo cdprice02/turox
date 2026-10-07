@@ -1,11 +1,11 @@
 //! Tests for `book`: the opening book's file format and lookup.
 //!
-//! Property tests cover what has to hold for every hash, candidate set and seed:
-//! the chosen move is always among the position's candidates, and with a seeded
-//! RNG repeated calls are not always identical. Concrete tests pin what a property
-//! would not reliably hit: round-tripping through bytes, rejecting a short or
-//! mismatched header, the weighting actually mattering, and the shipped book's
-//! opening names.
+//! Property tests cover what has to hold for every hash, candidate set and
+//! seed: the chosen move is always among the position's candidates, and with a
+//! seeded RNG repeated calls are not always identical. Concrete tests pin what
+//! a property would not reliably hit: round-tripping through bytes, rejecting a
+//! short or mismatched header, the weighting actually mattering, and the
+//! shipped book's opening names.
 
 use proptest::prelude::*;
 use turox_chess::board::Board;

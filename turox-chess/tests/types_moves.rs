@@ -1,10 +1,11 @@
 //! Tests for `Move::to_uci` and `Move::from_uci`.
 //!
-//! A property round-trips every legal move in every generated position. Concrete
-//! positions cover what it cannot: `any_board()` never generates an en passant
-//! state (see its own doc), so en passant is tested directly, and the castling and
-//! promotion tests pin the exact UCI strings, which a round trip alone would not
-//! catch if both directions agreed with each other and disagreed with the UCI spec.
+//! A property round-trips every legal move in every generated position.
+//! Concrete positions cover what it cannot: `any_board()` never generates an en
+//! passant state (see its own doc), so en passant is tested directly, and the
+//! castling and promotion tests pin the exact UCI strings, which a round trip
+//! alone would not catch if both directions agreed with each other and
+//! disagreed with the UCI spec.
 
 #![expect(
     clippy::expect_used,

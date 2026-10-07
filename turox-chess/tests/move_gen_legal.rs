@@ -1,18 +1,19 @@
 //! Tests for `move_gen::legal`: `legal_moves` and its naive reference,
 //! `legal_moves_naive`.
 //!
-//! `legal_moves_naive`'s contract *is* "pseudo-legal moves filtered by post-move
-//! king safety", so there is no independent technique to check it against beyond
-//! the definition. Its property states that definition as two one-directional
-//! properties of the returned list (every legal move is safe; every dropped
-//! pseudo-legal move was not) rather than rebuilding an expected list with the same
-//! filter, which would share any mistake in it, such as checking the wrong side's
-//! king. `legal_moves`, the pin-set fast path, is then checked for exact set
-//! agreement with `legal_moves_naive`.
+//! `legal_moves_naive`'s contract *is* "pseudo-legal moves filtered by
+//! post-move king safety", so there is no independent technique to check it
+//! against beyond the definition. Its property states that definition as two
+//! one-directional properties of the returned list (every legal move is safe;
+//! every dropped pseudo-legal move was not) rather than rebuilding an expected
+//! list with the same filter, which would share any mistake in it, such as
+//! checking the wrong side's king. `legal_moves`, the pin-set fast path, is
+//! then checked for exact set agreement with `legal_moves_naive`.
 //!
 //! Concrete positions cover the classic cases a subtly wrong filter gets wrong:
 //! king moves into and out of check, pins, discovered checks, the en passant
-//! discovered-check position, and checkmate and stalemate producing an empty list.
+//! discovered-check position, and checkmate and stalemate producing an empty
+//! list.
 
 use proptest::prelude::*;
 use std::collections::HashSet;

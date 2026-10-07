@@ -1,17 +1,17 @@
-//! Tests for `board::zobrist`: does the incrementally maintained `Board::hash()`
-//! agree with `compute_hash`'s from-scratch fold.
+//! Tests for `board::zobrist`: does the incrementally maintained
+//! `Board::hash()` agree with `compute_hash`'s from-scratch fold.
 //!
-//! `any_board()` builds positions through `place` and `from_parts`, never through
-//! `make_move`, so most of the properties exercise the non-incremental
-//! construction paths. `hash_stays_correct_after_a_legal_move` is the one property
-//! that calls `make_move`, and is not `#[ignore]`d, so the default gate covers
-//! incremental maintenance directly.
+//! `any_board()` builds positions through `place` and `from_parts`, never
+//! through `make_move`, so most of the properties exercise the non-incremental
+//! construction paths. `hash_stays_correct_after_a_legal_move` is the one
+//! property that calls `make_move`, and is not `#[ignore]`d, so the default
+//! gate covers incremental maintenance directly.
 //!
-//! Concrete tests pin facts worth not trusting by inspection (side to move, each
-//! castling right alone, the en passant file), plus a perft-grade tree walk that
-//! compares the two hashes at every node reachable from perft's six positions.
-//! That walk is `#[ignore]`d and release-only, for the same reason as the deep
-//! perft depths: it is a full tree walk, not a single check.
+//! Concrete tests pin facts worth not trusting by inspection (side to move,
+//! each castling right alone, the en passant file), plus a perft-grade tree
+//! walk that compares the two hashes at every node reachable from perft's six
+//! positions. That walk is `#[ignore]`d and release-only, for the same reason
+//! as the deep perft depths: it is a full tree walk, not a single check.
 
 use proptest::prelude::*;
 use turox_chess::board::zobrist::compute_hash;

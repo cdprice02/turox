@@ -1,13 +1,15 @@
-//! Concrete scenario tests for `uci::command::parse`.
+//! Tests for `uci::command::parse`.
 //!
-//! `tests/uci_command_props.rs` has the round-trip property (a
-//! `position fen ... moves ...` line built from `Board::to_fen`/`Move::to_uci`
-//! recovers the right board); these are one test per command, from its exact
-//! spec string, plus the malformed-input cases.
+//! A property round-trips a `position fen ... moves ...` line built from
+//! `Board::to_fen` and `Move::to_uci` through `parse`, and requires the right
+//! board back. Concrete tests take one command each from its exact spec string,
+//! plus the malformed-input cases.
 
+use proptest::prelude::*;
 use std::time::Duration;
 use turox_chess::board::Board;
 use turox_chess::move_gen::legal::legal_moves;
+use turox_chess::strategies::any_board_with_legal_move;
 use turox_engine::uci::{parse, Command, GoOptions};
 
 // ---- Concrete: one command per type, from its exact spec string ----
@@ -276,5 +278,25 @@ fn rejects_garbage_without_panicking() {
         "€ from_uci garbage €",
     ] {
         assert_eq!(parse(bad), None, "expected None for {bad:?}");
+    }
+}
+
+proptest! {
+    /// Builds a `position fen <fen> moves <uci>` line directly from
+    /// `Board::to_fen` and `Move::to_uci` (no dependency on `parse`'s own
+    /// output format) and checks `parse` recovers exactly the board that
+    /// applying that one move through the trusted `Board::make_move`
+    /// directly produces.
+    #[test]
+    fn position_fen_moves_round_trips_to_the_final_board(board in any_board_with_legal_move()) {
+        let moves = legal_moves(&board);
+        let m = moves.as_slice()[0];
+        let expected = board.make_move(m);
+
+        let line = format!("position fen {} moves {}", board.to_fen(), m.to_uci());
+        prop_assert_eq!(
+            parse(&line),
+            Some(Command::Position { board: expected, path: vec![board.hash()] })
+        );
     }
 }

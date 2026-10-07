@@ -3,13 +3,13 @@
 //! Two techniques. Property tests check each function against an independent
 //! naive reference built from `Square::offset` stepping, not from `tables` or
 //! `magic`. `attackers_of` is checked against the *forward* definition rather
-//! than a second reverse one: a forward implementation never inverts anything, so
-//! it cannot get the pawn-colour flip wrong, which is what makes it trustworthy as
-//! a check on the real reverse, superpiece-trick implementation.
+//! than a second reverse one: a forward implementation never inverts anything,
+//! so it cannot get the pawn-colour flip wrong, which is what makes it
+//! trustworthy as a check on the real reverse, superpiece-trick implementation.
 //!
-//! Concrete positions pin the easy-to-get-backwards cases (kingless boards, pawn
-//! attack direction, occupancy edge effects) and read as documentation in their
-//! own right.
+//! Concrete positions pin the easy-to-get-backwards cases (kingless boards,
+//! pawn attack direction, occupancy edge effects) and read as documentation in
+//! their own right.
 
 use proptest::prelude::*;
 use turox_chess::board::Board;

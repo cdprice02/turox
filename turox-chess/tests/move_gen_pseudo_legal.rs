@@ -2,12 +2,12 @@
 //!
 //! `pawn_moves`, `knight_moves`, `king_moves` and `slider_moves` each get a
 //! property against an independent naive reference built only from
-//! `Square::offset` stepping and `Board` accessors, never from `Bitboard`'s shift
-//! primitives, `tables` or `magic`. Move lists are compared as sorted
-//! `(from, to, flags)` triples, since `Move` has no `Ord` and generation order is
-//! not part of the contract. `is_pseudo_legal`'s contract is membership in
-//! `pseudo_legal_moves`'s output, so its property checks it against that generator
-//! rather than against another naive reference.
+//! `Square::offset` stepping and `Board` accessors, never from `Bitboard`'s
+//! shift primitives, `tables` or `magic`. Move lists are compared as sorted
+//! `(from, to, flags)` triples, since `Move` has no `Ord` and generation order
+//! is not part of the contract. `is_pseudo_legal`'s contract is membership in
+//! `pseudo_legal_moves`'s output, so its property checks it against that
+//! generator rather than against another naive reference.
 //!
 //! Concrete positions cover what a naive reference built with the same stepping
 //! technique would not independently catch: double-push blocking, en passant,
