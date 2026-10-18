@@ -14,4 +14,6 @@
 # bump surfaces are that commit's problem to fix, not a surprise on some
 # unrelated later PR.
 channel = "nightly-2026-08-09"
-components = ["clippy", "rustfmt"]
+# rust-src is for rust-analyzer, which reads std from this toolchain's
+# sysroot; CI doesn't need it.
+components = ["clippy", "rustfmt", "rust-src"]
