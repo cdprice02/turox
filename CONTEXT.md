@@ -25,6 +25,20 @@ _Avoid_: Oracle (used for the reference itself elsewhere in chess literature,
 but ambiguous here with "TT/eval oracle"), slow path, reference implementation
 (too generic; "naive" is the load-bearing word).
 
+**Survivor**:
+A mutant that no test anywhere in the workspace catches. Narrower than the
+mutation-testing literature's usage in two ways. Every mutant is tested
+against the whole workspace's suite, so a survivor in one crate is a gap the
+other crates' tests do not close either. And a timeout is not a survivor: it
+is counted beside survivors, since both mean the file owes a test, but a
+mutant that hangs the suite has been neither caught nor missed.
+A survivor that no input can distinguish from the original is an equivalent
+mutant, the literature's term, and is not a gap. What separates the two is
+whether some input makes the mutant and the original disagree, and whether
+control flow lets that input reach the mutated line.
+_Avoid_: Missed (the mutation tool's outcome label, fine when quoting its
+output but not the name of the concept), live mutant.
+
 **Session**:
 The long-lived, stateful loop in `uci::session::run` that owns `Board`,
 move history, and the transposition table for an entire game, across
