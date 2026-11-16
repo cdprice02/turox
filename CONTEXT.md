@@ -120,3 +120,12 @@ about the window rather than about any move.
 _Avoid_: Re-search (taken, and at a different level: principal variation search
 re-searches a single move whose null-window probe beat alpha, where this repeats
 the whole root), pass, retry.
+
+**Termination marker** / **Result tag**:
+The two places a PGN game states its outcome: the marker (`1-0`, `0-1`,
+`1/2-1/2`, `*`) that ends the movetext, and the `Result` tag in the header.
+Exporters write them independently, so a file can carry both and have them
+disagree, and `PgnGame` keeps both rather than trusting one. A missing marker
+means the input ended or the next game began first; a missing or unrecognised
+tag reads as unknown.
+_Avoid_: Result (alone, since it names either), outcome.
