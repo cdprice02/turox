@@ -77,13 +77,14 @@ pub fn aggregate(
     let mut results: HashMap<u64, Vec<MoveStats>> = HashMap::new();
 
     for game in games.into_iter().filter(|g| {
-        g.result != GameResult::Unknown
-            && g.white_elo.is_some_and(|elo| elo >= options.min_rating)
-            && g.black_elo.is_some_and(|elo| elo >= options.min_rating)
+        g.result() != GameResult::Unknown
+            && g.white_elo().is_some_and(|elo| elo >= options.min_rating)
+            && g.black_elo().is_some_and(|elo| elo >= options.min_rating)
     }) {
+        let result = game.result();
         let mut board = Board::start_pos();
 
-        for (ply, san) in game.moves.iter().enumerate() {
+        for (ply, san) in game.mainline().enumerate() {
             let ply = u32::try_from(ply).unwrap_or(u32::MAX);
             if ply >= options.max_ply {
                 break;
@@ -93,7 +94,7 @@ pub fn aggregate(
             };
 
             let (win_delta, draw_delta, loss_delta) =
-                match (board.side_to_move(), game.result) {
+                match (board.side_to_move(), result) {
                     // Grouped by whether the side to move is the side that won,
                     // which is the only thing being asked. Spelling the four
                     // combinations out separately invited reading them as four

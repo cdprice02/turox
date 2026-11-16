@@ -12,6 +12,7 @@ use std::thread;
 #[cfg(feature = "fetch")]
 use std::time::Duration;
 use turox_chess::board::Board;
+use turox_notation::pgn::Line;
 use turox_notation::san::resolve_san;
 
 /// Pinned upstream revision, so regenerating reproduces the checked-in
@@ -92,15 +93,15 @@ pub fn parse_tsv(text: &str) -> Vec<OpeningRow> {
         .collect()
 }
 
-/// Replays `moves` into the position it reaches.
+/// Replays `line`'s mainline into the position it reaches.
 ///
 /// `None` if any token along the way fails to resolve against the position
 /// at that point: a malformed or ambiguous line, discarded whole rather than
 /// truncated.
 #[must_use]
-pub fn replay(moves: &[String]) -> Option<Board> {
+pub fn replay(line: &Line) -> Option<Board> {
     let mut board = Board::start_pos();
-    for token in moves {
+    for token in line.mainline() {
         let mv = resolve_san(&board, token)?;
         board = board.make_move(mv);
     }

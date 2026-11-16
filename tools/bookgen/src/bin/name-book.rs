@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use turox_chess::board::Board;
 use turox_chess::book::Book;
-use turox_notation::pgn::tokenize_movetext;
+use turox_notation::pgn::parse_movetext;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -101,13 +101,15 @@ fn load_named() -> Result<HashMap<u64, Named>, String> {
             .replace("{commit}", UPSTREAM_COMMIT)
             .replace("{volume}", &volume.to_string());
         for row in parse_tsv(&fetch(&agent, &url)?) {
-            let moves = tokenize_movetext(&row.pgn);
-            let Some(board) = replay(&moves) else {
+            let Ok(line) = parse_movetext(&row.pgn) else {
+                continue;
+            };
+            let Some(board) = replay(&line) else {
                 continue;
             };
             let entry = Named {
                 name: row.name,
-                plies: moves.len(),
+                plies: line.moves.len(),
             };
             // A position two rows both reach keeps the more specific naming,
             // the same rule the walk below applies to inheritance.
