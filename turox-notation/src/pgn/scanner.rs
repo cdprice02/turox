@@ -2,15 +2,6 @@
 //! here, so the parser never sees whitespace, escape lines, string escapes or
 //! the boundary between a SAN token and its suffix glyph.
 
-#![expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "the stubs take self mutably for the bodies that will read and advance"
-)]
-#![expect(
-    dead_code,
-    reason = "the parser is a stub, so nothing reads tokens yet"
-)]
-
 use std::io::BufRead;
 
 use super::{GameResult, PgnError, PgnErrorKind};
@@ -86,6 +77,17 @@ impl Pos {
     }
 }
 
+/// Whether `byte` may continue a SAN move or a tag name.
+const fn is_symbol_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'+' | b'#' | b'=' | b':' | b'-' | b'/')
+}
+
+/// Decodes collected bytes as UTF-8, replacing invalid sequences rather than
+/// failing: a bad byte in a comment should not cost its game.
+fn lossy(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Turns a byte stream into [`Token`]s, tracking each one's position.
 ///
 /// Reads through `BufRead`'s `fill_buf` and `consume` rather than `lines` or
@@ -100,6 +102,14 @@ pub(super) struct Scanner<R> {
     pos: Pos,
     /// One token of lookahead, filled by `peek` and drained by `next`.
     peeked: Option<(Token, Pos)>,
+    /// Where the last token ended, if it was a `Symbol`. A suffix glyph is
+    /// only a glyph when it starts exactly here; anywhere else a `!` or `?`
+    /// is a stray byte.
+    symbol_end: Option<Pos>,
+    /// How many `%` escape lines have been skipped so far. The parser reads
+    /// the difference across a gap to tell a blank line from an escape line,
+    /// since both leave the same hole in the line numbers.
+    escape_lines: usize,
 }
 
 impl<R: BufRead> Scanner<R> {
@@ -109,7 +119,14 @@ impl<R: BufRead> Scanner<R> {
             reader,
             pos: Pos { line: 1, column: 1 },
             peeked: None,
+            symbol_end: None,
+            escape_lines: 0,
         }
+    }
+
+    /// How many `%` escape lines the scanner has skipped so far.
+    pub const fn escape_lines(&self) -> usize {
+        self.escape_lines
     }
 
     /// The next token and where it starts, without consuming it. `None` at
@@ -133,9 +150,141 @@ impl<R: BufRead> Scanner<R> {
     }
 
     /// Reads one token from the bytes, ignoring `peeked`.
-    #[expect(clippy::todo, reason = "the scanner is a stub")]
     fn scan(&mut self) -> Result<Option<(Token, Pos)>, PgnError> {
-        todo!("skip whitespace and % lines, note self.pos, then branch on peek_byte")
+        let symbol_end = self.symbol_end.take();
+        loop {
+            self.skip_while(|byte| byte.is_ascii_whitespace())?;
+            if self.pos.column == 1 && self.peek_byte()? == Some(b'%') {
+                self.skip_while(|byte| byte != b'\n')?;
+                self.escape_lines += 1;
+            } else {
+                break;
+            }
+        }
+        let start = self.pos;
+        let Some(byte) = self.peek_byte()? else {
+            return Ok(None);
+        };
+        let token = match byte {
+            b'[' => self.single(Token::LBracket)?,
+            b']' => self.single(Token::RBracket)?,
+            b'(' => self.single(Token::LParen)?,
+            b')' => self.single(Token::RParen)?,
+            b'*' => self.single(Token::Termination(GameResult::Unknown))?,
+            b'"' => self.string(start)?,
+            b'{' => self.brace_comment(start)?,
+            b';' => {
+                self.next_byte()?;
+                let mut text = Vec::new();
+                self.take_while(|byte| byte != b'\n' && byte != b'\r', &mut text)?;
+                Token::Comment(lossy(&text))
+            }
+            b'$' => self.nag(start)?,
+            b'.' => {
+                self.skip_while(|byte| byte == b'.')?;
+                Token::MoveNumber
+            }
+            b'!' | b'?' if symbol_end == Some(start) => self.glyph(byte)?,
+            b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => {
+                let mut text = Vec::new();
+                self.take_while(is_symbol_byte, &mut text)?;
+                if text.iter().all(u8::is_ascii_digit) {
+                    self.skip_while(|byte| byte == b'.')?;
+                    Token::MoveNumber
+                } else {
+                    match text.as_slice() {
+                        b"1-0" => Token::Termination(GameResult::WhiteWins),
+                        b"0-1" => Token::Termination(GameResult::BlackWins),
+                        b"1/2-1/2" => Token::Termination(GameResult::Draw),
+                        _ => {
+                            self.symbol_end = Some(self.pos);
+                            Token::Symbol(lossy(&text))
+                        }
+                    }
+                }
+            }
+            _ => return Err(start.error(PgnErrorKind::UnexpectedByte(byte))),
+        };
+        Ok(Some((token, start)))
+    }
+
+    /// Consumes the one byte already peeked and returns `token`.
+    fn single(&mut self, token: Token) -> Result<Token, PgnError> {
+        self.next_byte()?;
+        Ok(token)
+    }
+
+    /// A quoted string starting at `start`. Ends at the closing quote; a
+    /// line ending first is `UnterminatedString`, because tag values are
+    /// single-line and a missing quote would otherwise swallow the rest of
+    /// the file. A backslash escapes only `"` and `\`; before anything else
+    /// it is kept as a literal backslash.
+    fn string(&mut self, start: Pos) -> Result<Token, PgnError> {
+        self.next_byte()?;
+        let mut text = Vec::new();
+        loop {
+            match self.next_byte()? {
+                None | Some(b'\n') => {
+                    return Err(start.error(PgnErrorKind::UnterminatedString));
+                }
+                Some(b'"') => break,
+                Some(b'\\') => match self.peek_byte()? {
+                    Some(escaped @ (b'"' | b'\\')) => {
+                        self.next_byte()?;
+                        text.push(escaped);
+                    }
+                    _ => text.push(b'\\'),
+                },
+                Some(byte) => text.push(byte),
+            }
+        }
+        Ok(Token::Str(lossy(&text)))
+    }
+
+    /// A `{...}` comment starting at `start`. Does not nest, and runs across
+    /// line endings.
+    fn brace_comment(&mut self, start: Pos) -> Result<Token, PgnError> {
+        self.next_byte()?;
+        let mut text = Vec::new();
+        self.take_while(|byte| byte != b'}', &mut text)?;
+        if self.next_byte()? != Some(b'}') {
+            return Err(start.error(PgnErrorKind::UnterminatedComment));
+        }
+        Ok(Token::Comment(lossy(&text)))
+    }
+
+    /// `$` and its digits, starting at `start`. Anything that is not a number
+    /// from 0 to 255, including no digits at all, is `InvalidNag`.
+    fn nag(&mut self, start: Pos) -> Result<Token, PgnError> {
+        self.next_byte()?;
+        let mut digits = Vec::new();
+        self.take_while(|byte| byte.is_ascii_digit(), &mut digits)?;
+        std::str::from_utf8(&digits)
+            .ok()
+            .and_then(|text| text.parse().ok())
+            .map(Token::Nag)
+            .ok_or_else(|| start.error(PgnErrorKind::InvalidNag))
+    }
+
+    /// A suffix glyph whose first byte, `first`, is peeked and not yet
+    /// consumed: `!` or `?`, optionally followed by one more of either.
+    fn glyph(&mut self, first: u8) -> Result<Token, PgnError> {
+        self.next_byte()?;
+        let second = match self.peek_byte()? {
+            Some(byte @ (b'!' | b'?')) => {
+                self.next_byte()?;
+                Some(byte)
+            }
+            _ => None,
+        };
+        Ok(Token::Glyph(match (first, second) {
+            (b'!', Some(b'!')) => 3,
+            (b'!', Some(_)) => 5,
+            (b'!', None) => 1,
+            (b'?', Some(b'?')) => 4,
+            (_, None) => 2,
+            (_, Some(_)) => 6,
+        }))
     }
 
     /// Discards input up to the next `[` that starts a line, or to the end,
