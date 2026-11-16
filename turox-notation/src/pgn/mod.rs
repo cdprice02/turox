@@ -15,6 +15,14 @@ use scanner::Scanner;
 mod parser;
 mod scanner;
 
+/// How many variations may nest inside one another before the parser gives
+/// up.
+///
+/// Each level is a real recursive call, so without a cap an input of nothing
+/// but `(` overflows the stack, which aborts the process instead of
+/// returning an error. Real games nest a handful of levels at most.
+pub const MAX_VARIATION_DEPTH: usize = 128;
+
 /// One game: its tag pairs and its movetext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PgnGame {
@@ -134,6 +142,13 @@ pub enum PgnErrorKind {
     InvalidNag,
     /// A byte that starts no token, including the reserved `<` and `>`.
     UnexpectedByte(u8),
+    /// A well-formed token where no rule accepts it: a `]` or a string in
+    /// movetext, or a `[` after bare movetext. The byte-level kind above
+    /// cannot name these, because the scanner has already read them as
+    /// tokens.
+    UnexpectedToken,
+    /// A `(` nested more than [`MAX_VARIATION_DEPTH`] variations deep.
+    VariationTooDeep,
     /// The underlying reader failed. Kept as the kind alone because
     /// [`std::io::Error`] is neither `Clone` nor `Eq`.
     Io(std::io::ErrorKind),

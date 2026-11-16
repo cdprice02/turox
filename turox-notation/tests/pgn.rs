@@ -12,7 +12,7 @@
 use std::io::BufReader;
 use turox_notation::pgn::{
     parse_movetext, parse_pgn, GameResult, Line, MoveNode, PgnError, PgnErrorKind, PgnGame,
-    PgnReader,
+    PgnReader, Tags, MAX_VARIATION_DEPTH,
 };
 
 /// Every game in `pgn`, through `parse_pgn` and through a one-byte-buffered
@@ -272,6 +272,16 @@ fn parses_multiple_games_in_one_file() {
 fn games_need_no_blank_line_between_them() {
     let results = parse(&format!("{SIMPLE_GAME}{SIMPLE_GAME}"));
     assert_eq!(results.len(), 2, "{results:?}");
+}
+
+#[test]
+fn movetext_after_a_marker_with_no_tags_is_a_second_game_with_no_tags() {
+    let results = parse("[Event \"a\"]\n\n1. e4 1-0\n2. d4 *\n");
+    assert_eq!(results.len(), 2, "{results:?}");
+    let second = results[1].clone().expect("parses");
+    assert_eq!(second.tags, Tags::default());
+    assert_eq!(mainline(&second), ["d4"]);
+    assert_eq!(second.termination, Some(GameResult::Unknown));
 }
 
 #[test]
@@ -690,6 +700,38 @@ fn a_variation_before_any_move_of_its_parent_variation_is_reported() {
     assert_eq!(err, error(6, 8, PgnErrorKind::VariationWithoutMove));
 }
 
+/// `e4` followed by `depth` nested variations, each opening with a move so
+/// that no `(` lacks one to replace, all closed.
+fn nested(depth: usize) -> String {
+    format!("e4 {}{}", "(d4 ".repeat(depth), ")".repeat(depth))
+}
+
+#[test]
+fn variations_nest_up_to_the_depth_limit() {
+    let game = one_game(&game(&nested(MAX_VARIATION_DEPTH)));
+    assert_eq!(mainline(&game), ["e4"]);
+}
+
+#[test]
+fn a_variation_past_the_depth_limit_is_reported_at_its_parenthesis() {
+    // "e4 " is 3 bytes and each "(d4 " is 4, so the k-th `(` is at column 4k.
+    let k = MAX_VARIATION_DEPTH + 1;
+    let err = one_error(&game(&nested(k)));
+    assert_eq!(err, error(6, 4 * k, PgnErrorKind::VariationTooDeep));
+}
+
+#[test]
+fn a_closing_bracket_in_movetext_is_an_unexpected_token() {
+    let err = one_error(&game("1. e4 ] e5 1-0"));
+    assert_eq!(err, error(6, 7, PgnErrorKind::UnexpectedToken));
+}
+
+#[test]
+fn a_string_in_movetext_is_an_unexpected_token() {
+    let err = one_error(&game("1. e4 \"x\" e5 1-0"));
+    assert_eq!(err, error(6, 7, PgnErrorKind::UnexpectedToken));
+}
+
 #[test]
 fn a_nag_before_any_move_is_reported() {
     let err = one_error(&game("$1 1. e4 1-0"));
@@ -801,5 +843,13 @@ fn parse_movetext_reports_positions_within_its_own_text() {
     assert_eq!(
         parse_movetext("1. e4 )"),
         Err(error(1, 7, PgnErrorKind::UnmatchedCloseParen))
+    );
+}
+
+#[test]
+fn parse_movetext_rejects_the_start_of_a_game() {
+    assert_eq!(
+        parse_movetext("1. e4 [Event"),
+        Err(error(1, 7, PgnErrorKind::UnexpectedToken))
     );
 }
